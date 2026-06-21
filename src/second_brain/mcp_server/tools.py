@@ -426,6 +426,34 @@ class WikiTools:
         self._cache.invalidate()
         return f"Created: {path.relative_to(self._wiki)}"
 
+    def _resolve_source(self, src: str) -> Path | None:
+        """Resolve a frontmatter source reference to an existing raw file.
+
+        Source references are written relative to the data directory (e.g.
+        ``raw/documents/foo.md``), but may also appear relative to the raw
+        directory or as a bare filename. Each interpretation is tried in
+        turn, falling back to a recursive search by filename.
+
+        Parameters
+        ----------
+        src: str
+            The source path as stored in a page's frontmatter.
+
+        Returns
+        -------
+        Path | None
+            The first matching file on disk, or ``None`` if none match.
+        """
+        data_dir = self._raw.parent
+        candidates = [data_dir / src, self._raw / src]
+        if src.startswith("raw/"):
+            candidates.append(self._raw / src[len("raw/") :])
+        for candidate in candidates:
+            if candidate.is_file():
+                return candidate
+        matches = list(self._raw.rglob(Path(src).name))
+        return matches[0] if matches else None
+
     def get_sources(self, title: str) -> str:
         """
         Retrieve raw source documents for a wiki page.
@@ -454,9 +482,9 @@ class WikiTools:
 
             results = []
             for src in sources:
-                matches = list(self._raw.rglob(src))
-                if matches:
-                    results.append(f"### {src}\n{matches[0].read_text(encoding='utf-8')[:2000]}")
+                resolved = self._resolve_source(src)
+                if resolved:
+                    results.append(f"### {src}\n{resolved.read_text(encoding='utf-8')[:2000]}")
                 else:
                     results.append(f"### {src}\n(source file not found)")
             return "\n\n".join(results)
@@ -493,11 +521,11 @@ class WikiTools:
 
             results = []
             for src in sources:
-                matches = list(self._raw.rglob(src))
-                if not matches:
+                resolved = self._resolve_source(src)
+                if not resolved:
                     results.append(f"### {src}\n(source file not found)")
                     continue
-                preview = _source_preview(matches[0].read_text(encoding="utf-8"))
+                preview = _source_preview(resolved.read_text(encoding="utf-8"))
                 results.append(f"### {src}\n{preview}")
             return "\n\n".join(results)
 
