@@ -30,6 +30,7 @@ dev = [
     "pytest-asyncio",
     "ruff",
     "mypy",
+    "pre-commit",
 ]
 
 [project.scripts]
