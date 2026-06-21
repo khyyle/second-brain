@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import re
 import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -22,6 +23,27 @@ from second_brain.config import SearchConfig
 logger = logging.getLogger(__name__)
 
 BUSY_TIMEOUT_SECONDS = 5.0
+
+
+def _sanitize_fts_query(query: str) -> str:
+    """Turn arbitrary text into a safe FTS5 MATCH expression.
+
+    Extracts alphanumeric terms and double-quotes each one, so punctuation,
+    bare operators, or unbalanced quotes in natural-language input cannot
+    produce an FTS5 syntax error.
+
+    Parameters
+    ----------
+    query: str
+        Raw user/agent query text.
+
+    Returns
+    -------
+    str
+        A space-separated list of quoted terms (implicit AND), or an empty
+        string if the input has no alphanumeric terms.
+    """
+    return " ".join(f'"{term}"' for term in re.findall(r"\w+", query))
 
 
 def _hash_content(content: str) -> str:
@@ -313,14 +335,38 @@ class SearchIndex:
             logger.info("Embedded %d pending page(s)", embedded_count)
         return embedded_count
 
+    def _run_fts(self, match_expr: str, limit: int) -> list[sqlite3.Row] | None:
+        """Run one FTS5 MATCH query; return ``None`` on a syntax error."""
+        try:
+            with self._conn() as conn:
+                return conn.execute(
+                    """SELECT stem, title,
+                              snippet(wiki_fts, 2, '<b>', '</b>', '...', 40) as snip,
+                              rank, content_type, domains
+                       FROM wiki_fts
+                       WHERE wiki_fts MATCH ?
+                       ORDER BY rank
+                       LIMIT ?""",
+                    (match_expr, limit),
+                ).fetchall()
+        except sqlite3.OperationalError as exc:
+            logger.debug("FTS query rejected (%s): %s", match_expr, exc)
+            return None
+
     def search(self, query: str, limit: int = 10) -> list[SearchHit]:
         """
         Keyword search using FTS5 with BM25 ranking.
 
+        The raw query is tried first so FTS5 operators (``AND``, ``OR``,
+        ``NEAR``, quoted phrases) keep working. If it is not valid FTS5
+        syntax, the query is sanitized into quoted terms and retried, so a
+        natural-language query never raises and never silently returns a
+        misleading empty result for a recoverable input.
+
         Parameters
         ----------
         query: str
-            FTS5 match expression (supports boolean operators).
+            FTS5 match expression or plain text.
         limit: int
             Maximum number of results to return.
 
@@ -329,16 +375,10 @@ class SearchIndex:
         list[SearchHit]
             Hits ordered by descending relevance score.
         """
-        with self._conn() as conn:
-            rows = conn.execute(
-                """SELECT stem, title, snippet(wiki_fts, 2, '<b>', '</b>', '...', 40) as snip,
-                          rank, content_type, domains
-                   FROM wiki_fts
-                   WHERE wiki_fts MATCH ?
-                   ORDER BY rank
-                   LIMIT ?""",
-                (query, limit),
-            ).fetchall()
+        rows = self._run_fts(query, limit)
+        if rows is None:
+            sanitized = _sanitize_fts_query(query)
+            rows = self._run_fts(sanitized, limit) or [] if sanitized else []
 
         return [
             SearchHit(

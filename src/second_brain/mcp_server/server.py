@@ -38,7 +38,13 @@ def _get_tools() -> WikiTools:
 
 @mcp.tool()
 def search_wiki(query: str, limit: int = 10) -> str:
-    """Search wiki pages by keyword (FTS/BM25). Best for exact terms and names."""
+    """Search wiki pages by keyword (full-text BM25). Best for exact terms and names.
+
+    Plain text works directly (e.g. `gradient descent`); FTS5 operators
+    are also supported for power use: `AND`, `OR`, `NEAR`, and quoted
+    phrases like `"central limit theorem"`. For fuzzy or conceptual
+    queries where you don't know the exact wording, use `semantic_search`.
+    """
     return _get_tools().search_wiki(query, limit)
 
 
