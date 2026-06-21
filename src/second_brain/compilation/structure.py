@@ -58,9 +58,35 @@ def _parse_frontmatter(content: str) -> dict:
         return {}
 
 
+def _normalize_link_target(target: str) -> str:
+    """Reduce a wikilink target to a bare page stem.
+
+    Wikilinks appear both bare (``[[point-estimation]]``) and folder-
+    prefixed (``[[concepts/point-estimation]]``), and may carry a ``.md``
+    suffix or an ``#anchor``. Pages are keyed by bare stem, so every
+    target is reduced to that form for consistent graph resolution.
+
+    Parameters
+    ----------
+    target: str
+        The raw text captured between ``[[`` and ``]]`` (display text
+        already stripped).
+
+    Returns
+    -------
+    str
+        The bare stem the link points to.
+    """
+    target = target.strip().split("#", 1)[0].strip()
+    target = target.rsplit("/", 1)[-1]
+    if target.endswith(".md"):
+        target = target[:-3]
+    return target.strip()
+
+
 def _extract_wikilinks(content: str) -> list[str]:
-    """Return all wikilink target stems found in the content."""
-    return _WIKILINK_RE.findall(content)
+    """Return all wikilink target stems found in the content, normalized."""
+    return [stem for raw in _WIKILINK_RE.findall(content) if (stem := _normalize_link_target(raw))]
 
 
 def _count_words(content: str) -> int:
