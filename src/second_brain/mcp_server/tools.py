@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from datetime import UTC, datetime
 from pathlib import Path
 
 from second_brain.compilation.structure import (
@@ -119,19 +120,6 @@ class _GraphCache:
             logger.debug("Graph cache rebuilt: %d pages", len(self._pages))
 
         return self._pages, self._graph
-
-    def invalidate(self) -> None:
-        """
-        Force a full rebuild on the next access.
-
-        Notes
-        -----
-        Methods like ``WikiTools.update_page()`` call this to force a rebuild.
-        At the expected scale of a personal wiki, a full rebuild is cheaper
-        than tracking incremental graph deltas.
-        """
-        self._graph = None
-        self._last_mtime = 0.0
 
 
 class WikiTools:
@@ -355,97 +343,63 @@ class WikiTools:
             return index_path.read_text(encoding="utf-8")
         return "Index not yet generated. Run compilation first."
 
-    def update_page(self, title: str, content: str) -> str:
-        """
-        Overwrite an existing wiki page and re-index it.
-
-        Parameters
-        ----------
-        title: str
-            Page title or slug to update.
-        content: str
-            New full markdown content (including frontmatter).
-
-        Returns
-        -------
-        str
-            Confirmation message or a not-found message.
-        """
-        slug = title.lower().replace(" ", "-")
-        for content_dir in CONTENT_DIRS:
-            path = self._wiki / content_dir / f"{slug}.md"
-            if path.exists():
-                path.write_text(content, encoding="utf-8")
-                fm = _parse_frontmatter(content)
-                self._search.index_page(
-                    stem=slug,
-                    title=fm.get("title", slug),
-                    content=content,
-                    content_type=fm.get("type", "unknown"),
-                    domains=fm.get("domains", []),
-                    tags=fm.get("tags", []),
-                    word_count=len(content.split()),
-                    path=f"{content_dir}/{slug}.md",
-                    mtime=path.stat().st_mtime,
-                )
-                self._cache.invalidate()
-                return f"Updated: {path.relative_to(self._wiki)}"
-
-        return f"Page not found: {title}"
-
-    def create_page(
+    def capture_note(
         self,
-        title: str,
         content: str,
-        content_type: str = "concept",
+        title: str | None = None,
+        topic: str | None = None,
     ) -> str:
         """
-        Create a new wiki page, index it, and invalidate the cache.
+        Capture chat content as a source document for the pipeline.
+
+        Writes a markdown file into the ``drops/documents`` intake queue so
+        the content flows through the normal ingest -> triage -> compile
+        path, gaining a real source entry and quality gating, rather than
+        authoring a finished wiki page directly. The wiki stays a single
+        compiled artifact with one source of truth.
 
         Parameters
         ----------
-        title: str
-            Human-readable title (slugified for the filename).
         content: str
-            Full markdown content (including frontmatter).
-        content_type: str
-            Page type used to choose the target directory.
+            The raw text to capture.
+        title: str | None
+            Short title; the first line of *content* is used if omitted.
+        topic: str | None
+            Optional hint recorded in frontmatter to guide compilation.
 
         Returns
         -------
         str
-            Confirmation with the relative path, or an error message.
+            Confirmation with the relative path of the captured note.
         """
-        from second_brain.compilation.schema import load_schema
+        text = content.strip()
+        if not text:
+            return "Nothing to capture: content is empty."
 
-        schema = load_schema(self._wiki)
-        if content_type not in schema.valid_types:
-            return f"Invalid content type: {content_type}"
+        heading = (title or text.split("\n", 1)[0]).strip()[:80] or "captured note"
+        slug = "".join(c if c.isalnum() or c in " -" else "" for c in heading.lower())
+        slug = "-".join(slug.split()) or "note"
 
-        slug = title.lower().replace(" ", "-")
-        directory = schema.directory_for_type(content_type)
-        path = self._wiki / directory / f"{slug}.md"
+        captured_at = datetime.now(tz=UTC)
+        drops_documents = self._raw.parent / "drops" / "documents"
+        drops_documents.mkdir(parents=True, exist_ok=True)
+        path = drops_documents / f"{captured_at:%Y-%m-%d-%H%M%S}-{slug}.md"
 
-        if path.exists():
-            return f"Page already exists: {path.relative_to(self._wiki)}"
+        frontmatter = [
+            "---",
+            f'title: "{heading}"',
+            "origin: chat-capture",
+            f"captured_at: {captured_at.isoformat()}",
+        ]
+        if topic:
+            frontmatter.append(f'suggested_topic: "{topic}"')
+        frontmatter.append("---")
 
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(content, encoding="utf-8")
-
-        fm = _parse_frontmatter(content)
-        self._search.index_page(
-            stem=slug,
-            title=fm.get("title", title),
-            content=content,
-            content_type=content_type,
-            domains=fm.get("domains", []),
-            tags=fm.get("tags", []),
-            word_count=len(content.split()),
-            path=f"{directory}{slug}.md",
-            mtime=path.stat().st_mtime,
+        path.write_text("\n".join(frontmatter) + "\n\n" + text + "\n", encoding="utf-8")
+        return (
+            f"Captured to {path.relative_to(self._raw.parent)}. "
+            "It will be triaged and compiled into the wiki on the next build."
         )
-        self._cache.invalidate()
-        return f"Created: {path.relative_to(self._wiki)}"
 
     def _resolve_source(self, src: str) -> Path | None:
         """Resolve a frontmatter source reference to an existing raw file.

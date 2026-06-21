@@ -83,15 +83,17 @@ def read_index() -> str:
 
 
 @mcp.tool()
-def update_page(title: str, content: str) -> str:
-    """Update an existing wiki page with new content."""
-    return _get_tools().update_page(title, content)
+def capture_note(content: str, title: str | None = None, topic: str | None = None) -> str:
+    """Capture a note or insight from this conversation into the knowledge base.
 
-
-@mcp.tool()
-def create_page(title: str, content: str, content_type: str = "concept") -> str:
-    """Create a new wiki page. Content types: concept, problem, project, insight."""
-    return _get_tools().create_page(title, content, content_type)
+    Saves the content as a source document in the intake queue so it flows
+    through the normal ingest -> triage -> compile pipeline, gaining source
+    traceability and quality gating. It does NOT author a finished wiki
+    page directly; the page is written by the next compile run. Use this to
+    save something worth keeping for later. Optionally pass a short `title`
+    and a `topic` hint to guide compilation.
+    """
+    return _get_tools().capture_note(content, title=title, topic=topic)
 
 
 @mcp.tool()
