@@ -123,6 +123,8 @@ def test_build_stops_when_cost_cap_reached(
     config.ensure_directories()
     manifest = Manifest(config.manifest_db_path)
 
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+
     sources = ["a.md", "b.md", "c.md"]
     monkeypatch.setattr(compiler, "_find_new_sources", lambda *_: list(sources))
     monkeypatch.setattr(compiler, "rebuild_structure", lambda *_: {})
