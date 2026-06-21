@@ -69,6 +69,7 @@ def test_semantic_enabled_when_configured(tmp_path: Path, semantic_config: Searc
 def test_semantic_search_returns_nearest(tmp_path: Path, semantic_config: SearchConfig) -> None:
     index = SearchIndex(tmp_path / "s.db", semantic_config)
     _index_sample(index)
+    index.embed_pending()
 
     hits = index.semantic_search("gradient optimization", limit=1)
     assert len(hits) == 1

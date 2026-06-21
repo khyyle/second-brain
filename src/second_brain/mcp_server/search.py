@@ -21,6 +21,8 @@ from second_brain.config import SearchConfig
 
 logger = logging.getLogger(__name__)
 
+BUSY_TIMEOUT_SECONDS = 5.0
+
 
 def _hash_content(content: str) -> str:
     """Return a stable content fingerprint used to detect page changes.
@@ -105,7 +107,8 @@ class SearchIndex:
                     word_count INTEGER,
                     path TEXT,
                     content_hash TEXT,
-                    mtime REAL
+                    mtime REAL,
+                    embedded_hash TEXT
                 )
             """)
 
@@ -126,8 +129,9 @@ class SearchIndex:
 
     @contextmanager
     def _conn(self) -> Iterator[sqlite3.Connection]:
-        conn = sqlite3.connect(str(self._db_path))
+        conn = sqlite3.connect(str(self._db_path), timeout=BUSY_TIMEOUT_SECONDS)
         conn.row_factory = sqlite3.Row
+        self._apply_pragmas(conn)
         try:
             yield conn
             conn.commit()
@@ -142,8 +146,9 @@ class SearchIndex:
         """
         import sqlite_vec
 
-        conn = sqlite3.connect(str(self._db_path))
+        conn = sqlite3.connect(str(self._db_path), timeout=BUSY_TIMEOUT_SECONDS)
         conn.row_factory = sqlite3.Row
+        self._apply_pragmas(conn)
         conn.enable_load_extension(True)
         sqlite_vec.load(conn)
         conn.enable_load_extension(False)
@@ -152,6 +157,15 @@ class SearchIndex:
             conn.commit()
         finally:
             conn.close()
+
+    @staticmethod
+    def _apply_pragmas(conn: sqlite3.Connection) -> None:
+        """Enable WAL and a busy timeout so the request path and the
+        background embedder can read and write the same database
+        concurrently without spurious 'database is locked' failures.
+        """
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute(f"PRAGMA busy_timeout={int(BUSY_TIMEOUT_SECONDS * 1000)}")
 
     @property
     def semantic_enabled(self) -> bool:
@@ -173,9 +187,9 @@ class SearchIndex:
         """
         Add or replace a page in both the FTS and metadata tables.
 
-        Always recomputes the page embedding when the semantic layer is
-        active, so callers should only invoke this for new or changed
-        pages (see :meth:`sync_from_wiki`).
+        Does not compute embeddings: the page is left marked as pending
+        (its ``embedded_hash`` is cleared) so the semantic layer is
+        refreshed off the request path by :meth:`embed_pending`.
 
         Parameters
         ----------
@@ -213,8 +227,8 @@ class SearchIndex:
             conn.execute(
                 "INSERT OR REPLACE INTO wiki_meta "
                 "(stem, title, content_type, domains, tags, word_count, path, "
-                "content_hash, mtime) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "content_hash, mtime, embedded_hash) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)",
                 (
                     stem,
                     title,
@@ -228,39 +242,76 @@ class SearchIndex:
                 ),
             )
 
-        if self._semantic:
-            self._index_embedding(stem, title, content)
+    def embed_pending(self, limit: int | None = None) -> int:
+        """
+        Embed pages whose stored embedding is missing or stale.
 
-    def _index_embedding(self, stem: str, title: str, content: str) -> None:
-        """Compute and store the page embedding; best-effort, never raises.
+        A page is pending when its ``embedded_hash`` differs from its
+        current ``content_hash`` (cleared whenever the page is indexed).
+        This is the only place embeddings are computed, and it is meant to
+        run off the request path (e.g. a background thread) so Ollama
+        latency never blocks tool calls. Best-effort: if the embedder is
+        unavailable it stops early, leaving the rest pending for a later
+        pass.
 
         Parameters
         ----------
-        stem: str
-            Page key.
-        title: str
-            Page title (prepended to give the embedding a topical anchor).
-        content: str
-            Full markdown body.
+        limit: int | None
+            Maximum number of pages to embed in this pass; ``None`` embeds
+            all pending pages.
+
+        Returns
+        -------
+        int
+            Number of pages embedded.
         """
+        if not self._semantic or self._search_config is None:
+            return 0
+
         from sqlite_vec import serialize_float32
 
         from second_brain.mcp_server.embeddings import embed_text
 
-        if self._search_config is None:
-            return
-        vector = embed_text(f"{title}\n\n{content}", self._search_config)
-        if vector is None:
-            return
-        try:
-            with self._vec_conn() as conn:
-                conn.execute("DELETE FROM wiki_vec WHERE stem = ?", (stem,))
-                conn.execute(
-                    "INSERT INTO wiki_vec (stem, embedding) VALUES (?, ?)",
-                    (stem, serialize_float32(vector)),
-                )
-        except sqlite3.Error as exc:
-            logger.debug("Embedding store failed for %s: %s", stem, exc)
+        query = (
+            "SELECT m.stem, m.title, m.content_hash, f.content "
+            "FROM wiki_meta m JOIN wiki_fts f ON f.stem = m.stem "
+            "WHERE m.embedded_hash IS NULL OR m.embedded_hash != m.content_hash"
+        )
+        params: tuple = ()
+        if limit is not None:
+            query += " LIMIT ?"
+            params = (limit,)
+        with self._conn() as conn:
+            pending = conn.execute(query, params).fetchall()
+
+        embedded_count = 0
+        for row in pending:
+            vector = embed_text(f"{row['title']}\n\n{row['content']}", self._search_config)
+            if vector is None:
+                # Embedder unavailable; leave the rest pending for next pass.
+                break
+            try:
+                with self._vec_conn() as conn:
+                    conn.execute("DELETE FROM wiki_vec WHERE stem = ?", (row["stem"],))
+                    conn.execute(
+                        "INSERT INTO wiki_vec (stem, embedding) VALUES (?, ?)",
+                        (row["stem"], serialize_float32(vector)),
+                    )
+                with self._conn() as conn:
+                    # Guard on content_hash so a concurrent re-index (which
+                    # clears embedded_hash) is not masked as embedded here.
+                    conn.execute(
+                        "UPDATE wiki_meta SET embedded_hash = ? "
+                        "WHERE stem = ? AND content_hash = ?",
+                        (row["content_hash"], row["stem"], row["content_hash"]),
+                    )
+                embedded_count += 1
+            except sqlite3.Error as exc:
+                logger.debug("Embedding store failed for %s: %s", row["stem"], exc)
+
+        if embedded_count:
+            logger.info("Embedded %d pending page(s)", embedded_count)
+        return embedded_count
 
     def search(self, query: str, limit: int = 10) -> list[SearchHit]:
         """

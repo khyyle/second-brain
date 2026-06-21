@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from pathlib import Path
 
@@ -160,14 +161,18 @@ class WikiTools:
         self._cache = _GraphCache(wiki_dir)
         self._last_sync_check = 0.0
         self._last_sync_mtime = -1.0
+        self._embed_lock = threading.Lock()
+        self._embed_thread: threading.Thread | None = None
 
     def ensure_synced(self) -> None:
         """Refresh the search index from disk when wiki files have changed.
 
         Lets newly compiled or edited pages become searchable mid-session
-        without restarting the server. Filesystem checks are rate-limited,
-        and the underlying sync only re-embeds pages whose content changed,
-        so the common (unchanged) case costs a directory stat.
+        without restarting the server. The keyword/metadata sync is fast
+        and runs inline (rate-limited by a directory-stat check), so
+        ``search_wiki`` and ``list_pages`` stay correct and responsive.
+        Embeddings are refreshed on a background thread so Ollama latency
+        never blocks a tool call.
         """
         now = time.monotonic()
         if now - self._last_sync_check < SYNC_MIN_INTERVAL_SECONDS:
@@ -180,6 +185,22 @@ class WikiTools:
 
         self._search.sync_from_wiki(self._wiki)
         self._last_sync_mtime = current_mtime
+        self._start_background_embed()
+
+    def _start_background_embed(self) -> None:
+        """Embed pending pages on a daemon thread if one is not running.
+
+        Keeps embedding (and its Ollama round-trips) entirely off the
+        request path. At most one embed pass runs at a time; pages that
+        change while a pass is in flight are picked up by the next call.
+        """
+        if not self._search.semantic_enabled:
+            return
+        with self._embed_lock:
+            if self._embed_thread is not None and self._embed_thread.is_alive():
+                return
+            self._embed_thread = threading.Thread(target=self._search.embed_pending, daemon=True)
+            self._embed_thread.start()
 
     def _latest_mtime(self) -> float:
         """Return the newest mtime across wiki content dirs and their files.
