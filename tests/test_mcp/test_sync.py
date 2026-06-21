@@ -206,7 +206,9 @@ def test_ensure_synced_picks_up_new_file_without_restart(
     # Keyword search is updated inline.
     assert "beta" in tools.search_wiki("dogs")
 
-    # Embedding runs on a background thread; wait for it, then it is searchable.
+    # Embedding runs on a background thread; join it if present, then drain
+    # any still-pending work deterministically before asserting.
     if tools._embed_thread is not None:
         tools._embed_thread.join(timeout=5)
+    index.embed_pending()
     assert any(h.stem == "beta" for h in index.semantic_search("dogs"))
