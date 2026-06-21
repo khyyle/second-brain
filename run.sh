@@ -34,6 +34,25 @@ fi
 STAGE="${1:-all}"
 LOG_PREFIX="$(date '+%Y-%m-%d %H:%M:%S')"
 
+# avoid collision if automation and manual runs are going at the same time. 
+# concurrent runs race the shared manifest and git wiki. mkdir is the atomic
+# primitive (no flock on macOS); a stale lock from a crashed run is reclaimed once its pid is gone.
+LOCK_DIR="$HOME/second-brain/.pipeline.lock"
+if ! mkdir "$LOCK_DIR" 2>/dev/null; then
+    holder="$(cat "$LOCK_DIR/pid" 2>/dev/null || true)"
+    if [ -n "$holder" ] && kill -0 "$holder" 2>/dev/null; then
+        echo "[$LOG_PREFIX] A pipeline run is already in progress (pid $holder) — skipping this one."
+        exit 0
+    fi
+    rm -rf "$LOCK_DIR"
+    mkdir "$LOCK_DIR" 2>/dev/null || {
+        echo "[$LOG_PREFIX] Could not acquire the pipeline lock — skipping this one."
+        exit 0
+    }
+fi
+echo $$ > "$LOCK_DIR/pid"
+trap 'rm -rf "$LOCK_DIR"' EXIT
+
 echo "[$LOG_PREFIX] Starting second-brain pipeline (stage: $STAGE)"
 
 if [ "$STAGE" = "drops" ]; then

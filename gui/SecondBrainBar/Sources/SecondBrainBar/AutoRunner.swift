@@ -15,10 +15,8 @@ final class AutoRunner {
         self.config = config
     }
 
-    /// Schedule a free ingest run, resetting the timer if called again
-    /// within the debounce window. Scans only the drop folders, not watched
-    /// folders, so an interactive drop ingests just what was added. Only
-    /// ingestion is auto-run; the paid compile step is always explicit.
+    /// Debounced ingest of the drop folders after files are added, resetting
+    /// the timer if called again within the window. Never compiles.
     func schedule() {
         guard let script = config.runScriptPath else { return }
         work?.cancel()

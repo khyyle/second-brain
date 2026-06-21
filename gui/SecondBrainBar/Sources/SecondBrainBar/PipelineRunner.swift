@@ -7,12 +7,8 @@ import AppKit
 /// Python pipeline's runtime. Output goes wherever `run.sh` directs
 /// it (typically `~/second-brain/logs/pipeline.log`).
 enum PipelineRunner {
-    /// Which pipeline stage to run. All ingest stages are free (local OCR);
-    /// compile calls Claude and costs money.
-    ///
-    /// `drops` ingests only the drop folders and is used after an interactive
-    /// drop, so adding a file doesn't also sweep registered watched folders.
-    /// `ingest` is a full ingest of every source, including watched folders.
+    /// A pipeline stage. `drops` ingests only the drop folders; `ingest` is a
+    /// full ingest including watched folders; `compile` is the paid build.
     enum Stage: String {
         case drops
         case ingest

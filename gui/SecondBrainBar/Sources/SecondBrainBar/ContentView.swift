@@ -23,6 +23,7 @@ struct ContentView: View {
     @State private var autoRunner: AutoRunner?
     @State private var showingSettings = false
     @State private var showingNoKeyAlert = false
+    @State private var showingBusyAlert = false
     @State private var status: PipelineStatus?
     @State private var stopping = false
     @Namespace private var tabNamespace
@@ -53,6 +54,12 @@ struct ContentView: View {
         } message: {
             Text("Building the wiki uses Claude, which needs an API key. "
                 + "Add it in Settings and it's saved locally to your .env file.")
+        }
+        .alert("A run is already in progress", isPresented: $showingBusyAlert) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text("Second Brain is already ingesting or building. Wait for the "
+                + "current run to finish, then build again.")
         }
         .onAppear {
             if autoRunner == nil { autoRunner = AutoRunner(config: config) }
@@ -191,6 +198,10 @@ struct ContentView: View {
                 help: "Compile ingested files into the wiki (uses Claude API)",
                 enabled: config.runScriptPath != nil
             ) {
+                if status?.isActive == true {
+                    showingBusyAlert = true
+                    return
+                }
                 guard !EnvStore.readKey(config).isEmpty else {
                     showingNoKeyAlert = true
                     return

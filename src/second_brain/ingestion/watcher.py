@@ -234,11 +234,8 @@ def _batch_scan(
     process_callback: Callable[[Path, str], None]
         Function to call for each file that needs processing.
     drops_only: bool, default=False
-        When ``True``, scan only the drop-queue lanes and leave registered
-        watched folders untouched. A drop is an interactive action that
-        should ingest just what was added; sweeping the watched folders is
-        left to scheduled and explicit full ingests, so adding one file does
-        not silently kick off heavy work on unrelated folders.
+        When ``True``, scan only the drop-queue lanes and skip registered
+        watched folders (used for interactive drops).
 
     Returns
     -------

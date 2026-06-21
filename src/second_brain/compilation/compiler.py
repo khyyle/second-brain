@@ -511,8 +511,7 @@ def run_compilation(
 
     compiled_count = 0
     if not dry_run:
-        # Fail before any heartbeat or git work so a keyless build gives one
-        # clear message instead of a generic per-group failure in the log.
+        # Fail fast on a missing key, before any heartbeat or git work.
         if not os.environ.get("ANTHROPIC_API_KEY"):
             raise MissingAPIKeyError(
                 "ANTHROPIC_API_KEY is not set. Add your Anthropic API key in the "
