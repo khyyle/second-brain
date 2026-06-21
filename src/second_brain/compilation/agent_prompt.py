@@ -41,7 +41,9 @@ Every page MUST have YAML frontmatter with at minimum:
 
 ## Rules
 - File names use kebab-case (e.g., gradient-descent.md)
-- Use [[wikilinks]] for cross-references between pages
+- Use [[wikilinks]] for cross-references; link by bare page stem only
+  (e.g. [[gradient-descent]]), never folder-prefixed ([[concepts/...]]) or
+  with a .md suffix
 - Use LaTeX notation: inline $...$ and display $$...$$
 - Cite sources with ^[source-filename.md] notation
 - You may create new tags freely
