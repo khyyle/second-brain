@@ -1,0 +1,36 @@
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+
+.venv/
+venv/
+.env
+
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+
+*.db
+*.db-journal
+
+logs/
+*.log
+*.err
+
+
+# experiment scripts / outputs
+tmp/
+
+.DS_Store
+
+# Swift / Xcode artifacts
+gui/**/.build/
+gui/**/.swiftpm/
+gui/**/Packages/
+gui/**/DerivedData/
+gui/**/*.app/

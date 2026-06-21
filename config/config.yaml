@@ -1,0 +1,68 @@
+data_dir: ~/second-brain
+
+# data ingest points
+sources:
+  # caltech:
+  #   path: ~/caltech
+  #   enabled: true
+  #   file_types: [pdf, md, tex]
+  # goodnotes:
+  #   path: ~/Google Drive/My Drive/Goodnotes
+  #   enabled: true
+  #   force_parse_lane: chandra
+  #   file_types: [pdf]
+  chatgpt:
+    path: ~/second-brain/drops/chatgpt
+    enabled: true
+    file_types: [json]
+  # Single general inbox. PDFs are auto-routed to the right parse lane
+  # (Docling for born-digital, Chandra for scanned/handwritten) by
+  # parsing/router.py.
+  documents:
+    path: ~/second-brain/drops/documents
+    enabled: true
+    file_types: [pdf, md, txt, tex]
+
+# document data extraction
+parsing:
+  handwriting_parser: chandra   # chandra (local, 38s/page) | claude (api, 13s/page, 0.015$/page)
+  chandra_precision: 4bit        # 4bit | 8bit
+
+# wiki creation
+compilation:
+  model: claude-sonnet-4-6
+  max_tokens_per_page: 4000
+  max_iterations: 20
+  token_budget_per_run: 150000   # token ceiling per source (depth guard)
+  max_cost_per_build_usd: 0   # $ ceiling per build; 0 = no limit
+
+# group related sources to collapse redundant agent compiles and amortize per-run overhead
+clustering:
+  enabled: false
+  algorithm: hdbscan       # threshold | hdbscan
+  threshold: 0.82          # cosine >= this joins a cluster (threshold algorithm)
+  hdbscan_min_cluster_size: 2  # smallest grouping hdbscan treats as a cluster
+  max_sources_per_run: 5   # split larger clusters into batches
+  signature_chars: 8000    # opening chars embedded as the topical fingerprint
+  sources: [chatgpt]       # only these folders are clustered; others compile one-per-source
+
+# pre-filter for document relevance
+triage:
+  enabled: true
+  model: gemma3:4b               # local Ollama model
+  ollama_host: http://localhost:11434
+  min_word_count: 300            # free heuristic pre-filter
+  worthwhile_threshold: 0.6      # Gemma confidence floor for "worthwhile"
+  profile: technical   # balanced | technical | skip_heavy | 
+                                 # project_heavy | lenient (see triage/prompts.py)
+  sources: [chatgpt]             # only these folders are model-triaged; others
+                                 # pass through as worthwhile (curated by dropping)
+
+search:
+  embedding_model: nomic-embed-text
+  embedding_dimensions: 768
+  ollama_host: http://localhost:11434
+  semantic_enabled: true
+
+schedule:
+  hours: [8, 14, 20]
