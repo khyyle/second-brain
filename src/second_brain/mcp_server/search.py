@@ -9,6 +9,7 @@ normally. Callers ask for semantic results explicitly via
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import sqlite3
 from collections.abc import Iterator
@@ -19,6 +20,22 @@ from pathlib import Path
 from second_brain.config import SearchConfig
 
 logger = logging.getLogger(__name__)
+
+
+def _hash_content(content: str) -> str:
+    """Return a stable content fingerprint used to detect page changes.
+
+    Parameters
+    ----------
+    content: str
+        Full markdown body of a wiki page.
+
+    Returns
+    -------
+    str
+        Hex SHA-256 digest of the UTF-8 encoded content.
+    """
+    return hashlib.sha256(content.encode("utf-8")).hexdigest()
 
 
 @dataclass(frozen=True)
@@ -86,7 +103,9 @@ class SearchIndex:
                     domains TEXT,
                     tags TEXT,
                     word_count INTEGER,
-                    path TEXT
+                    path TEXT,
+                    content_hash TEXT,
+                    mtime REAL
                 )
             """)
 
@@ -149,9 +168,14 @@ class SearchIndex:
         tags: list[str],
         word_count: int,
         path: str,
+        mtime: float | None = None,
     ) -> None:
         """
         Add or replace a page in both the FTS and metadata tables.
+
+        Always recomputes the page embedding when the semantic layer is
+        active, so callers should only invoke this for new or changed
+        pages (see :meth:`sync_from_wiki`).
 
         Parameters
         ----------
@@ -171,9 +195,13 @@ class SearchIndex:
             Pre-computed word count of *content*.
         path: str
             Relative path from the wiki root to the ``.md`` file.
+        mtime: float | None
+            Filesystem modification time of the source file, stored so
+            :meth:`sync_from_wiki` can skip unchanged files cheaply.
         """
         domains_str = ",".join(domains)
         tags_str = ",".join(tags)
+        content_hash = _hash_content(content)
 
         with self._conn() as conn:
             conn.execute("DELETE FROM wiki_fts WHERE stem = ?", (stem,))
@@ -184,9 +212,20 @@ class SearchIndex:
             )
             conn.execute(
                 "INSERT OR REPLACE INTO wiki_meta "
-                "(stem, title, content_type, domains, tags, word_count, path) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (stem, title, content_type, domains_str, tags_str, word_count, path),
+                "(stem, title, content_type, domains, tags, word_count, path, "
+                "content_hash, mtime) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    stem,
+                    title,
+                    content_type,
+                    domains_str,
+                    tags_str,
+                    word_count,
+                    path,
+                    content_hash,
+                    mtime,
+                ),
             )
 
         if self._semantic:
@@ -360,9 +399,112 @@ class SearchIndex:
 
         return [dict(r) for r in rows]
 
+    def _delete_page(self, stem: str) -> None:
+        """Remove a page from the FTS, metadata, and vector tables."""
+        with self._conn() as conn:
+            conn.execute("DELETE FROM wiki_fts WHERE stem = ?", (stem,))
+            conn.execute("DELETE FROM wiki_meta WHERE stem = ?", (stem,))
+        if self._semantic:
+            try:
+                with self._vec_conn() as conn:
+                    conn.execute("DELETE FROM wiki_vec WHERE stem = ?", (stem,))
+            except sqlite3.Error as exc:
+                logger.debug("Embedding delete failed for %s: %s", stem, exc)
+
+    def _touch_mtime(self, stem: str, mtime: float) -> None:
+        """Refresh a page's stored mtime without re-indexing its content.
+
+        Used when a file's mtime changed but its content hash did not, so
+        future syncs can skip it via the cheap mtime gate.
+        """
+        with self._conn() as conn:
+            conn.execute(
+                "UPDATE wiki_meta SET mtime = ? WHERE stem = ?", (mtime, stem)
+            )
+
+    def sync_from_wiki(self, wiki_dir: Path) -> int:
+        """
+        Incrementally reconcile the index with the wiki on disk.
+
+        New and changed pages are (re)indexed and re-embedded; pages whose
+        content is unchanged are skipped (no embedding work); pages removed
+        from disk are dropped from the index. Change detection uses a cheap
+        mtime gate backed by a content hash, so an unchanged wiki costs only
+        a stat per file.
+
+        Parameters
+        ----------
+        wiki_dir: Path
+            Root directory of the compiled wiki.
+
+        Returns
+        -------
+        int
+            Number of pages (re)indexed during this sync.
+        """
+        from second_brain.compilation.structure import CONTENT_DIRS, _parse_frontmatter
+
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT stem, content_hash, mtime FROM wiki_meta"
+            ).fetchall()
+        indexed_pages = {r["stem"]: (r["content_hash"], r["mtime"]) for r in rows}
+
+        seen_stems: set[str] = set()
+        indexed_count = 0
+
+        for content_dir in CONTENT_DIRS:
+            dir_path = wiki_dir / content_dir
+            if not dir_path.exists():
+                continue
+            for md_file in dir_path.glob("*.md"):
+                stem = md_file.stem
+                seen_stems.add(stem)
+                file_mtime = md_file.stat().st_mtime
+                previous = indexed_pages.get(stem)
+
+                if previous is not None and previous[1] == file_mtime:
+                    continue
+
+                content = md_file.read_text(encoding="utf-8")
+                content_hash = _hash_content(content)
+                if previous is not None and previous[0] == content_hash:
+                    self._touch_mtime(stem, file_mtime)
+                    continue
+
+                fm = _parse_frontmatter(content)
+                self.index_page(
+                    stem=stem,
+                    title=fm.get("title", stem),
+                    content=content,
+                    content_type=fm.get("type", "unknown"),
+                    domains=fm.get("domains", []),
+                    tags=fm.get("tags", []),
+                    word_count=len(content.split()),
+                    path=f"{content_dir}/{md_file.name}",
+                    mtime=file_mtime,
+                )
+                indexed_count += 1
+
+        removed_count = 0
+        for stem in indexed_pages.keys() - seen_stems:
+            self._delete_page(stem)
+            removed_count += 1
+
+        if indexed_count or removed_count:
+            logger.info(
+                "Synced search index: %d indexed, %d removed",
+                indexed_count,
+                removed_count,
+            )
+        return indexed_count
+
     def rebuild_from_wiki(self, wiki_dir: Path) -> int:
         """
         Drop and recreate the entire search index from wiki files.
+
+        Unconditionally re-embeds every page; prefer :meth:`sync_from_wiki`
+        for routine refreshes. Use this only when a full rebuild is wanted.
 
         Parameters
         ----------
@@ -379,6 +521,12 @@ class SearchIndex:
         with self._conn() as conn:
             conn.execute("DELETE FROM wiki_fts")
             conn.execute("DELETE FROM wiki_meta")
+        if self._semantic:
+            try:
+                with self._vec_conn() as conn:
+                    conn.execute("DELETE FROM wiki_vec")
+            except sqlite3.Error as exc:
+                logger.debug("Embedding table clear failed: %s", exc)
 
         count = 0
         for content_dir in CONTENT_DIRS:
@@ -397,6 +545,7 @@ class SearchIndex:
                     tags=fm.get("tags", []),
                     word_count=len(content.split()),
                     path=f"{content_dir}/{md_file.name}",
+                    mtime=md_file.stat().st_mtime,
                 )
                 count += 1
 

@@ -18,6 +18,8 @@ from second_brain.mcp_server.search import SearchIndex
 
 logger = logging.getLogger(__name__)
 
+SYNC_MIN_INTERVAL_SECONDS = 1.0
+
 
 def _source_preview(text: str) -> str:
     """Return a source's frontmatter block plus its first body paragraph.
@@ -158,6 +160,44 @@ class WikiTools:
         self._raw = raw_dir
         self._search = search_index
         self._cache = _GraphCache(wiki_dir)
+        self._last_sync_check = 0.0
+        self._last_sync_mtime = -1.0
+
+    def ensure_synced(self) -> None:
+        """Refresh the search index from disk when wiki files have changed.
+
+        Lets newly compiled or edited pages become searchable mid-session
+        without restarting the server. Filesystem checks are rate-limited,
+        and the underlying sync only re-embeds pages whose content changed,
+        so the common (unchanged) case costs a directory stat.
+        """
+        now = time.monotonic()
+        if now - self._last_sync_check < SYNC_MIN_INTERVAL_SECONDS:
+            return
+        self._last_sync_check = now
+
+        current_mtime = self._latest_mtime()
+        if current_mtime == self._last_sync_mtime:
+            return
+
+        self._search.sync_from_wiki(self._wiki)
+        self._last_sync_mtime = current_mtime
+
+    def _latest_mtime(self) -> float:
+        """Return the newest mtime across wiki content dirs and their files.
+
+        Directory mtimes are included so file additions and deletions are
+        detected, not just edits to existing files.
+        """
+        latest = 0.0
+        for content_dir in CONTENT_DIRS:
+            dir_path = self._wiki / content_dir
+            if not dir_path.exists():
+                continue
+            latest = max(latest, dir_path.stat().st_mtime)
+            for md_file in dir_path.glob("*.md"):
+                latest = max(latest, md_file.stat().st_mtime)
+        return latest
 
     def search_wiki(self, query: str, limit: int = 10) -> str:
         """
@@ -331,6 +371,7 @@ class WikiTools:
                     tags=fm.get("tags", []),
                     word_count=len(content.split()),
                     path=f"{content_dir}/{slug}.md",
+                    mtime=path.stat().st_mtime,
                 )
                 self._cache.invalidate()
                 return f"Updated: {path.relative_to(self._wiki)}"
@@ -386,6 +427,7 @@ class WikiTools:
             tags=fm.get("tags", []),
             word_count=len(content.split()),
             path=f"{directory}{slug}.md",
+            mtime=path.stat().st_mtime,
         )
         self._cache.invalidate()
         return f"Created: {path.relative_to(self._wiki)}"

@@ -27,12 +27,12 @@ def _get_tools() -> WikiTools:
         Singleton tools instance backed by the user's config.
     """
     global _tools
-    if _tools is not None:
-        return _tools
+    if _tools is None:
+        config = load_config()
+        search_index = SearchIndex(config.search_db_path, config.search)
+        _tools = WikiTools(config.wiki_dir, config.raw_dir, search_index)
 
-    config = load_config()
-    search_index = SearchIndex(config.search_db_path, config.search)
-    _tools = WikiTools(config.wiki_dir, config.raw_dir, search_index)
+    _tools.ensure_synced()
     return _tools
 
 
@@ -120,7 +120,7 @@ def serve() -> None:
     search_index = SearchIndex(config.search_db_path, config.search)
 
     if config.wiki_dir.exists():
-        search_index.rebuild_from_wiki(config.wiki_dir)
+        search_index.sync_from_wiki(config.wiki_dir)
 
     logger.info("Starting MCP server for wiki at %s", config.wiki_dir)
     mcp.run()
