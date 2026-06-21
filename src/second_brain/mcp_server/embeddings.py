@@ -74,10 +74,9 @@ def embed_text(text: str, config: SearchConfig) -> list[float] | None:
         The embedding vector, or ``None`` only when every chunk fails
         (e.g. Ollama is unavailable).
     """
-    chunks = [
-        text[i : i + EMBED_CHUNK_CHARS]
-        for i in range(0, len(text), EMBED_CHUNK_CHARS)
-    ][:EMBED_MAX_CHUNKS] or [""]
+    chunks = [text[i : i + EMBED_CHUNK_CHARS] for i in range(0, len(text), EMBED_CHUNK_CHARS)][
+        :EMBED_MAX_CHUNKS
+    ] or [""]
 
     vectors = [vec for chunk in chunks if (vec := _embed_chunk(chunk, config)) is not None]
     if not vectors:

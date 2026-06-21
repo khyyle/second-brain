@@ -79,9 +79,7 @@ def test_content_hash_default_none(manifest: Manifest, sample_file: Path) -> Non
     assert manifest.get_content_hash(sample_file) is None
 
 
-def test_content_hash_preserved_on_partial_complete(
-    manifest: Manifest, sample_file: Path
-) -> None:
+def test_content_hash_preserved_on_partial_complete(manifest: Manifest, sample_file: Path) -> None:
     """Re-marking complete without supplying content_hash must not overwrite a stored value."""
     manifest.mark_processing(sample_file, "research_papers")
     manifest.mark_complete(
@@ -111,9 +109,7 @@ def test_get_all_with_limit(manifest: Manifest, tmp_path: Path) -> None:
     assert len(rows) == 3
 
 
-def test_identical_content_at_new_path_is_skipped(
-    manifest: Manifest, tmp_path: Path
-) -> None:
+def test_identical_content_at_new_path_is_skipped(manifest: Manifest, tmp_path: Path) -> None:
     """A duplicate file (same bytes, different name) should not need processing."""
     original = tmp_path / "paper.pdf"
     original.write_bytes(b"%PDF-1.4 identical bytes")
@@ -126,9 +122,7 @@ def test_identical_content_at_new_path_is_skipped(
     assert manifest.needs_processing(duplicate) is False
 
 
-def test_different_content_at_new_path_still_processed(
-    manifest: Manifest, tmp_path: Path
-) -> None:
+def test_different_content_at_new_path_still_processed(manifest: Manifest, tmp_path: Path) -> None:
     """A genuinely different file must still be processed even if a name is similar."""
     original = tmp_path / "paper.pdf"
     original.write_bytes(b"%PDF-1.4 original")
@@ -141,9 +135,7 @@ def test_different_content_at_new_path_still_processed(
     assert manifest.needs_processing(different) is True
 
 
-def test_duplicate_of_incomplete_is_still_processed(
-    manifest: Manifest, tmp_path: Path
-) -> None:
+def test_duplicate_of_incomplete_is_still_processed(manifest: Manifest, tmp_path: Path) -> None:
     """Cross-path skip only applies once the first copy actually completed."""
     original = tmp_path / "paper.pdf"
     original.write_bytes(b"same bytes")
@@ -180,9 +172,7 @@ def test_compiled_tracking_is_separate_from_ingestion(
 ) -> None:
     """Ingestion completion must NOT mark a raw file as compiled."""
     manifest.mark_processing(sample_file, "documents")
-    manifest.mark_complete(
-        sample_file, parse_lane="docling", raw_output="documents/sample.md"
-    )
+    manifest.mark_complete(sample_file, parse_lane="docling", raw_output="documents/sample.md")
     # Ingested, but never compiled.
     assert manifest.get_compiled_raw_paths() == set()
 
@@ -207,9 +197,7 @@ def test_reingest_invalidates_compiled(manifest: Manifest, sample_file: Path) ->
     assert "documents/sample.md" in manifest.get_compiled_raw_paths()
 
     manifest.mark_processing(sample_file, "documents")
-    manifest.mark_complete(
-        sample_file, parse_lane="docling", raw_output="documents/sample.md"
-    )
+    manifest.mark_complete(sample_file, parse_lane="docling", raw_output="documents/sample.md")
 
     assert "documents/sample.md" not in manifest.get_compiled_raw_paths()
 

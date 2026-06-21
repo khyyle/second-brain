@@ -42,14 +42,16 @@ TRIAGE_MAX_ATTEMPTS = 2
 
 class TriageDecision(StrEnum):
     """Where a source goes after triage."""
+
     WORTHWHILE = "worthwhile"  # -> Claude compilation
-    REVIEW = "review"          # -> inbox for a manual pass
-    SKIP = "skip"              # -> recorded, never compiled
+    REVIEW = "review"  # -> inbox for a manual pass
+    SKIP = "skip"  # -> recorded, never compiled
 
 
 @dataclass(frozen=True)
 class TriageResult:
     """Outcome of triaging a single source."""
+
     decision: TriageDecision
     confidence: float
     concept_hints: list[str] = field(default_factory=list)

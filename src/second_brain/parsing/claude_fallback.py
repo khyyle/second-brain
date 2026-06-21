@@ -38,6 +38,7 @@ Output the markdown content only, no commentary."""
 
 DEFAULT_PARSING_FALLBACK_MODEL = "claude-sonnet-4-6"
 
+
 class ClaudeFallbackParser(DocumentParser):
     """Extracts page content via Claude Sonnet vision API."""
 
@@ -95,9 +96,7 @@ class ClaudeFallbackParser(DocumentParser):
                 )
             except Exception as e:
                 logger.exception("Claude vision failed on page %d", page.page_number)
-                raise PageParseError(
-                    f"Claude vision failed on page {page.page_number}"
-                ) from e
+                raise PageParseError(f"Claude vision failed on page {page.page_number}") from e
             results.append(response.content[0].text)
         return results
 

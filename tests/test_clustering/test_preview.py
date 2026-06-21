@@ -106,9 +106,11 @@ def test_build_preview_groups_and_costs(tmp_path: Path, monkeypatch: pytest.Monk
     )
 
     monkeypatch.setattr(preview_mod, "get_clusterer", lambda config: object())
-    monkeypatch.setattr(preview_mod, "_staged_sources", lambda config, manifest: [
-        "chatgpt/a.md", "chatgpt/b.md", "chatgpt/c.md"
-    ])
+    monkeypatch.setattr(
+        preview_mod,
+        "_staged_sources",
+        lambda config, manifest: ["chatgpt/a.md", "chatgpt/b.md", "chatgpt/c.md"],
+    )
 
     artifact = preview_mod.build_preview(stub_config, manifest=None)
 

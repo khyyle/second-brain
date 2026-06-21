@@ -34,6 +34,7 @@ class SourceConfig(BaseModel):
         Pin every PDF to "chandra" or "docling" instead of per-page
         routing; None uses automatic routing.
     """
+
     model_config = ConfigDict(frozen=True)
 
     path: Path
@@ -50,9 +51,7 @@ class SourceConfig(BaseModel):
     @classmethod
     def _validate_lane(cls, v: str | None) -> str | None:
         if v is not None and v not in ("chandra", "docling"):
-            raise ValueError(
-                f"force_parse_lane must be 'chandra', 'docling', or null — got '{v}'"
-            )
+            raise ValueError(f"force_parse_lane must be 'chandra', 'docling', or null — got '{v}'")
         return v
 
 
@@ -73,6 +72,7 @@ class ParsingConfig(BaseModel):
         Quantization for the local Chandra MLX model: "4bit" (fastest,
         smallest, accuracy within noise) or "8bit".
     """
+
     model_config = ConfigDict(frozen=True)
 
     handwriting_parser: str = "chandra"
@@ -116,6 +116,7 @@ class CompilationConfig(BaseModel):
         crosses it the build stops before the next source; finished pages
         are kept and the rest stay staged for the next run. 0 disables it.
     """
+
     model_config = ConfigDict(frozen=True)
 
     model: str = "claude-sonnet-4-6"
@@ -159,6 +160,7 @@ class ClusteringConfig(BaseModel):
         one source per run, since deliberately dropped material is already
         curated and carries little redundancy.
     """
+
     model_config = ConfigDict(frozen=True)
 
     enabled: bool = False
@@ -195,6 +197,7 @@ class SearchConfig(BaseModel):
         When True the MCP exposes a semantic_search tool and the index
         builds embeddings; both degrade gracefully if Ollama is down.
     """
+
     model_config = ConfigDict(frozen=True)
 
     embedding_model: str = "nomic-embed-text"
@@ -231,6 +234,7 @@ class TriageConfig(BaseModel):
         Which source folders are model-triaged. Others pass through as
         worthwhile (dropping them is the curation).
     """
+
     model_config = ConfigDict(frozen=True)
 
     enabled: bool = True
@@ -245,14 +249,13 @@ class TriageConfig(BaseModel):
     @classmethod
     def _validate_profile(cls, v: str) -> str:
         if v not in _TRIAGE_PROFILES:
-            raise ValueError(
-                f"triage.profile must be one of {_TRIAGE_PROFILES}, got '{v}'"
-            )
+            raise ValueError(f"triage.profile must be one of {_TRIAGE_PROFILES}, got '{v}'")
         return v
 
 
 class ScheduleConfig(BaseModel):
     """Hours of the day (24h) at which the pipeline should run."""
+
     model_config = ConfigDict(frozen=True)
 
     hours: tuple[int, ...] = (8, 14, 20)
@@ -274,6 +277,7 @@ class Config(BaseModel):
     from a single ``data_dir`` root. Frozen to prevent accidental
     mutation after loading.
     """
+
     model_config = ConfigDict(frozen=True)
 
     data_dir: Path = Field(default_factory=lambda: Path.home() / "second-brain")

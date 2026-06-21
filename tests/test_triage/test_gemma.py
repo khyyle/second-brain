@@ -56,9 +56,7 @@ def test_heuristic_skips_thin_content() -> None:
     assert heuristic_skip("word " * 50, min_word_count=10) is False
 
 
-def test_triage_content_worthwhile(
-    config: TriageConfig, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_triage_content_worthwhile(config: TriageConfig, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         gemma.httpx, "post", lambda *a, **k: FakeResponse(_ollama_reply("worthwhile", 0.9))
     )
@@ -78,9 +76,7 @@ def test_low_confidence_worthwhile_demoted_to_review(
     assert result.decision == TriageDecision.REVIEW
 
 
-def test_skip_decision_passthrough(
-    config: TriageConfig, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_skip_decision_passthrough(config: TriageConfig, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         gemma.httpx, "post", lambda *a, **k: FakeResponse(_ollama_reply("skip", 0.95))
     )

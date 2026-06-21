@@ -82,10 +82,7 @@ def _install_fake_chandra(
 
 
 def _make_pages(payloads: list[bytes]) -> list[RenderedPage]:
-    return [
-        RenderedPage(page_number=i + 1, png_bytes=b)
-        for i, b in enumerate(payloads)
-    ]
+    return [RenderedPage(page_number=i + 1, png_bytes=b) for i, b in enumerate(payloads)]
 
 
 def test_first_run_ocrs_all_pages(
@@ -129,7 +126,11 @@ def test_second_run_with_unchanged_pages_hits_cache(
 
     out_dir = config.raw_dir / "goodnotes"
     first = process_pdf_sync(
-        pdf_path, out_dir, config, force_lane="chandra", manifest=manifest,
+        pdf_path,
+        out_dir,
+        config,
+        force_lane="chandra",
+        manifest=manifest,
     )
     manifest.mark_processing(pdf_path, "goodnotes")
     manifest.mark_complete(
@@ -141,7 +142,11 @@ def test_second_run_with_unchanged_pages_hits_cache(
 
     fake_again = _install_fake_chandra(monkeypatch, pages)
     second = process_pdf_sync(
-        pdf_path, out_dir, config, force_lane="chandra", manifest=manifest,
+        pdf_path,
+        out_dir,
+        config,
+        force_lane="chandra",
+        manifest=manifest,
     )
 
     assert fake_again.parse_pages_calls == []
@@ -164,7 +169,11 @@ def test_partial_change_ocrs_only_new_pages(
 
     out_dir = config.raw_dir / "goodnotes"
     first = process_pdf_sync(
-        pdf_path, out_dir, config, force_lane="chandra", manifest=manifest,
+        pdf_path,
+        out_dir,
+        config,
+        force_lane="chandra",
+        manifest=manifest,
     )
     manifest.mark_processing(pdf_path, "goodnotes")
     manifest.mark_complete(
@@ -178,7 +187,11 @@ def test_partial_change_ocrs_only_new_pages(
     fake = _install_fake_chandra(monkeypatch, expanded)
 
     second = process_pdf_sync(
-        pdf_path, out_dir, config, force_lane="chandra", manifest=manifest,
+        pdf_path,
+        out_dir,
+        config,
+        force_lane="chandra",
+        manifest=manifest,
     )
 
     assert len(fake.parse_pages_calls) == 1

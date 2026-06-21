@@ -24,6 +24,7 @@ STOP_FILENAME = ".stop"
 @dataclass(frozen=True)
 class PipelineStatus:
     """A snapshot of pipeline progress written to the heartbeat file."""
+
     running: bool
     phase: str  # "ingest" | "triage" | "compile" | "idle"
     current: int

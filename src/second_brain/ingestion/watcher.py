@@ -276,8 +276,11 @@ def _batch_scan(
     def _keepalive() -> None:
         while not stop.wait(5.0):
             write_status(
-                config.data_dir, phase="ingest",
-                current=progress["current"], total=total, started_at=started,
+                config.data_dir,
+                phase="ingest",
+                current=progress["current"],
+                total=total,
+                started_at=started,
             )
 
     heartbeat = threading.Thread(target=_keepalive, daemon=True)
@@ -286,8 +289,11 @@ def _batch_scan(
         for file_path, name in work:
             progress["current"] = processed
             write_status(
-                config.data_dir, phase="ingest", current=processed,
-                total=total, started_at=started,
+                config.data_dir,
+                phase="ingest",
+                current=processed,
+                total=total,
+                started_at=started,
             )
             try:
                 process_callback(file_path, name)
@@ -326,6 +332,4 @@ async def batch_scan_async(
         Total number of files successfully processed.
     """
     loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(
-        None, _batch_scan, config, manifest, process_callback
-    )
+    return await loop.run_in_executor(None, _batch_scan, config, manifest, process_callback)

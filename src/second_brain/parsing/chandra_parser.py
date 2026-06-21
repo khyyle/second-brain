@@ -74,10 +74,19 @@ def ensure_mlx_model(precision: str = "4bit") -> Path:
     logger.info("Converting Chandra 2 to MLX %s (one-time, a few minutes)...", precision)
     subprocess.run(
         [
-            sys.executable, "-m", "mlx_vlm", "convert",
-            "--hf-path", HF_MODEL,
-            "--mlx-path", str(path),
-            "-q", "--q-bits", bits, "--q-group-size", "64",
+            sys.executable,
+            "-m",
+            "mlx_vlm",
+            "convert",
+            "--hf-path",
+            HF_MODEL,
+            "--mlx-path",
+            str(path),
+            "-q",
+            "--q-bits",
+            bits,
+            "--q-group-size",
+            "64",
             "--trust-remote-code",
         ],
         check=True,
@@ -88,6 +97,7 @@ def ensure_mlx_model(precision: str = "4bit") -> Path:
 @dataclass(frozen=True)
 class RenderedPage:
     """A single PDF page rasterized for both hashing and OCR."""
+
     page_number: int  # 1-indexed
     png_bytes: bytes
 
@@ -245,9 +255,7 @@ class ChandraParser(DocumentParser):
                     raw = out.text if hasattr(out, "text") else str(out)
                 except Exception as e:
                     logger.exception("Chandra MLX failed on page %d", page.page_number)
-                    raise PageParseError(
-                        f"Chandra failed on page {page.page_number}"
-                    ) from e
+                    raise PageParseError(f"Chandra failed on page {page.page_number}") from e
                 results.append(parse_markdown(raw))
         return results
 

@@ -344,9 +344,7 @@ class Manifest:
             # (Re)ingesting a source invalidates any prior compilation of
             # its raw output, so an overwritten/updated file is recompiled.
             if raw_output is not None:
-                conn.execute(
-                    "DELETE FROM compiled WHERE raw_path = ?", (raw_output,)
-                )
+                conn.execute("DELETE FROM compiled WHERE raw_path = ?", (raw_output,))
 
     def mark_failed(self, file_path: Path, error: str | None = None) -> None:
         """Mark a file as failed so it will be retried on the next run.
@@ -436,9 +434,7 @@ class Manifest:
         deleted = 0
         with self._conn() as conn:
             for p in file_paths:
-                cur = conn.execute(
-                    "DELETE FROM manifest WHERE file_path = ?", (str(p),)
-                )
+                cur = conn.execute("DELETE FROM manifest WHERE file_path = ?", (str(p),))
                 deleted += cur.rowcount
         return deleted
 

@@ -95,8 +95,11 @@ def triage_pending(config: Config, manifest: Manifest) -> dict[str, int]:
     try:
         for idx, rel in enumerate(pending):
             write_status(
-                config.data_dir, phase="triage", current=idx,
-                total=total, started_at=started,
+                config.data_dir,
+                phase="triage",
+                current=idx,
+                total=total,
+                started_at=started,
             )
             try:
                 result = triage_file(config.raw_dir / rel, config.triage)
@@ -106,9 +109,7 @@ def triage_pending(config: Config, manifest: Manifest) -> dict[str, int]:
                 # whole triage pass and stall every later source.
                 logger.warning("Skipping triage for %s: %s", rel, exc)
                 continue
-            manifest.record_triage(
-                rel, result.decision.value, result.confidence, result.reason
-            )
+            manifest.record_triage(rel, result.decision.value, result.confidence, result.reason)
             counts[result.decision.value] += 1
             if result.decision == TriageDecision.REVIEW:
                 review_paths.append(rel)

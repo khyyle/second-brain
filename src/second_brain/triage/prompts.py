@@ -54,7 +54,7 @@ def _compose(role: str, philosophy: str, criteria: str, examples: list[str]) -> 
 def _ex(description: str, decision: str, ctype: str, reason: str) -> str:
     """Format a single few-shot example."""
     return (
-        f'Document: {description}\n'
+        f"Document: {description}\n"
         f'-> {{"decision": "{decision}", "confidence": 0.9, '
         f'"content_type_hint": "{ctype}", "reason": "{reason}"}}'
     )
@@ -77,25 +77,34 @@ _BALANCED = _compose(
         _ex(
             "Detailed design of a 6DoF foot-contact detection system with sensor "
             "choice and signal processing",
-            "worthwhile", "project", "substantive technical design worth keeping",
+            "worthwhile",
+            "project",
+            "substantive technical design worth keeping",
         ),
         _ex(
-            "Step-by-step solution computing critical points of f(x,y)=xy via "
-            "partial derivatives",
-            "worthwhile", "problem", "a complete worked example",
+            "Step-by-step solution computing critical points of f(x,y)=xy via partial derivatives",
+            "worthwhile",
+            "problem",
+            "a complete worked example",
         ),
         _ex(
             "One-line question on removing None values from a Python list with a "
             "single snippet answer",
-            "skip", "problem", "a trivial lookup with no durable value",
+            "skip",
+            "problem",
+            "a trivial lookup with no durable value",
         ),
         _ex(
             "Drafting and wordsmithing a college admissions essay",
-            "skip", "insight", "personal/logistics, not reusable knowledge",
+            "skip",
+            "insight",
+            "personal/logistics, not reusable knowledge",
         ),
         _ex(
             "Brainstorm of loosely-formed project ideas for an ESP32 wearable",
-            "review", "project", "ideation that may or may not be worth promoting",
+            "review",
+            "project",
+            "ideation that may or may not be worth promoting",
         ),
     ],
 )
@@ -124,23 +133,33 @@ _TECHNICAL = _compose(
         _ex(
             "Detailed design of a 6DoF foot-contact detection system: theory of "
             "operation, sensor selection, signal processing",
-            "worthwhile", "project", "core engineering substance for a STEM brain",
+            "worthwhile",
+            "project",
+            "core engineering substance for a STEM brain",
         ),
         _ex(
             "Deriving the gradient of a scalar field with vector-calculus intuition",
-            "worthwhile", "concept", "a reusable mathematical derivation",
+            "worthwhile",
+            "concept",
+            "a reusable mathematical derivation",
         ),
         _ex(
             "Debugging ESP32 motor control and arriving at a working PWM config",
-            "worthwhile", "project", "technical debugging with a concrete resolution",
+            "worthwhile",
+            "project",
+            "technical debugging with a concrete resolution",
         ),
         _ex(
             "One-line lookup: how to remove None from a Python list",
-            "skip", "problem", "trivial single-snippet lookup",
+            "skip",
+            "problem",
+            "trivial single-snippet lookup",
         ),
         _ex(
             "Editing a college admissions essay about coursework",
-            "skip", "insight", "non-technical personal writing",
+            "skip",
+            "insight",
+            "non-technical personal writing",
         ),
     ],
 )
@@ -167,23 +186,33 @@ _SKIP_HEAVY = _compose(
         _ex(
             "Comparing Redis vs in-memory caching for a web app, ending in a "
             "clear recommendation with tradeoffs",
-            "worthwhile", "insight", "a reusable conclusion with rationale",
+            "worthwhile",
+            "insight",
+            "a reusable conclusion with rationale",
         ),
         _ex(
             "Step-by-step critical-point calculation you could redo from scratch",
-            "skip", "problem", "a re-doable exercise, not durable knowledge",
+            "skip",
+            "problem",
+            "a re-doable exercise, not durable knowledge",
         ),
         _ex(
             "Verbose theory-of-operation write-up for a sensor system",
-            "review", "project", "substantive but unfocused; only maybe worth it",
+            "review",
+            "project",
+            "substantive but unfocused; only maybe worth it",
         ),
         _ex(
             "Brainstorm of ESP32 project ideas",
-            "skip", "project", "ephemeral ideation",
+            "skip",
+            "project",
+            "ephemeral ideation",
         ),
         _ex(
             "How to remove None from a Python list",
-            "skip", "problem", "trivial lookup",
+            "skip",
+            "problem",
+            "trivial lookup",
         ),
     ],
 )
@@ -209,23 +238,33 @@ _PROJECT_HEAVY = _compose(
     examples=[
         _ex(
             "Designing a 6DoF foot-contact detection build with sensor selection",
-            "worthwhile", "project", "concrete system being built",
+            "worthwhile",
+            "project",
+            "concrete system being built",
         ),
         _ex(
             "Debugging ESP32 motor control to a working configuration",
-            "worthwhile", "project", "implementation debugging on a real build",
+            "worthwhile",
+            "project",
+            "implementation debugging on a real build",
         ),
         _ex(
             "Brainstorm of ESP32 running-wearable project ideas",
-            "worthwhile", "project", "project ideation worth capturing",
+            "worthwhile",
+            "project",
+            "project ideation worth capturing",
         ),
         _ex(
             "Abstract derivation of a gradient with no project context",
-            "review", "concept", "useful theory but not tied to a build",
+            "review",
+            "concept",
+            "useful theory but not tied to a build",
         ),
         _ex(
             "How to remove None from a Python list",
-            "skip", "problem", "generic lookup unrelated to a project",
+            "skip",
+            "problem",
+            "generic lookup unrelated to a project",
         ),
     ],
 )
@@ -252,23 +291,33 @@ _LENIENT = _compose(
     examples=[
         _ex(
             "Design discussion for a foot-contact detection system",
-            "worthwhile", "project", "clearly substantive",
+            "worthwhile",
+            "project",
+            "clearly substantive",
         ),
         _ex(
             "Step-by-step critical-point calculation",
-            "worthwhile", "problem", "a worked example worth keeping",
+            "worthwhile",
+            "problem",
+            "a worked example worth keeping",
         ),
         _ex(
             "Brainstorm of ESP32 project ideas",
-            "worthwhile", "project", "substantive ideation",
+            "worthwhile",
+            "project",
+            "substantive ideation",
         ),
         _ex(
             "Short exchange with one Python snippet for removing None",
-            "review", "problem", "thin but has a reusable snippet",
+            "review",
+            "problem",
+            "thin but has a reusable snippet",
         ),
         _ex(
             "Empty conversation with only a greeting",
-            "skip", "insight", "no content",
+            "skip",
+            "insight",
+            "no content",
         ),
     ],
 )

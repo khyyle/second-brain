@@ -294,11 +294,7 @@ def work_units_from_preview(data_dir: Path) -> list[list[str]] | None:
 
 def preview_members(preview: dict) -> set[str]:
     """Return every source path covered by a preview artifact."""
-    return {
-        member["rel"]
-        for group in preview["groups"]
-        for member in group["members"]
-    }
+    return {member["rel"] for group in preview["groups"] for member in group["members"]}
 
 
 def clear_preview(data_dir: Path) -> None:

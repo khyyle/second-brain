@@ -18,9 +18,7 @@ def _write(raw_dir: Path, rel: str, text: str) -> None:
     path.write_text(text, encoding="utf-8")
 
 
-def test_triage_only_touches_scoped_lanes(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_triage_only_touches_scoped_lanes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     config = Config(data_dir=tmp_path)
     config.ensure_directories()
     _write(config.raw_dir, "chatgpt/chat.md", "chat body " * 100)
@@ -40,9 +38,7 @@ def test_triage_only_touches_scoped_lanes(
     assert counts["worthwhile"] == 1  # only the chat is counted
 
 
-def test_triage_skips_a_vanished_source(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_triage_skips_a_vanished_source(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # A source deleted mid-run must be skipped, not crash the whole pass.
     config = Config(data_dir=tmp_path)
     config.ensure_directories()
@@ -72,7 +68,5 @@ def test_untriaged_documents_still_compile_via_fail_open(
     config.ensure_directories()
     _write(config.raw_dir, "documents/doc.md", "doc body")
 
-    kept = pipeline_mod.worthwhile_sources(
-        Manifest(config.manifest_db_path), ["documents/doc.md"]
-    )
+    kept = pipeline_mod.worthwhile_sources(Manifest(config.manifest_db_path), ["documents/doc.md"])
     assert kept == ["documents/doc.md"]

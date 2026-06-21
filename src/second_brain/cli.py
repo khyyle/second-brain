@@ -357,8 +357,9 @@ def preview_clusters(ctx: click.Context) -> None:
     started = now_iso()
 
     def _on_progress(index: int, total: int) -> None:
-        write_status(config.data_dir, phase="cluster", current=index, total=total,
-                     started_at=started)
+        write_status(
+            config.data_dir, phase="cluster", current=index, total=total, started_at=started
+        )
 
     write_status(config.data_dir, phase="cluster", current=0, total=0, started_at=started)
     stop = threading.Event()

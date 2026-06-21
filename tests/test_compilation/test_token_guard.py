@@ -51,9 +51,7 @@ class FakeClient:
 def _make_config(tmp_path: Path, *, budget: int, max_iter: int) -> Config:
     cfg = Config(
         data_dir=tmp_path / "sb",
-        compilation=CompilationConfig(
-            token_budget_per_run=budget, max_iterations=max_iter
-        ),
+        compilation=CompilationConfig(token_budget_per_run=budget, max_iterations=max_iter),
     )
     cfg.ensure_directories()
     return cfg
@@ -65,9 +63,7 @@ def _install_fake(monkeypatch: pytest.MonkeyPatch, response: FakeResponse) -> Fa
     return client
 
 
-def test_stops_when_token_budget_exceeded(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_stops_when_token_budget_exceeded(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     config = _make_config(tmp_path, budget=100, max_iter=50)
     # Each turn keeps requesting tools (never end_turn) and burns 120 tokens,
     # so the budget (100) is blown after the first turn.
@@ -75,7 +71,10 @@ def test_stops_when_token_budget_exceeded(
     client = _install_fake(monkeypatch, response)
 
     compiler._run_agent(
-        config, config.wiki_dir, config.raw_dir, ["a.md"],
+        config,
+        config.wiki_dir,
+        config.raw_dir,
+        ["a.md"],
         started_at="2026-01-01T00:00:00+00:00",
     )
 
@@ -88,23 +87,27 @@ def test_stops_on_end_turn(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> N
     client = _install_fake(monkeypatch, response)
 
     compiler._run_agent(
-        config, config.wiki_dir, config.raw_dir, ["a.md"],
+        config,
+        config.wiki_dir,
+        config.raw_dir,
+        ["a.md"],
         started_at="2026-01-01T00:00:00+00:00",
     )
 
     assert client.messages.calls == 1
 
 
-def test_respects_max_iterations(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_respects_max_iterations(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     config = _make_config(tmp_path, budget=10_000_000, max_iter=3)
     # Tiny per-turn usage so the budget never trips; the iteration cap does.
     response = FakeResponse("tool_use", FakeUsage(1, 1), [FakeBlock()])
     client = _install_fake(monkeypatch, response)
 
     compiler._run_agent(
-        config, config.wiki_dir, config.raw_dir, ["a.md"],
+        config,
+        config.wiki_dir,
+        config.raw_dir,
+        ["a.md"],
         started_at="2026-01-01T00:00:00+00:00",
     )
 

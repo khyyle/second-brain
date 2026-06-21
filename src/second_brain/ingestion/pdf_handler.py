@@ -509,9 +509,7 @@ async def process_pdf(
             result = await _get_docling().parse(str(file_path))
         else:
             _check_handwriting_available(config)
-            result, cache_stats = await _parse_handwritten_with_cache(
-                file_path, manifest, config
-            )
+            result, cache_stats = await _parse_handwritten_with_cache(file_path, manifest, config)
     else:
         page_lanes = classify_pdf_pages(file_path)
         result, cache_stats = await _parse_routed(file_path, page_lanes, manifest, config)

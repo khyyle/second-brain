@@ -207,9 +207,7 @@ def _resolve_conversation_files(export_path: Path) -> list[Path]:
     if split_files:
         return split_files
 
-    raise FileNotFoundError(
-        f"No conversations.json or conversations-*.json in {export_path}"
-    )
+    raise FileNotFoundError(f"No conversations.json or conversations-*.json in {export_path}")
 
 
 def process_chatgpt_export(

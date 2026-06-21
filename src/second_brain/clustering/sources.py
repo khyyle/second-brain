@@ -113,9 +113,7 @@ def cluster_scoped_sources(
     clusters: list[list[str]] = []
     if in_scope:
         clusters.extend(
-            cluster_sources(
-                in_scope, raw_dir, search_config, clusterer, signature_chars, progress
-            )
+            cluster_sources(in_scope, raw_dir, search_config, clusterer, signature_chars, progress)
         )
     clusters.extend([rel] for rel in out_of_scope)
     return clusters
@@ -153,9 +151,7 @@ def cluster_sources(
     list[list[str]]
         Clusters of source paths covering every input path exactly once.
     """
-    embedded, vectors = embed_sources(
-        raw_paths, raw_dir, search_config, signature_chars, progress
-    )
+    embedded, vectors = embed_sources(raw_paths, raw_dir, search_config, signature_chars, progress)
     embedded_set = set(embedded)
     failed = [path for path in raw_paths if path not in embedded_set]
 

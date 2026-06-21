@@ -418,9 +418,7 @@ class SearchIndex:
         future syncs can skip it via the cheap mtime gate.
         """
         with self._conn() as conn:
-            conn.execute(
-                "UPDATE wiki_meta SET mtime = ? WHERE stem = ?", (mtime, stem)
-            )
+            conn.execute("UPDATE wiki_meta SET mtime = ? WHERE stem = ?", (mtime, stem))
 
     def sync_from_wiki(self, wiki_dir: Path) -> int:
         """
@@ -445,9 +443,7 @@ class SearchIndex:
         from second_brain.compilation.structure import CONTENT_DIRS, _parse_frontmatter
 
         with self._conn() as conn:
-            rows = conn.execute(
-                "SELECT stem, content_hash, mtime FROM wiki_meta"
-            ).fetchall()
+            rows = conn.execute("SELECT stem, content_hash, mtime FROM wiki_meta").fetchall()
         indexed_pages = {r["stem"]: (r["content_hash"], r["mtime"]) for r in rows}
 
         seen_stems: set[str] = set()

@@ -41,12 +41,14 @@ def main() -> None:
 
     left, top, right, bottom = bounds
     pad = round(max(right - left, bottom - top) * PAD_RATIO)
-    alpha = alpha.crop((
-        max(0, left - pad),
-        max(0, top - pad),
-        min(alpha.width, right + pad),
-        min(alpha.height, bottom + pad),
-    ))
+    alpha = alpha.crop(
+        (
+            max(0, left - pad),
+            max(0, top - pad),
+            min(alpha.width, right + pad),
+            min(alpha.height, bottom + pad),
+        )
+    )
 
     # Template images are keyed on alpha; the colour is ignored, so fill black.
     glyph = Image.new("RGBA", alpha.size, (0, 0, 0, 0))

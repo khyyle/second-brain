@@ -93,6 +93,7 @@ def get_sources(title: str) -> str:
     """Retrieve the raw source documents that a wiki page was compiled from."""
     return _get_tools().get_sources(title)
 
+
 @mcp.tool()
 def get_sources_summary(title: str) -> str:
     """
@@ -101,6 +102,7 @@ def get_sources_summary(title: str) -> str:
     Use get_sources() only when full source text is needed.
     """
     return _get_tools().get_sources_summary(title)
+
 
 @mcp.tool()
 def find_related(title: str, depth: int = 2) -> str:

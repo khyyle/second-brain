@@ -141,9 +141,7 @@ class WikiTools:
     ``_GraphCache`` for efficient repeated graph queries.
     """
 
-    def __init__(
-        self, wiki_dir: Path, raw_dir: Path, search_index: SearchIndex
-    ) -> None:
+    def __init__(self, wiki_dir: Path, raw_dir: Path, search_index: SearchIndex) -> None:
         """
         Initialize WikiTools with directory paths and a search index.
 
@@ -313,17 +311,13 @@ class WikiTools:
         str
             Newline-separated list of matching pages.
         """
-        pages = self._search.list_pages(
-            domain=domain, content_type=content_type, tag=tag
-        )
+        pages = self._search.list_pages(domain=domain, content_type=content_type, tag=tag)
         if not pages:
             return "No pages match the given filters."
 
         lines = []
         for p in pages:
-            lines.append(
-                f"- {p['title']} ({p['content_type']}) — {p['path']}"
-            )
+            lines.append(f"- {p['title']} ({p['content_type']}) — {p['path']}")
         return "\n".join(lines)
 
     def read_index(self) -> str:
@@ -462,10 +456,7 @@ class WikiTools:
             for src in sources:
                 matches = list(self._raw.rglob(src))
                 if matches:
-                    results.append(
-                        f"### {src}\n"
-                        f"{matches[0].read_text(encoding='utf-8')[:2000]}"
-                    )
+                    results.append(f"### {src}\n{matches[0].read_text(encoding='utf-8')[:2000]}")
                 else:
                     results.append(f"### {src}\n(source file not found)")
             return "\n\n".join(results)
@@ -511,8 +502,6 @@ class WikiTools:
             return "\n\n".join(results)
 
         return f"Page not found: {title}"
-    
-    
 
     def find_related(self, title: str, depth: int = 2) -> str:
         """

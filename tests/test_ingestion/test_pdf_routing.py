@@ -105,7 +105,8 @@ def test_hybrid_merges_docling_and_chandra_in_page_order(
     monkeypatch.setattr(pdf_handler, "check_parser_available", lambda _lane: None)
     monkeypatch.setattr(pdf_handler, "_check_handwriting_available", lambda _c: None)
     monkeypatch.setattr(
-        pdf_handler, "_render_pdf_pages",
+        pdf_handler,
+        "_render_pdf_pages",
         lambda _p: pdf_handler._get_chandra().render_pdf_pages(_p),
     )
     monkeypatch.setattr(
@@ -140,7 +141,8 @@ def test_all_typed_uses_docling_whole_doc(
     monkeypatch.setattr(pdf_handler, "check_parser_available", lambda _lane: None)
     monkeypatch.setattr(pdf_handler, "_check_handwriting_available", lambda _c: None)
     monkeypatch.setattr(
-        pdf_handler, "_render_pdf_pages",
+        pdf_handler,
+        "_render_pdf_pages",
         lambda _p: pdf_handler._get_chandra().render_pdf_pages(_p),
     )
     monkeypatch.setattr(
@@ -172,7 +174,8 @@ def test_all_handwritten_uses_chandra_with_cache(
     monkeypatch.setattr(pdf_handler, "check_parser_available", lambda _lane: None)
     monkeypatch.setattr(pdf_handler, "_check_handwriting_available", lambda _c: None)
     monkeypatch.setattr(
-        pdf_handler, "_render_pdf_pages",
+        pdf_handler,
+        "_render_pdf_pages",
         lambda _p: pdf_handler._get_chandra().render_pdf_pages(_p),
     )
     monkeypatch.setattr(
@@ -225,12 +228,11 @@ def test_failed_page_raises_and_is_not_cached(
     monkeypatch.setattr(pdf_handler, "check_parser_available", lambda _lane: None)
     monkeypatch.setattr(pdf_handler, "_check_handwriting_available", lambda _c: None)
     monkeypatch.setattr(
-        pdf_handler, "_render_pdf_pages",
+        pdf_handler,
+        "_render_pdf_pages",
         lambda _p: pdf_handler._get_chandra().render_pdf_pages(_p),
     )
-    monkeypatch.setattr(
-        pdf_handler, "classify_pdf_pages", lambda _p: [ParseLane.CHANDRA] * 2
-    )
+    monkeypatch.setattr(pdf_handler, "classify_pdf_pages", lambda _p: [ParseLane.CHANDRA] * 2)
 
     with pytest.raises(PageParseError):
         process_pdf_sync(pdf_path, config.raw_dir / "documents", config, manifest=manifest)
@@ -253,7 +255,8 @@ def test_hybrid_reuses_chandra_page_cache(
     monkeypatch.setattr(pdf_handler, "check_parser_available", lambda _lane: None)
     monkeypatch.setattr(pdf_handler, "_check_handwriting_available", lambda _c: None)
     monkeypatch.setattr(
-        pdf_handler, "_render_pdf_pages",
+        pdf_handler,
+        "_render_pdf_pages",
         lambda _p: pdf_handler._get_chandra().render_pdf_pages(_p),
     )
     monkeypatch.setattr(

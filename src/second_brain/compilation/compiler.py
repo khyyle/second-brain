@@ -30,6 +30,7 @@ class MissingAPIKeyError(RuntimeError):
     Raised when a build is attempted without an Anthropic API key.
     """
 
+
 # Cap a single file read so one large source can't blow the per-minute
 # input-token budget (~6k tokens). The agent can grep for specifics.
 _MAX_READ_CHARS = 24_000
@@ -560,17 +561,29 @@ def run_compilation(
                     logger.info(
                         "Cost cap reached (~$%.2f >= $%.2f) — stopping before group %d/%d; "
                         "%d left staged",
-                        cumulative_cost, cost_cap, index + 1, total, total - index,
+                        cumulative_cost,
+                        cost_cap,
+                        index + 1,
+                        total,
+                        total - index,
                     )
                     break
                 write_status(
-                    config.data_dir, phase="compile", current=index,
-                    total=total, started_at=started, cost_usd=cumulative_cost,
+                    config.data_dir,
+                    phase="compile",
+                    current=index,
+                    total=total,
+                    started_at=started,
+                    cost_usd=cumulative_cost,
                 )
                 try:
                     cost = _run_agent(
-                        config, wiki_dir, raw_dir, unit,
-                        started_at=started, base_cost=cumulative_cost,
+                        config,
+                        wiki_dir,
+                        raw_dir,
+                        unit,
+                        started_at=started,
+                        base_cost=cumulative_cost,
                         progress=(index, total),
                     )
                 except Exception:
@@ -636,9 +649,7 @@ def _estimate_cost(model: str, input_tokens: int, output_tokens: int) -> float:
     """
     # approximate pricing in USD for live API cost readout
     price_per_mtok = {
-        "claude-sonnet-4-6": {
-            "input": 3.0, "output": 15.0
-        }
+        "claude-sonnet-4-6": {"input": 3.0, "output": 15.0}
         # TODO: if supporting, add more models
     }
     return (
@@ -698,11 +709,13 @@ def _run_agent(
 
     # Cache the static prefix (system prompt + tool schemas) so it isn't
     # re-billed at full input rate on every turn.
-    system = [{
-        "type": "text",
-        "text": COMPILATION_SYSTEM_PROMPT,
-        "cache_control": {"type": "ephemeral"},
-    }]
+    system = [
+        {
+            "type": "text",
+            "text": COMPILATION_SYSTEM_PROMPT,
+            "cache_control": {"type": "ephemeral"},
+        }
+    ]
     tools = [dict(t) for t in WIKI_TOOLS]
     tools[-1] = {**tools[-1], "cache_control": {"type": "ephemeral"}}
 
@@ -736,8 +749,12 @@ def _run_agent(
         total_tokens = total_input_tokens + total_output_tokens
         cost = _estimate_cost(config.compilation.model, total_input_tokens, total_output_tokens)
         write_status(
-            config.data_dir, phase="compile", current=cur, total=tot,
-            started_at=started_at, cost_usd=base_cost + cost,
+            config.data_dir,
+            phase="compile",
+            current=cur,
+            total=tot,
+            started_at=started_at,
+            cost_usd=base_cost + cost,
         )
         logger.debug(
             "Iteration %d: +%d in (+%d cached), +%d out (cumulative %d / budget %d)",
