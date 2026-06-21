@@ -8,7 +8,13 @@ This project uses [uv](https://docs.astral.sh/uv/) for dependency and environmen
 uv sync --extra dev
 ```
 
-That creates `.venv` and installs `pytest`, `ruff`, and `mypy` alongside the runtime dependencies. Run any command inside the environment with `uv run` (e.g. `uv run pytest`), or use the `make` targets below.
+That creates `.venv` and installs the dev tooling (`pytest`, `ruff`, `mypy`, `pre-commit`) alongside the runtime dependencies. Run any command inside the environment with `uv run` (e.g. `uv run pytest`), or use the `make` targets below.
+
+Then install the git hooks once per clone, so linting and commit-message checks run automatically:
+
+```bash
+make install-hooks
+```
 
 ## Daily workflow
 
@@ -20,8 +26,9 @@ Run these from the repo root:
 | `make lint` | Run the `ruff` linter |
 | `make format` | Auto-fix formatting and lint issues |
 | `make typecheck` | Run `mypy` over `src` (opt-in) |
-| `make check` | Lint + tests combined (mirrors CI) |
+| `make check` | Lint + tests combined |
 | `make sync` | Install/refresh dependencies into the uv env |
+| `make install-hooks` | Install the pre-commit and commit-msg git hooks |
 
 `mypy` is kept out of `make check` on purpose: the strict settings in `pyproject.toml` are not yet satisfied repo-wide, so it runs as a separate opt-in target until the type annotations are clean.
 
@@ -82,7 +89,7 @@ PR titles must follow the same Conventional Commits format as commit messages:
 <type>(<optional scope>): <description>
 ```
 
-This matters because squash merges use the PR title as the commit message on the target branch (`staging` for all agent and human PRs under the staging-first policy).
+This matters because squash merges use the PR title as the commit message on the target branch.
 
 ### Body
 
@@ -112,7 +119,7 @@ Include a **Breaking Changes** section if applicable:
 ### Guidelines
 
 - Keep PRs focused — one logical change per PR.
-- All CI checks must pass before merging.
+- Run `make check` and ensure the git hooks pass before opening a PR.
 
 ## Branch naming
 
