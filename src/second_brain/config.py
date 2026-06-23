@@ -7,7 +7,16 @@ import logging
 from pathlib import Path
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
+
+from second_brain.llm_providers import SUPPORTED_MODELS
 
 logger = logging.getLogger(__name__)
 
@@ -59,15 +68,11 @@ class ParsingConfig(BaseModel):
     """
     Tuning knobs for the document-parsing stage.
 
-    Typed pages always go to Docling (local, free). Only handwritten /
-    scanned pages use the parser named below.
-
     Fields:
     -------
     handwriting_parser: str, default="chandra"
         Parser for handwritten / scanned pages. Either "chandra" (local,
-        free, runs on MLX 4-bit at ~38s/page on Apple Silicon) or a Claude
-        vision model id such as "claude-sonnet-4-6" (~13s/page, ~$0.015/page).
+        free) or a Claude vision model id such as "claude-sonnet-4-6".
     chandra_precision: str, default="4bit"
         Quantization for the local Chandra MLX model: "4bit" (fastest,
         smallest, accuracy within noise) or "8bit".
@@ -102,8 +107,10 @@ class CompilationConfig(BaseModel):
 
     Fields:
     -------
+    provider: str, default="anthropic"
+        Which LLM provider runs the compilation agent
     model: str, default="claude-sonnet-4-6"
-        Claude model the compilation agent runs on.
+        Model the compilation agent runs on. Must be in a supported provider.
     max_tokens_per_page: int, default=4000
         Soft target for the length of a generated wiki page.
     max_iterations: int, default=20
@@ -119,11 +126,26 @@ class CompilationConfig(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
+    provider: str = "anthropic"
     model: str = "claude-sonnet-4-6"
     max_tokens_per_page: int = Field(default=4000, gt=0)
     max_iterations: int = Field(default=20, gt=0)
     token_budget_per_run: int = Field(default=150_000, gt=0)
     max_cost_per_build_usd: float = Field(default=0.0, ge=0.0)
+
+    @model_validator(mode="after")
+    def _validate_provider_model(self) -> CompilationConfig:
+        if self.provider not in SUPPORTED_MODELS:
+            raise ValueError(
+                f"compilation.provider must be one of {tuple(SUPPORTED_MODELS)}, "
+                f"got '{self.provider}'"
+            )
+        if self.model not in SUPPORTED_MODELS[self.provider]:
+            raise ValueError(
+                f"compilation.model '{self.model}' is not valid for provider "
+                f"'{self.provider}'; choose one of {SUPPORTED_MODELS[self.provider]}"
+            )
+        return self
 
 
 _CLUSTERING_ALGORITHMS = ("threshold", "hdbscan")

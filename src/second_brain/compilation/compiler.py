@@ -21,15 +21,20 @@ from second_brain.compilation.agent_prompt import (
 from second_brain.compilation.structure import rebuild_structure
 from second_brain.config import Config
 from second_brain.ingestion.manifest import Manifest
+from second_brain.llm_providers import resolve_profile
 
 logger = logging.getLogger(__name__)
 
 
 class MissingAPIKeyError(RuntimeError):
     """
-    Raised when a build is attempted without an Anthropic API key.
+    Raised when a build is attempted without the configured provider's API key.
     """
 
+
+# Per-turn output cap for one agent Messages API call.
+# NOTE: provider limits are Claude ~64K, DeepSeek V4 ~384K.
+_MAX_OUTPUT_TOKENS_PER_TURN = 16384
 
 # Cap a single file read so one large source can't blow the per-minute
 # input-token budget (~6k tokens). The agent can grep for specifics.
@@ -513,11 +518,12 @@ def run_compilation(
     compiled_count = 0
     if not dry_run:
         # Fail fast on a missing key, before any heartbeat or git work.
-        if not os.environ.get("ANTHROPIC_API_KEY"):
+        profile = resolve_profile(config.compilation.provider, config.compilation.model)
+        if not os.environ.get(profile.api_key_env):
             raise MissingAPIKeyError(
-                "ANTHROPIC_API_KEY is not set. Add your Anthropic API key in the "
-                "app's Settings, or to a .env file at the repository root, then "
-                "build again."
+                f"{profile.api_key_env} is not set. Add your {profile.name} API key "
+                "in the app's Settings, or to a .env file at the repository root, "
+                "then build again."
             )
 
         from second_brain.status import (
@@ -630,34 +636,6 @@ def run_compilation(
     return {**stats, "sources_compiled": compiled_count}
 
 
-def _estimate_cost(model: str, input_tokens: int, output_tokens: int) -> float:
-    """Rough USD estimate from token counts (Sonnet pricing).
-
-    Parameters
-    ----------
-    model: str
-        Model name (currently all priced as Sonnet).
-    input_tokens: int
-        Cumulative input tokens this run.
-    output_tokens: int
-        Cumulative output tokens this run.
-
-    Returns
-    -------
-    float
-        Estimated cost in USD.
-    """
-    # approximate pricing in USD for live API cost readout
-    price_per_mtok = {
-        "claude-sonnet-4-6": {"input": 3.0, "output": 15.0}
-        # TODO: if supporting, add more models
-    }
-    return (
-        input_tokens / 1_000_000 * price_per_mtok[model]["input"]
-        + output_tokens / 1_000_000 * price_per_mtok[model]["output"]
-    )
-
-
 def _run_agent(
     config: Config,
     wiki_dir: Path,
@@ -700,7 +678,8 @@ def _run_agent(
     """
     from second_brain.status import stop_requested, write_status
 
-    client = anthropic.Anthropic()
+    profile = resolve_profile(config.compilation.provider, config.compilation.model)
+    client = anthropic.Anthropic(**profile.client_kwargs())
     executor = _WikiToolExecutor(wiki_dir, raw_dir, data_dir=config.data_dir)
 
     prompt = build_compilation_prompt(sources, wiki_dir)
@@ -708,16 +687,21 @@ def _run_agent(
     messages: list[dict] = [{"role": "user", "content": prompt}]
 
     # Cache the static prefix (system prompt + tool schemas) so it isn't
-    # re-billed at full input rate on every turn.
-    system = [
-        {
-            "type": "text",
-            "text": COMPILATION_SYSTEM_PROMPT,
-            "cache_control": {"type": "ephemeral"},
-        }
-    ]
+    # re-billed at full input rate on every turn. Only Anthropic supports
+    # `cache_control``. DeepSeek ignores it and caches prefixes automatically.
+    system: str | list[dict]
     tools = [dict(t) for t in WIKI_TOOLS]
-    tools[-1] = {**tools[-1], "cache_control": {"type": "ephemeral"}}
+    if profile.prompt_caching:
+        system = [
+            {
+                "type": "text",
+                "text": COMPILATION_SYSTEM_PROMPT,
+                "cache_control": {"type": "ephemeral"},
+            }
+        ]
+        tools[-1] = {**tools[-1], "cache_control": {"type": "ephemeral"}}
+    else:
+        system = COMPILATION_SYSTEM_PROMPT
 
     max_iterations = config.compilation.max_iterations
     token_budget = config.compilation.token_budget_per_run
@@ -737,8 +721,8 @@ def _run_agent(
         _compact_history(messages)
 
         response = client.messages.create(
-            model=config.compilation.model,
-            max_tokens=8192,
+            model=profile.model,
+            max_tokens=_MAX_OUTPUT_TOKENS_PER_TURN,
             system=system,
             tools=tools,
             messages=messages,
@@ -747,7 +731,7 @@ def _run_agent(
         total_input_tokens += response.usage.input_tokens
         total_output_tokens += response.usage.output_tokens
         total_tokens = total_input_tokens + total_output_tokens
-        cost = _estimate_cost(config.compilation.model, total_input_tokens, total_output_tokens)
+        cost = profile.estimate_cost(total_input_tokens, total_output_tokens)
         write_status(
             config.data_dir,
             phase="compile",
@@ -802,7 +786,7 @@ def _run_agent(
 
         messages.append({"role": "user", "content": tool_results})
 
-    cost = _estimate_cost(config.compilation.model, total_input_tokens, total_output_tokens)
+    cost = profile.estimate_cost(total_input_tokens, total_output_tokens)
     logger.info(
         "Agent finished: %d changes, %d in + %d out tokens, ~$%.2f",
         len(executor.changes),

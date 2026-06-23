@@ -25,26 +25,27 @@ sources:
 
 # document data extraction
 parsing:
-  handwriting_parser: chandra   # chandra (local, 38s/page) | claude (api, 13s/page, 0.015$/page)
+  handwriting_parser: chandra    # chandra (local, 38s/page) | claude (api, 13s/page, 0.015$/page)
   chandra_precision: 4bit        # 4bit | 8bit
 
 # wiki creation
 compilation:
-  model: claude-sonnet-4-6
+  provider: anthropic            # anthropic | deepseek 
+  model: claude-sonnet-4-6       # must match the provider (see second_brain/llm_providers.py)
   max_tokens_per_page: 4000
   max_iterations: 20
   token_budget_per_run: 150000   # token ceiling per source (depth guard)
-  max_cost_per_build_usd: 0   # $ ceiling per build; 0 = no limit
+  max_cost_per_build_usd: 0      # $ ceiling per build; 0 = no limit
 
 # group related sources to collapse redundant agent compiles and amortize per-run overhead
 clustering:
   enabled: false
-  algorithm: hdbscan       # threshold | hdbscan
-  threshold: 0.82          # cosine >= this joins a cluster (threshold algorithm)
+  algorithm: hdbscan           # threshold | hdbscan
+  threshold: 0.82              # cosine >= this joins a cluster (threshold algorithm)
   hdbscan_min_cluster_size: 2  # smallest grouping hdbscan treats as a cluster
-  max_sources_per_run: 5   # split larger clusters into batches
-  signature_chars: 8000    # opening chars embedded as the topical fingerprint
-  sources: [chatgpt]       # only these folders are clustered; others compile one-per-source
+  max_sources_per_run: 5       # split larger clusters into batches
+  signature_chars: 8000        # opening chars embedded as the topical fingerprint
+  sources: [chatgpt]           # only these folders are clustered; others compile one-per-source
 
 # pre-filter for document relevance
 triage:
@@ -53,7 +54,7 @@ triage:
   ollama_host: http://localhost:11434
   min_word_count: 300            # free heuristic pre-filter
   worthwhile_threshold: 0.6      # Gemma confidence floor for "worthwhile"
-  profile: technical   # balanced | technical | skip_heavy | 
+  profile: technical             # balanced | technical | skip_heavy | 
                                  # project_heavy | lenient (see triage/prompts.py)
   sources: [chatgpt]             # only these folders are model-triaged; others
                                  # pass through as worthwhile (curated by dropping)
