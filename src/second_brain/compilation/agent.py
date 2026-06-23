@@ -27,10 +27,10 @@ You operate inside a wiki directory with this structure:
 
 ## Your Process
 1. Read _meta/topic_schema.yaml FIRST to understand allowed structure
-2. Read each new source document (both .md and .json). A long source returns
-   one page at a time — keep reading with the offset it reports, or grep_files
-   within its raw/ path, until you have the full content. Never write a page
-   from a partial read.
+2. The source documents to compile are provided in full in the task message.
+   Use read_file/grep_files on their raw/ paths only to re-locate a specific
+   passage or to read the companion .json sidecar; you do not need to read the
+   sources again to see their content.
 3. Search existing wiki pages for related content
 4. For each piece of knowledge, decide:
    a. Content type (concept / problem / project / insight)
@@ -80,7 +80,11 @@ def build_compilation_prompt(
     wiki_dir: Path,
 ) -> str:
     """
-    Build the per-run prompt listing new sources for the agent.
+    Build the per-run instructions for the agent.
+
+    The source documents themselves are presented separately (see
+    :func:`build_source_block`); this is the instruction preamble that names
+    them and lays out the steps.
 
     Parameters:
     -----------
@@ -92,7 +96,7 @@ def build_compilation_prompt(
     Returns:
     --------
     str
-        Formatted prompt string for the compilation agent.
+        Formatted instruction string for the compilation agent.
     """
     source_list = "\n".join(f"- raw/{s}" for s in new_sources)
 
@@ -102,20 +106,50 @@ def build_compilation_prompt(
         schema_note = "\nThe schema file is at: _meta/topic_schema.yaml — read it first.\n"
 
     return f"""\
-New source documents to compile into the wiki (paths are under raw/):
+Compile these source documents into the wiki (paths under raw/, full text provided below):
 
 {source_list}
 
 {schema_note}
 Instructions:
 1. Read _meta/topic_schema.yaml
-2. For each source above, read it with its exact raw/ path. A companion
-   .json with the same path (.json extension) may also exist — read it too.
-3. Search existing wiki pages for related content
-4. Create or update wiki pages as appropriate
-5. Ensure all pages have proper frontmatter, [[wikilinks]], and source citations
+2. Search existing wiki pages for related content
+3. Create or update wiki pages from the sources provided below
+4. Ensure all pages have proper frontmatter, [[wikilinks]], and source citations
 
-Begin by reading the schema, then process each source document."""
+Re-read any source section with read_file/grep_files (raw/ paths) only if you
+need to relocate a specific passage; their full text is already provided."""
+
+
+def build_source_block(sources: list[str], raw_dir: Path) -> str:
+    """Concatenate the raw source documents for inline presentation.
+
+    Each source is read in full and labeled with its raw/ path so the agent
+    can attribute and cite it. Presenting the source inline (rather than
+    making the agent fetch it) lets the orchestrator cache it as a stable
+    prefix, so re-sending it each turn is cheap.
+
+    Parameters
+    ----------
+    sources: list[str]
+        Relative paths of raw source documents to present.
+    raw_dir: Path
+        Directory containing the raw source files.
+
+    Returns
+    -------
+    str
+        The labeled, concatenated source text.
+    """
+    parts: list[str] = []
+    for rel in sources:
+        path = raw_dir / rel
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError as exc:
+            text = f"[source unavailable: {exc}]"
+        parts.append(f"=== raw/{rel} ===\n{text}")
+    return "\n\n".join(parts)
 
 
 # Tool definitions in Anthropic's tool-use schema format.
@@ -546,16 +580,21 @@ class WikiToolExecutor:
         return "\n".join(results) if results else "No matches found"
 
 
-def _latest_source_read_ids(messages: list[dict]) -> set[str]:
-    """Tool-use ids of the most-recent read of each source page.
+# Total chars of on-demand raw-source reads kept resident across turns. Bounds
+# how much re-read source content can accumulate, regardless of source size.
+_PROTECTED_SOURCE_CHARS = 48_000
 
-    Correlates assistant ``tool_use`` blocks with their ``read_file`` call,
-    keyed by (path, offset) so every distinct page of a source is recognized.
-    Only the latest read of a given page is reported; re-reads of the same page
-    are redundant.
+
+def _protected_source_read_ids(messages: list[dict], max_chars: int) -> set[str]:
+    """Tool-use ids of recent raw-source reads to keep resident, within a budget.
+
+    The latest read of each distinct ``(path, offset)`` page is a candidate;
+    candidates are kept newest-first until their combined size would exceed
+    ``max_chars``, so an on-demand re-read can never pin an unbounded amount of
+    source content for the rest of the run.
     """
-    latest_by_page: dict[tuple[str, int], str] = {}
-    for message in messages:
+    latest_by_page: dict[tuple[str, int], tuple[int, str]] = {}
+    for index, message in enumerate(messages):
         if message.get("role") != "assistant":
             continue
         content = message.get("content")
@@ -567,8 +606,30 @@ def _latest_source_read_ids(messages: list[dict]) -> set[str]:
             args = block.input or {}
             path = args.get("path", "")
             if _is_raw_path(path):
-                latest_by_page[(path, args.get("offset", 0))] = block.id
-    return set(latest_by_page.values())
+                latest_by_page[(path, args.get("offset", 0))] = (index, block.id)
+
+    result_sizes: dict[str, int] = {}
+    for message in messages:
+        if message.get("role") != "user":
+            continue
+        content = message.get("content")
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if isinstance(block, dict) and block.get("type") == "tool_result":
+                body = block.get("content")
+                if isinstance(body, str):
+                    result_sizes[block.get("tool_use_id")] = len(body)
+
+    protected: set[str] = set()
+    used = 0
+    for _index, tool_use_id in sorted(latest_by_page.values(), reverse=True):
+        size = result_sizes.get(tool_use_id, 0)
+        if protected and used + size > max_chars:
+            break
+        protected.add(tool_use_id)
+        used += size
+    return protected
 
 
 def compact_history(messages: list[dict], keep_last: int = 2, max_chars: int = 600) -> None:
@@ -576,9 +637,9 @@ def compact_history(messages: list[dict], keep_last: int = 2, max_chars: int = 6
 
     The whole conversation is re-sent every turn, so an early full-file read
     would inflate every later request. The most recent ``keep_last`` user turns
-    are left intact, as is the latest read of each source page so the agent
-    retains its material; other oversized tool results are replaced with a
-    placeholder and can be re-read on demand.
+    are left intact, as are the newest raw-source reads up to a character budget
+    so the agent retains recently-fetched material; other oversized tool results
+    are replaced with a placeholder and can be re-read on demand.
 
     Parameters
     ----------
@@ -590,14 +651,14 @@ def compact_history(messages: list[dict], keep_last: int = 2, max_chars: int = 6
         Tool-result size above which an old result is collapsed.
     """
     placeholder = "[earlier output omitted to save context — re-read if needed]"
-    protected_ids = _latest_source_read_ids(messages)
+    protected_ids = _protected_source_read_ids(messages, _PROTECTED_SOURCE_CHARS)
     user_indices = [i for i, m in enumerate(messages) if m.get("role") == "user"]
     protected_turns = set(user_indices[-keep_last:])
     for i, message in enumerate(messages):
         if message.get("role") != "user" or i in protected_turns:
             continue
         content = message.get("content")
-        if not isinstance(content, list):  # the initial prompt is a plain string
+        if not isinstance(content, list):  # a plain-string message has no blocks
             continue
         for block in content:
             if (

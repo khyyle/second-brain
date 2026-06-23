@@ -86,10 +86,16 @@ enum VaultData {
         return items.sorted { $0.1 > $1.1 }.map(\.0)
     }
 
-    /// Sources ready to compile: uncompiled raw markdown that triage did
-    /// not skip or hold for review. Must match the compiler's own source
-    /// selection, or the staged count would mislead.
-    static func stagedSources(config: AppConfig) -> [StagedSource] {
+    /// An uncompiled raw markdown source with its triage decision, before any
+    /// staged/deferred classification.
+    private struct RawSource {
+        let staged: StagedSource
+        let decision: String?
+        let modified: Date
+    }
+
+    /// Every uncompiled raw markdown source, paired with its triage decision.
+    private static func uncompiledRawSources(config: AppConfig) -> [RawSource] {
         let reader = ManifestReader(dbPath: config.manifestDB)
         let compiled = reader.compiledRawPaths()
         let triage = reader.triageDecisionMap()
@@ -101,27 +107,49 @@ enum VaultData {
             options: [.skipsHiddenFiles]
         ) else { return [] }
 
-        var out: [(StagedSource, Date)] = []
+        var out: [RawSource] = []
         while let url = enumerator.nextObject() as? URL {
             guard url.pathExtension.lowercased() == "md" else { continue }
             let rel = url.path.replacingOccurrences(of: base, with: "")
             if compiled.contains(rel) { continue }
-            let decision = triage[rel]
-            if decision == "skip" || decision == "review" { continue }
             let values = try? url.resourceValues(
                 forKeys: [.fileSizeKey, .contentModificationDateKey]
             )
-            out.append((
-                StagedSource(
-                    id: rel,
-                    displayName: url.deletingPathExtension().lastPathComponent,
-                    bytes: Int64(values?.fileSize ?? 0)
-                ),
-                values?.contentModificationDate ?? Date.distantPast
-            ))
+            out.append(
+                RawSource(
+                    staged: StagedSource(
+                        id: rel,
+                        displayName: url.deletingPathExtension().lastPathComponent,
+                        bytes: Int64(values?.fileSize ?? 0)
+                    ),
+                    decision: triage[rel],
+                    modified: values?.contentModificationDate ?? Date.distantPast
+                )
+            )
         }
+        return out
+    }
+
+    /// Sources ready to compile: uncompiled raw markdown that triage did not
+    /// skip or hold for review, and that the build did not defer as too large.
+    /// Must match the compiler's own source selection, or the staged count
+    /// would mislead.
+    static func stagedSources(config: AppConfig) -> [StagedSource] {
         // Most-recently ingested first, so the capped view shows newest.
-        return out.sorted { $0.1 > $1.1 }.map(\.0)
+        return uncompiledRawSources(config: config)
+            .filter { $0.decision != "skip" && $0.decision != "review" && $0.decision != "deferred" }
+            .sorted { $0.modified > $1.modified }
+            .map(\.staged)
+    }
+
+    /// Sources the build deferred because they exceed the current model's
+    /// context window. Held out of the staged set until a larger-window model
+    /// is selected, when the next build re-admits them automatically.
+    static func deferredSources(config: AppConfig) -> [StagedSource] {
+        return uncompiledRawSources(config: config)
+            .filter { $0.decision == "deferred" }
+            .sorted { $0.modified > $1.modified }
+            .map(\.staged)
     }
 
     /// Rough USD estimate for compiling the staged set. Approximate: the

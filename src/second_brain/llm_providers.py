@@ -24,13 +24,26 @@ SUPPORTED_MODELS: dict[str, tuple[str, ...]] = {
     "deepseek": ("deepseek-v4-flash", "deepseek-v4-pro"),
 }
 
-# USD per 1M tokens (cache-miss input, output)
-_MODEL_PRICES: dict[str, tuple[float, float]] = {
-    "claude-opus-4-8": (5.0, 25.0),
-    "claude-sonnet-4-6": (3.0, 15.0),
-    "claude-haiku-4-5": (1.0, 5.0),
-    "deepseek-v4-flash": (0.14, 0.28),
-    "deepseek-v4-pro": (0.435, 0.87),
+
+@dataclass(frozen=True)
+class _ModelSpec:
+    """Per-model facts: pricing (USD per 1M cache-miss tokens), context window,
+    and the minimum prefix length the provider will cache."""
+
+    input_price_per_mtok: float
+    output_price_per_mtok: float
+    context_window_tokens: int
+    min_cacheable_tokens: int
+
+
+_MODELS: dict[str, _ModelSpec] = {
+    "claude-opus-4-8": _ModelSpec(5.0, 25.0, 1_000_000, 1024),
+    "claude-sonnet-4-6": _ModelSpec(3.0, 15.0, 1_000_000, 1024),
+    "claude-haiku-4-5": _ModelSpec(1.0, 5.0, 200_000, 4096),
+    # DeepSeek caches automatically with no explicit breakpoints, so
+    # min_cacheable is not used for it.
+    "deepseek-v4-flash": _ModelSpec(0.14, 0.28, 1_000_000, 0),
+    "deepseek-v4-pro": _ModelSpec(0.435, 0.87, 1_000_000, 0),
 }
 
 
@@ -87,6 +100,11 @@ class ProviderProfile:
         Price of a cache-read token as a multiple of the input price.
     cache_write_multiplier: float
         Price of a cache-write token as a multiple of the input price.
+    context_window_tokens: int
+        Maximum total tokens the model accepts in one request.
+    min_cacheable_tokens: int
+        Smallest prefix the provider will cache; shorter blocks are not worth
+        a cache breakpoint.
     """
 
     name: str
@@ -98,6 +116,8 @@ class ProviderProfile:
     output_price_per_mtok: float
     cache_read_multiplier: float
     cache_write_multiplier: float
+    context_window_tokens: int
+    min_cacheable_tokens: int
 
     def estimate_cost(
         self,
@@ -172,15 +192,17 @@ def resolve_profile(provider: str, model: str | None) -> ProviderProfile:
             f"choose one of {supported}"
         )
 
-    input_price, output_price = _MODEL_PRICES[chosen_model]
+    model_spec = _MODELS[chosen_model]
     return ProviderProfile(
         name=provider,
         model=chosen_model,
         api_key_env=spec.api_key_env,
         base_url=spec.base_url,
         prompt_caching=spec.prompt_caching,
-        input_price_per_mtok=input_price,
-        output_price_per_mtok=output_price,
+        input_price_per_mtok=model_spec.input_price_per_mtok,
+        output_price_per_mtok=model_spec.output_price_per_mtok,
         cache_read_multiplier=spec.cache_read_multiplier,
         cache_write_multiplier=spec.cache_write_multiplier,
+        context_window_tokens=model_spec.context_window_tokens,
+        min_cacheable_tokens=model_spec.min_cacheable_tokens,
     )

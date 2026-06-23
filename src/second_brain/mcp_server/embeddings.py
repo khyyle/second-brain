@@ -86,19 +86,3 @@ def embed_text(text: str, config: SearchConfig) -> list[float] | None:
 
     dimensions = len(vectors[0])
     return [sum(vec[i] for vec in vectors) / len(vectors) for i in range(dimensions)]
-
-
-def embeddings_available(config: SearchConfig) -> bool:
-    """Return ``True`` if the Ollama embedding endpoint responds.
-
-    Parameters
-    ----------
-    config: SearchConfig
-        Embedding model and Ollama host settings.
-
-    Returns
-    -------
-    bool
-        Whether a probe embedding succeeded.
-    """
-    return embed_text("ping", config) is not None

@@ -29,6 +29,12 @@ if ! command -v swift >/dev/null 2>&1; then
     exit 1
 fi
 
+if ! command -v ollama >/dev/null 2>&1; then
+    echo "Ollama is required but not installed (it runs the local triage and" >&2
+    echo "embedding models). Install it from https://ollama.com, then re-run." >&2
+    exit 1
+fi
+
 echo "[1/5] Installing Python dependencies..."
 uv sync
 
@@ -39,18 +45,15 @@ echo "[3/5] Recording pipeline path for the app..."
 mkdir -p "$VAULT"
 printf '%s\n' "$REPO_DIR/run.sh" > "$VAULT/.pipeline-script"
 
-echo "[4/6] Pulling local models..."
-if command -v ollama >/dev/null 2>&1; then
-    ollama pull gemma3:4b || true
-    ollama pull nomic-embed-text || true
-elif curl -s --max-time 3 http://localhost:11434/api/tags >/dev/null 2>&1; then
-    echo "  Ollama is running but its CLI is not on PATH. Pull the models with:"
-    echo "    ollama pull gemma3:4b && ollama pull nomic-embed-text"
-else
-    echo "  Ollama not detected; triage and semantic search will stay inactive."
-    echo "  Install from https://ollama.com, then run:"
-    echo "    ollama pull gemma3:4b && ollama pull nomic-embed-text"
+echo "[4/6] Pulling required local models (Ollama)..."
+# Pulling needs the daemon running; surface that distinctly from "not installed".
+if ! curl -s --max-time 5 http://localhost:11434/api/tags >/dev/null 2>&1; then
+    echo "Ollama is installed but not running. Start it (open the Ollama app or" >&2
+    echo "run 'ollama serve'), then re-run this installer." >&2
+    exit 1
 fi
+ollama pull gemma3:4b
+ollama pull nomic-embed-text
 
 echo "[5/6] Preparing local OCR model (Chandra 4-bit MLX)..."
 # Converts the Chandra weights to a ~2.9 GB 4-bit MLX model. First run on a

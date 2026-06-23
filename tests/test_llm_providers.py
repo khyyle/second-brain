@@ -69,6 +69,15 @@ def test_unknown_provider_raises() -> None:
         resolve_profile("gpt", "gpt-5")
 
 
+def test_profile_carries_window_and_cache_thresholds() -> None:
+    sonnet = resolve_profile("anthropic", "claude-sonnet-4-6")
+    assert sonnet.context_window_tokens == 1_000_000
+    assert sonnet.min_cacheable_tokens == 1024
+    haiku = resolve_profile("anthropic", "claude-haiku-4-5")
+    assert haiku.context_window_tokens == 200_000
+    assert haiku.min_cacheable_tokens == 4096
+
+
 def test_estimate_cost_uses_model_pricing() -> None:
     profile = resolve_profile("deepseek", "deepseek-v4-pro")
     # 1M input @ 0.435 + 1M output @ 0.87

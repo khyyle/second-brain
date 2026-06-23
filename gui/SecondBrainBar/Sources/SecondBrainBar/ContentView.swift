@@ -24,6 +24,8 @@ struct ContentView: View {
     @State private var showingSettings = false
     @State private var showingNoKeyAlert = false
     @State private var showingBusyAlert = false
+    @State private var showingOllamaAlert = false
+    @State private var ollamaHealth: PipelineRunner.OllamaHealth?
     @State private var status: PipelineStatus?
     @State private var stopping = false
     @Namespace private var tabNamespace
@@ -61,9 +63,17 @@ struct ContentView: View {
             Text("Second Brain is already ingesting or building. Wait for the "
                 + "current run to finish, then build again.")
         }
+        .alert("Ollama is required", isPresented: $showingOllamaAlert) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(ollamaHealth?.message
+                ?? "Second Brain needs Ollama running with its local models for "
+                + "triage and search. Start Ollama and pull the models, then build again.")
+        }
         .onAppear {
             if autoRunner == nil { autoRunner = AutoRunner(config: config) }
             status = PipelineStatus.read(from: config.statusFile)
+            probeOllama()
         }
         .onReceive(poll) { _ in
             status = PipelineStatus.read(from: config.statusFile)
@@ -209,10 +219,26 @@ struct ContentView: View {
                     showingNoKeyAlert = true
                     return
                 }
+                // A detached build discards output, so a missing-Ollama failure
+                // would be invisible; gate on the last probe instead.
+                if ollamaHealth?.healthy == false {
+                    showingOllamaAlert = true
+                    return
+                }
                 if let url = config.runScriptPath {
                     PipelineRunner.runDetached(scriptURL: url, stage: .compile)
                 }
             }
+        }
+    }
+
+    /// Probe Ollama health off the main thread so the build gate and Settings
+    /// can reflect whether the local model stack is ready.
+    private func probeOllama() {
+        guard let repo = config.repoDir else { return }
+        DispatchQueue.global(qos: .utility).async {
+            let health = PipelineRunner.checkOllama(repoDir: repo)
+            DispatchQueue.main.async { ollamaHealth = health }
         }
     }
 }

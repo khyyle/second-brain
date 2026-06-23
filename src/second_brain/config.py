@@ -108,6 +108,10 @@ class CompilationConfig(BaseModel):
         Ceiling on estimated spend for a whole build. Once cumulative cost
         crosses it the build stops before the next source; finished pages
         are kept and the rest stay staged for the next run. 0 disables it.
+    window_reserve: float, default=0.7
+        Fraction of the model's context window a source may fill before it is
+        deferred as too large, leaving headroom for the wiki context the agent
+        reads plus its generated output.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -118,6 +122,7 @@ class CompilationConfig(BaseModel):
     max_iterations: int = Field(default=20, gt=0)
     token_budget_per_run: int = Field(default=150_000, gt=0)
     max_cost_per_build_usd: float = Field(default=0.0, ge=0.0)
+    window_reserve: float = Field(default=0.7, gt=0.0, le=1.0)
 
     @model_validator(mode="after")
     def _validate_provider_model(self) -> CompilationConfig:

@@ -34,12 +34,12 @@ The build is the only step that uses a paid model; everything before it is local
 ### Prerequisites
 
 - An Apple Silicon Mac (M1 or later) for running the local OCR model (Chandra 2) on MLX.
-- About 16 GB of unified memory recommended. The local parsing and triage models use roughly 4–6 GB while running.
+- About 16 GB of unified memory recommended. Local parsing and triage models use roughly 4–6 GB while running.
 - About 10 GB of free disk for the Python dependencies and on-device models.
 - [uv](https://github.com/astral-sh/uv) for the Python environment.
 - The Swift toolchain to build the app (Xcode, or `xcode-select --install`).
 - An Anthropic API key for wiki compilation. Enter it in the app's Settings (which writes a local `.env` for you), or add `ANTHROPIC_API_KEY=...` to a `.env` file at the repository root.
-- (Optional) [Ollama](https://ollama.com) for chat triage + clustering, and MCP semantic search.
+- [Ollama](https://ollama.com), required for chat triage, clustering, and MCP semantic search. Install it and start it (open the Ollama app, or run `ollama serve`) before installing. It must be *running*, not just installed.
 
 ### Install
 
@@ -49,9 +49,13 @@ From the repository root:
 ./install.sh
 ```
 
-This installs the Python dependencies, builds the menu bar app into `/Applications`, and creates the data folders under `~/second-brain/`. Most of the multi-gigabyte download is the on-device parsing models: Docling for typed PDFs and Chandra (a ~3 GB MLX OCR model) for handwriting and scans. If Ollama is installed, the `gemma3:4b` and `nomic-embed-text` models are pulled as well.
+This installs the Python dependencies, builds the menu bar app into `/Applications`, and creates data folders under `~/second-brain/`. It requires Ollama to be installed and running, and pulls the `gemma3:4b` and `nomic-embed-text` models. Most of the multi-gigabyte download is the on-device parsing models: Docling for typed PDFs and Chandra (a ~3 GB MLX OCR model) for handwriting and scans.
 
-Without Ollama the pipeline still runs: chat filtering, grouping, and semantic search are skipped, and search falls back to keywords.
+You can verify Ollama status via the app's Settings. To verify from the command line:
+
+```bash
+uv run second-brain doctor
+```
 
 ## First run
 

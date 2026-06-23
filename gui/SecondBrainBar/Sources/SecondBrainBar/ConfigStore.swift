@@ -5,7 +5,6 @@ import Foundation
 struct PipelineSettings: Equatable {
     var triageEnabled: Bool
     var triageProfile: String
-    var semanticEnabled: Bool
     var scheduleHours: [Int]
     var maxCostPerBuildUSD: Double
     var provider: String
@@ -20,7 +19,6 @@ struct PipelineSettings: Equatable {
     static let fallback = PipelineSettings(
         triageEnabled: true,
         triageProfile: "balanced",
-        semanticEnabled: true,
         scheduleHours: [8, 14, 20],
         maxCostPerBuildUSD: 0,
         provider: "anthropic",
@@ -53,7 +51,6 @@ enum ConfigStore {
         return PipelineSettings(
             triageEnabled: doc.bool(section: "triage", key: "enabled", default: true),
             triageProfile: PipelineSettings.profiles.contains(profile) ? profile : "balanced",
-            semanticEnabled: doc.bool(section: "search", key: "semantic_enabled", default: true),
             scheduleHours: parseHours(doc.value(section: "schedule", key: "hours") ?? ""),
             maxCostPerBuildUSD: max(0, costCap ?? 0),
             provider: provider,
@@ -67,7 +64,6 @@ enum ConfigStore {
         var doc = YAMLScalars(text)
         doc.set(section: "triage", key: "enabled", value: s.triageEnabled ? "true" : "false")
         doc.set(section: "triage", key: "profile", value: s.triageProfile)
-        doc.set(section: "search", key: "semantic_enabled", value: s.semanticEnabled ? "true" : "false")
         doc.set(section: "schedule", key: "hours", value: formatHours(s.scheduleHours))
         doc.set(
             section: "compilation", key: "max_cost_per_build_usd",

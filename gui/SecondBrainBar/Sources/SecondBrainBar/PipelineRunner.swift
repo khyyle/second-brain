@@ -113,4 +113,42 @@ enum PipelineRunner {
             return false
         }
     }
+
+    /// Health of the local Ollama dependency, as reported by `doctor --json`.
+    struct OllamaHealth {
+        let healthy: Bool
+        let reachable: Bool
+        let message: String
+    }
+
+    /// Probe the local model stack by running `second-brain doctor --json` and
+    /// parsing its result. Returns ``nil`` only if the probe could not run.
+    /// Call off the main thread; the probe can block briefly when Ollama is
+    /// unreachable.
+    static func checkOllama(repoDir: URL) -> OllamaHealth? {
+        let process = managedProcess(repoDir: repoDir, command: "doctor --json")
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = nil  // diagnostic logs land here; ignore them
+        do {
+            try process.run()
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            process.waitUntilExit()
+            // uv or the shell may prepend lines; the JSON is the last {...} line.
+            let line = String(decoding: data, as: UTF8.self)
+                .split(separator: "\n")
+                .last { $0.trimmingCharacters(in: .whitespaces).hasPrefix("{") }
+            guard let jsonLine = line,
+                  let obj = try? JSONSerialization.jsonObject(
+                      with: Data(jsonLine.utf8)) as? [String: Any]
+            else { return nil }
+            return OllamaHealth(
+                healthy: obj["healthy"] as? Bool ?? false,
+                reachable: obj["reachable"] as? Bool ?? false,
+                message: obj["message"] as? String ?? "Ollama status unknown."
+            )
+        } catch {
+            return nil
+        }
+    }
 }

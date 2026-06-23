@@ -19,6 +19,8 @@ struct SettingsView: View {
     @State private var loadedKey = ""
     @State private var costCap = ""
     @State private var configURL: URL?
+    @State private var ollamaHealth: PipelineRunner.OllamaHealth?
+    @State private var checkingOllama = false
 
     private let profileLabels: [String: String] = [
         "balanced": "Balanced",
@@ -92,27 +94,24 @@ struct SettingsView: View {
     @ViewBuilder
     private var groups: some View {
         SettingsGroup(
-            title: "Compilation provider",
+            title: "Wiki compilation",
             help: "The cloud model that builds the wiki. Anthropic runs Claude; "
-                + "DeepSeek is cheaper. Pick a model to trade off cost against "
-                + "quality. Each provider uses its own API key, stored locally in .env."
+                + "DeepSeek is cheaper. Each provider uses its own API key, stored "
+                + "locally in .env."
         ) {
+            fieldLabel("Provider")
             SegControl(
                 options: LLMProvider.allCases.map { ($0.displayName, $0) },
                 selection: providerBinding
             )
             if settings.llmProvider.models.count > 1 {
-                Text("Model")
-                    .font(Theme.Font.meta(10))
-                    .foregroundStyle(Theme.Colors.textSecondary)
+                fieldLabel("Model")
                 SegControl(
                     options: settings.llmProvider.models.map { ($0.label, $0.id) },
                     selection: modelBinding
                 )
             }
-            Text("\(settings.llmProvider.displayName) API key")
-                .font(Theme.Font.meta(10))
-                .foregroundStyle(Theme.Colors.textSecondary)
+            fieldLabel("\(settings.llmProvider.displayName) API key")
             SecureField(settings.llmProvider.keyPlaceholder, text: $apiKey)
                 .textFieldStyle(.plain)
                 .font(Theme.Font.meta(11))
@@ -123,21 +122,17 @@ struct SettingsView: View {
                         .fill(Theme.Colors.background)
                 )
             if apiKey == loadedKey && !loadedKey.isEmpty {
-                Row("Status") {
-                    Text("Key set")
-                        .font(Theme.Font.meta(10))
-                        .foregroundStyle(Theme.Colors.success)
+                HStack(spacing: 3) {
+                    Image(systemName: "checkmark.circle.fill").font(.system(size: 9))
+                    Text("Saved")
                 }
+                .font(Theme.Font.meta(9.5))
+                .foregroundStyle(Theme.Colors.success)
             }
-        }
-
-        SettingsGroup(
-            title: "Build",
-            help: "Stops the build before the next document once a run's estimated cost "
-                + "crosses it. Finished pages will be kept and the rest staged. "
-                + "Leave blank for no limit."
-        ) {
-            Row("Spend cap per build") {
+            Row("Spend cap per build",
+                help: "Stops the build before the next document once a run's estimated "
+                    + "cost crosses it. Finished pages are kept and the rest staged. "
+                    + "Leave blank for no limit.") {
                 HStack(spacing: 3) {
                     Text("$")
                         .font(Theme.Font.meta(11))
@@ -157,7 +152,20 @@ struct SettingsView: View {
             }
         }
 
-        SettingsGroup(title: "Triage") {
+        SettingsGroup(
+            title: "Ollama",
+            help: "Local models for triage and semantic search, spanning ingest and "
+                + "build. Ollama must be running with its models pulled, or ingest "
+                + "and build refuse to run."
+        ) {
+            ollamaRow
+        }
+
+        SettingsGroup(
+            title: "Triage",
+            help: "Filters imported ChatGPT conversations before building. Other "
+                + "sources are never triaged and pass straight through."
+        ) {
             Row("Filter ChatGPT imports") {
                 Toggle("", isOn: $settings.triageEnabled)
                     .labelsHidden().toggleStyle(.switch).tint(Theme.Colors.accent)
@@ -182,13 +190,6 @@ struct SettingsView: View {
         }
 
         SettingsGroup(title: "MCP") {
-            Row("Semantic search",
-                help: "Adds embedding-based search (via Ollama) on top of keyword "
-                    + "search for MCP clients. Falls back to keyword if Ollama is "
-                    + "unavailable.") {
-                Toggle("", isOn: $settings.semanticEnabled)
-                    .labelsHidden().toggleStyle(.switch).tint(Theme.Colors.accent)
-            }
             HStack(spacing: 8) {
                 ConnectButton(title: "Claude Desktop",
                               status: connectStatus["claude-desktop"] ?? .idle) {
@@ -248,6 +249,59 @@ struct SettingsView: View {
         .buttonStyle(.plain)
     }
 
+    /// Caption above a full-width control (segmented control, text field).
+    /// Distinct from `subhead` (a sub-section divider) and `Row` (label with a
+    /// trailing control), so the three tiers stay visually consistent.
+    @ViewBuilder
+    private func fieldLabel(_ text: String) -> some View {
+        Text(text)
+            .font(Theme.Font.meta(10))
+            .foregroundStyle(Theme.Colors.textSecondary)
+    }
+
+    @ViewBuilder
+    private var ollamaRow: some View {
+        Row("Status") {
+            let (text, color): (String, Color) = {
+                if checkingOllama { return ("Checking…", Theme.Colors.textTertiary) }
+                guard let health = ollamaHealth else {
+                    return ("Unknown", Theme.Colors.textTertiary)
+                }
+                if health.healthy { return ("Ready", Theme.Colors.success) }
+                if !health.reachable { return ("Not running", Theme.Colors.danger) }
+                return ("Models missing", Theme.Colors.accentAmber)
+            }()
+            Text(text)
+                .font(Theme.Font.meta(10))
+                .foregroundStyle(color)
+        }
+        if let health = ollamaHealth, !health.healthy {
+            Text(health.message)
+                .font(Theme.Font.meta(10))
+                .foregroundStyle(Theme.Colors.textTertiary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        HStack {
+            Spacer()
+            Button(action: probeOllama) {
+                Text(checkingOllama ? "Checking…" : "Re-check")
+                    .font(Theme.Font.body(10.5))
+                    .foregroundStyle(Theme.Colors.textPrimary)
+                    .padding(.horizontal, 9).padding(.vertical, 4)
+                    .background(
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .fill(Theme.Colors.background)
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .strokeBorder(Theme.Colors.stroke, lineWidth: 1)
+                    )
+            }
+            .buttonStyle(.plain)
+            .disabled(checkingOllama || config.repoDir == nil)
+        }
+    }
+
     /// A small, secondary sub-section header inside a settings card, styled
     /// like an iOS grouped-settings section header (smaller and dimmer than a
     /// row label) rather than a row, so it reads as a heading, not a control.
@@ -303,6 +357,19 @@ struct SettingsView: View {
         apiKey = loadedKey
         for target in ["claude-desktop", "cursor"] {
             connectStatus[target] = PipelineRunner.isMCPConfigured(target) ? .done : .idle
+        }
+        probeOllama()
+    }
+
+    private func probeOllama() {
+        guard let repo = config.repoDir, !checkingOllama else { return }
+        checkingOllama = true
+        DispatchQueue.global(qos: .userInitiated).async {
+            let health = PipelineRunner.checkOllama(repoDir: repo)
+            DispatchQueue.main.async {
+                ollamaHealth = health
+                checkingOllama = false
+            }
         }
     }
 

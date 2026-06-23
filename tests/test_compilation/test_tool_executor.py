@@ -6,7 +6,9 @@ from pathlib import Path
 
 from second_brain.compilation.agent import (
     _MAX_READ_CHARS,
+    _PROTECTED_SOURCE_CHARS,
     WikiToolExecutor,
+    build_source_block,
     compact_history,
 )
 
@@ -113,3 +115,42 @@ def test_compact_keeps_every_page_of_a_paged_source() -> None:
     # Both pages of the same source survive; only the unrelated old result is cut.
     assert messages[2]["content"][0]["content"] == big
     assert messages[4]["content"][0]["content"] == big
+
+
+def test_compact_bounds_protected_source_reads_by_char_budget() -> None:
+    # Three distinct source pages at ~40% of the protection budget each, so only
+    # the two newest fit; the oldest must be compacted despite being a
+    # latest-per-page read.
+    page = "Y" * (_PROTECTED_SOURCE_CHARS * 2 // 5)
+    messages = [
+        {"role": "user", "content": "prompt"},
+        _assistant("r1", "read_file", {"path": "raw/chatgpt/a.md", "offset": 0}),
+        _tool_result("r1", page),
+        _assistant("r2", "read_file", {"path": "raw/chatgpt/b.md", "offset": 0}),
+        _tool_result("r2", page),
+        _assistant("r3", "read_file", {"path": "raw/chatgpt/c.md", "offset": 0}),
+        _tool_result("r3", page),
+        _assistant("done", "glob_files", {"pattern": "*.md"}),
+        _tool_result("done", "x"),
+    ]
+
+    compact_history(messages, keep_last=1)
+
+    # Oldest read is evicted; the two newest stay within budget.
+    assert messages[2]["content"][0]["content"] != page
+    assert messages[4]["content"][0]["content"] == page
+    assert messages[6]["content"][0]["content"] == page
+
+
+def test_build_source_block_labels_each_source(tmp_path: Path) -> None:
+    raw = tmp_path / "raw" / "chatgpt"
+    raw.mkdir(parents=True)
+    (raw / "a.md").write_text("alpha body", encoding="utf-8")
+    (raw / "b.md").write_text("beta body", encoding="utf-8")
+
+    block = build_source_block(["chatgpt/a.md", "chatgpt/b.md"], tmp_path / "raw")
+
+    assert "=== raw/chatgpt/a.md ===" in block
+    assert "alpha body" in block
+    assert "=== raw/chatgpt/b.md ===" in block
+    assert "beta body" in block

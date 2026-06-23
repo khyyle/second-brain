@@ -79,6 +79,20 @@ def _preflight_check() -> None:
         click.echo("PDFs requiring these parsers will be skipped.\n")
 
 
+def _require_ollama(config: Config) -> None:
+    """Fail fast with a clear message when Ollama is not ready.
+
+    Ollama hosts the local models triage and embeddings depend on; the call
+    sites degrade silently without it, so a build could quietly mis-triage or
+    skip clustering. This turns that into an explicit, actionable error.
+    """
+    from second_brain.dependencies import check_ollama
+
+    status = check_ollama(config)
+    if not status.healthy:
+        raise click.ClickException(status.message())
+
+
 @click.group()
 @click.option("--config", "config_path", default=None, help="Path to config.yaml")
 @click.option("-v", "--verbose", is_flag=True, help="Enable debug logging")
@@ -112,6 +126,7 @@ def ingest(
     config.ensure_directories()
 
     _preflight_check()
+    _require_ollama(config)
 
     from second_brain.ingestion.manifest import Manifest
 
@@ -316,6 +331,7 @@ def compile(ctx: click.Context, full: bool, dry_run: bool) -> None:
     """Compile new/changed sources into the wiki."""
     config: Config = ctx.obj["config"]
     config.ensure_directories()
+    _require_ollama(config)
 
     from second_brain.compilation.compiler import (
         MissingAPIKeyError,
@@ -330,6 +346,11 @@ def compile(ctx: click.Context, full: bool, dry_run: bool) -> None:
         raise click.ClickException(str(exc)) from exc
 
     click.echo(f"Sources compiled: {stats['sources_compiled']}")
+    if stats.get("sources_deferred"):
+        click.echo(
+            f"Sources deferred (too large for {config.compilation.model}): "
+            f"{stats['sources_deferred']}"
+        )
     click.echo(f"Wiki pages: {stats['total_pages']}")
     click.echo(f"Total links: {stats['total_links']}")
     click.echo(f"Orphans: {stats['orphans']}")
@@ -427,11 +448,14 @@ def status(ctx: click.Context, sources: bool) -> None:
     click.echo(f"  Wiki dir: {config.wiki_dir}")
 
     if config.manifest_db_path.parent.exists():
-        from second_brain.ingestion.manifest import Manifest
+        from second_brain.ingestion.manifest import DEFERRED_DECISION, Manifest
 
         manifest = Manifest(config.manifest_db_path)
         counts = manifest.count_by_status()
         click.echo(f"  Manifest: {dict(counts)}")
+        deferred = manifest.count_triage_decision(DEFERRED_DECISION)
+        if deferred:
+            click.echo(f"  Deferred (too large for {config.compilation.model}): {deferred}")
     else:
         click.echo("  Manifest: not initialized (run 'ingest' first)")
 
@@ -530,8 +554,11 @@ def mcp() -> None:
 
 
 @mcp.command(name="serve")
-def mcp_serve() -> None:
+@click.pass_context
+def mcp_serve(ctx: click.Context) -> None:
     """Start the MCP server."""
+    _require_ollama(ctx.obj["config"])
+
     from second_brain.mcp_server.server import serve
 
     serve()
@@ -577,6 +604,41 @@ def mcp_install(ctx: click.Context, target: str) -> None:
     config_file.write_text(json.dumps(existing, indent=2))
 
     click.echo(f"Configured MCP server in {config_file}")
+
+
+@main.command()
+@click.option("--json", "as_json", is_flag=True, help="Emit machine-readable JSON")
+@click.pass_context
+def doctor(ctx: click.Context, as_json: bool) -> None:
+    """Check required local dependencies (Ollama + models).
+
+    Exits non-zero when a dependency is missing, so callers (the app, CI) can
+    gate on it.
+    """
+    config: Config = ctx.obj["config"]
+    from second_brain.dependencies import check_ollama
+
+    status = check_ollama(config)
+
+    if as_json:
+        click.echo(
+            json.dumps(
+                {
+                    "healthy": status.healthy,
+                    "reachable": status.reachable,
+                    "host": status.host,
+                    "required_models": list(status.required_models),
+                    "missing_models": list(status.missing_models),
+                    "message": status.message(),
+                }
+            )
+        )
+    else:
+        marker = "OK" if status.healthy else "FAIL"
+        click.echo(f"[{marker}] {status.message()}")
+
+    if not status.healthy:
+        ctx.exit(1)
 
 
 @main.command()

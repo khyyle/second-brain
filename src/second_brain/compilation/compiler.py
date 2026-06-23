@@ -16,12 +16,13 @@ from second_brain.compilation.agent import (
     WIKI_TOOLS,
     WikiToolExecutor,
     build_compilation_prompt,
+    build_source_block,
     compact_history,
 )
 from second_brain.compilation.structure import rebuild_structure
 from second_brain.config import Config
-from second_brain.ingestion.manifest import Manifest
-from second_brain.llm_providers import resolve_profile
+from second_brain.ingestion.manifest import DEFERRED_DECISION, Manifest
+from second_brain.llm_providers import ProviderProfile, resolve_profile
 
 logger = logging.getLogger(__name__)
 
@@ -143,6 +144,60 @@ def _build_work_units(config: Config, raw_dir: Path, new_sources: list[str]) -> 
     return _split_oversized(clusters, config.clustering.max_sources_per_run)
 
 
+def _source_tokens(rel_path: str, raw_dir: Path) -> int:
+    """Estimate a source's token count from its byte size (~4 chars/token)."""
+    path = raw_dir / rel_path
+    return (path.stat().st_size // 4) if path.exists() else 0
+
+
+def _defer_oversized(
+    config: Config,
+    manifest: Manifest,
+    profile: ProviderProfile,
+    sources: list[str],
+    raw_dir: Path,
+    dry_run: bool,
+) -> tuple[list[str], int]:
+    """Split sources into those that fit the model's window and those too large.
+
+    A source larger than ``context_window_tokens * window_reserve`` cannot be
+    compiled faithfully by the current model, so it is recorded as deferred and
+    held out of the build (rather than half-compiled or lossily summarized).
+    A source previously deferred that now fits — e.g. after switching to a
+    larger-window model — is restored, so the verdict self-heals. The verdict
+    is recomputed every run; in a dry run the partition is returned without
+    recording anything.
+
+    Returns
+    -------
+    tuple[list[str], int]
+        The sources that fit, and the count deferred as too large.
+    """
+    window_cap = int(profile.context_window_tokens * config.compilation.window_reserve)
+    decisions = manifest.get_triage_decisions()
+    fitting: list[str] = []
+    deferred = 0
+    for rel in sources:
+        tokens = _source_tokens(rel, raw_dir)
+        if tokens > window_cap:
+            deferred += 1
+            logger.warning(
+                "Deferring %s: ~%d tokens exceeds the usable window for %s (%d). "
+                "Switch to a larger-window model to compile it.",
+                rel,
+                tokens,
+                profile.model,
+                window_cap,
+            )
+            if not dry_run:
+                manifest.record_triage(rel, DEFERRED_DECISION, 1.0, f"oversized:{window_cap}")
+        else:
+            fitting.append(rel)
+            if not dry_run and decisions.get(rel) == DEFERRED_DECISION:
+                manifest.record_triage(rel, "worthwhile", 1.0, "fits-window")
+    return fitting, deferred
+
+
 def _find_new_sources(config: Config, manifest: Manifest) -> list[str]:
     """
     Find raw source files that haven't been compiled yet.
@@ -225,7 +280,7 @@ def run_compilation(
     if not new_sources:
         logger.info("No new sources to compile")
         stats = rebuild_structure(wiki_dir)
-        return {**stats, "sources_compiled": 0}
+        return {**stats, "sources_compiled": 0, "sources_deferred": 0}
 
     # Triage already ran during ingestion (free, local). Here we just
     # filter to the worthwhile set from the recorded decisions; any
@@ -237,17 +292,26 @@ def run_compilation(
         triage_pending(config, manifest)
         new_sources = worthwhile_sources(manifest, new_sources)
 
-    if not new_sources:
-        logger.info("Nothing worthwhile to compile")
-        stats = rebuild_structure(wiki_dir)
-        return {**stats, "sources_compiled": 0}
+    # Hold out sources too large for the current model (and restore any that
+    # now fit). Recomputed every run, so the verdict self-heals on model change.
+    profile = resolve_profile(config.compilation.provider, config.compilation.model)
+    new_sources, deferred_count = _defer_oversized(
+        config, manifest, profile, new_sources, raw_dir, dry_run=dry_run
+    )
 
-    logger.info("Compiling %d worthwhile sources", len(new_sources))
+    if not new_sources:
+        if deferred_count:
+            logger.info("Nothing to compile — %d source(s) deferred as too large", deferred_count)
+        else:
+            logger.info("Nothing worthwhile to compile")
+        stats = rebuild_structure(wiki_dir)
+        return {**stats, "sources_compiled": 0, "sources_deferred": deferred_count}
+
+    logger.info("Compiling %d worthwhile sources (%d deferred)", len(new_sources), deferred_count)
 
     compiled_count = 0
     if not dry_run:
         # Fail fast on a missing key, before any heartbeat or git work.
-        profile = resolve_profile(config.compilation.provider, config.compilation.model)
         if not os.environ.get(profile.api_key_env):
             raise MissingAPIKeyError(
                 f"{profile.api_key_env} is not set. Add your {profile.name} API key "
@@ -362,7 +426,7 @@ def run_compilation(
     if not dry_run:
         _git_commit(wiki_dir)
 
-    return {**stats, "sources_compiled": compiled_count}
+    return {**stats, "sources_compiled": compiled_count, "sources_deferred": deferred_count}
 
 
 def _run_agent(
@@ -411,27 +475,36 @@ def _run_agent(
     client = anthropic.Anthropic(**profile.client_kwargs())
     executor = WikiToolExecutor(wiki_dir, raw_dir, data_dir=config.data_dir)
 
-    prompt = build_compilation_prompt(sources, wiki_dir)
+    # Present the source content inline so it can be cached as a stable prefix;
+    # the agent then synthesizes rather than spending turns re-reading it.
+    instructions = build_compilation_prompt(sources, wiki_dir)
+    source_block = build_source_block(sources, raw_dir)
+    user_content: list[dict] = [
+        {"type": "text", "text": instructions},
+        {"type": "text", "text": f"Source documents:\n\n{source_block}"},
+    ]
 
-    messages: list[dict] = [{"role": "user", "content": prompt}]
-
-    # Cache the static prefix (system prompt + tool schemas) so it isn't
-    # re-billed at full input rate on every turn. Only Anthropic supports
-    # `cache_control``. DeepSeek ignores it and caches prefixes automatically.
+    # Cache the static prefix (system + tools) at a 1h TTL so it survives the
+    # gaps between groups, and the per-unit source at the default 5m TTL (it
+    # changes each unit). Only Anthropic honors cache_control; DeepSeek caches
+    # prefixes automatically.
     system: str | list[dict]
     tools = [dict(t) for t in WIKI_TOOLS]
     if profile.prompt_caching:
-        cache_control = {"type": "ephemeral", "ttl": "1h"}  # otherwise defaults to 5 min ttl
         system = [
             {
                 "type": "text",
                 "text": COMPILATION_SYSTEM_PROMPT,
-                "cache_control": cache_control,
+                "cache_control": {"type": "ephemeral", "ttl": "1h"},
             }
         ]
-        tools[-1] = {**tools[-1], "cache_control": cache_control}
+        tools[-1] = {**tools[-1], "cache_control": {"type": "ephemeral", "ttl": "1h"}}
+        if len(source_block) // 4 >= profile.min_cacheable_tokens:
+            user_content[-1]["cache_control"] = {"type": "ephemeral"}
     else:
         system = COMPILATION_SYSTEM_PROMPT
+
+    messages: list[dict] = [{"role": "user", "content": user_content}]
 
     max_iterations = config.compilation.max_iterations
     token_budget = config.compilation.token_budget_per_run
@@ -464,7 +537,10 @@ def _run_agent(
         total_output_tokens += response.usage.output_tokens
         total_cache_read_tokens += getattr(response.usage, "cache_read_input_tokens", 0) or 0
         total_cache_write_tokens += getattr(response.usage, "cache_creation_input_tokens", 0) or 0
-        total_tokens = total_input_tokens + total_output_tokens
+        # The budget is a runaway-loop guard on newly processed tokens.
+        # ``input_tokens`` already excludes cache reads, so a large cached
+        # source re-sent each turn does not inflate it.
+        uncached_total = total_input_tokens + total_output_tokens
         cost = profile.estimate_cost(
             total_input_tokens,
             total_output_tokens,
@@ -485,7 +561,7 @@ def _run_agent(
             response.usage.input_tokens,
             getattr(response.usage, "cache_read_input_tokens", 0) or 0,
             response.usage.output_tokens,
-            total_tokens,
+            uncached_total,
             token_budget,
         )
 
@@ -497,10 +573,10 @@ def _run_agent(
 
         # Stop before the next turn once over budget. Checked after appending
         # the assistant turn so work already done stays on disk.
-        if total_tokens >= token_budget:
+        if uncached_total >= token_budget:
             logger.warning(
                 "Token budget exceeded (%d >= %d) after %d iterations — stopping early",
-                total_tokens,
+                uncached_total,
                 token_budget,
                 iteration + 1,
             )

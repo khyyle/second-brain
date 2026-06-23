@@ -138,7 +138,11 @@ struct ManifestReader {
         var rows: [TriageRow] = []
         while sqlite3_step(stmt) == SQLITE_ROW {
             let rawPath = sqlString(stmt, 0) ?? ""
-            let decision = TriageRow.Decision(rawValue: sqlString(stmt, 1) ?? "") ?? .skip
+            // Skip rows that aren't chat-curation verdicts (e.g. the "deferred"
+            // capacity state), so they don't read as triage decisions.
+            guard let decision = TriageRow.Decision(rawValue: sqlString(stmt, 1) ?? "") else {
+                continue
+            }
             let confidence = sqlite3_column_double(stmt, 2)
             let reason = sqlString(stmt, 3) ?? ""
             rows.append(

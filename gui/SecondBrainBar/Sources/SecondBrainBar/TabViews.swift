@@ -524,6 +524,7 @@ private struct HoverIcon: View {
 struct BuildTab: View {
     let config: AppConfig
     @State private var staged: [StagedSource] = []
+    @State private var deferred: [StagedSource] = []
     @State private var plan: ClusterPlan?
     @State private var planStamp = ""
     @State private var overrides = ClusterOverrides.empty
@@ -566,6 +567,9 @@ struct BuildTab: View {
                     && staged.contains { $0.id.hasPrefix("chatgpt/") },
                 onPreview: previewGrouping
             )
+            if !deferred.isEmpty {
+                DeferredNote(count: deferred.count, model: compilationModel)
+            }
             stagedSection
             SectionHeader(title: "Recent")
             recentSection
@@ -658,6 +662,7 @@ struct BuildTab: View {
 
     private func refresh() {
         staged = VaultData.stagedSources(config: config)
+        deferred = VaultData.deferredSources(config: config)
         let loadedPlan = ClusterPlan.load(config.clusterPlanFile)
         // Reload overrides only when the plan itself changes (a new preview
         // clears them server-side), so in-flight tuning isn't clobbered.
@@ -756,6 +761,27 @@ private struct StagedHeader: View {
                     .buttonStyle(PillButton(tint: Theme.Colors.accentAmber))
             }
         }
+    }
+}
+
+/// A line noting sources held out of the build because they exceed the
+/// current model's context window. They re-admit automatically on a build with
+/// a larger-window model.
+private struct DeferredNote: View {
+    let count: Int
+    let model: String
+
+    var body: some View {
+        HStack(spacing: 5) {
+            Text("\(count) deferred (too large for \(model))")
+                .font(Theme.Font.meta(10))
+                .foregroundStyle(Theme.Colors.accentAmber)
+            HelpButton(text: "These sources exceed the selected model's context window, so "
+                + "they are held out of the build rather than compiled from a lossy summary. "
+                + "Switch to a larger-window model and build again to include them.")
+            Spacer()
+        }
+        .padding(.horizontal, 8).padding(.vertical, 1)
     }
 }
 
