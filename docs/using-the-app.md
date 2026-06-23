@@ -38,7 +38,7 @@ For asking questions instead of browsing, Second Brain ships an MCP server that 
 
 ## Settings
 
-The gear opens Settings. Here you can choose the compilation provider (Anthropic or DeepSeek) and its model, set that provider's API key, set a per-build spend cap, configure triage and search options, the folders to watch, and scheduling. You will need to set the selected provider's API key here before you can start building the wiki.
+The gear opens Settings. Here you can choose the compilation provider and its model, set that provider's API key, set a per-build spend cap, check that Ollama is running, tune triage, choose the folders to watch, and set scheduling. You will need to set the selected provider's API key here before you can start building the wiki.
 
 ### Running on a schedule
 
