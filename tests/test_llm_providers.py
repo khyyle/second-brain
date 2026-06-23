@@ -75,6 +75,18 @@ def test_estimate_cost_uses_model_pricing() -> None:
     assert profile.estimate_cost(1_000_000, 1_000_000) == pytest.approx(1.305)
 
 
+def test_estimate_cost_discounts_cache_tokens() -> None:
+    profile = resolve_profile("anthropic", "claude-sonnet-4-6")
+    # 1M input @ 3 + 1M cache read @ 0.1x + 1M cache write @ 2x + 1M output @ 15
+    cost = profile.estimate_cost(
+        1_000_000,
+        1_000_000,
+        cache_read_tokens=1_000_000,
+        cache_write_tokens=1_000_000,
+    )
+    assert cost == pytest.approx(3.0 + 0.3 + 6.0 + 15.0)
+
+
 def test_client_kwargs_reads_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
     kwargs = resolve_profile("deepseek", None).client_kwargs()

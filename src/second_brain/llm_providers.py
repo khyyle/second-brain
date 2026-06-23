@@ -39,6 +39,8 @@ class _ProviderSpec:
     api_key_env: str
     base_url: str | None
     prompt_caching: bool
+    cache_read_multiplier: float
+    cache_write_multiplier: float
 
 
 _PROVIDERS: dict[str, _ProviderSpec] = {
@@ -46,11 +48,16 @@ _PROVIDERS: dict[str, _ProviderSpec] = {
         api_key_env="ANTHROPIC_API_KEY",
         base_url=None,
         prompt_caching=True,
+        cache_read_multiplier=0.1,
+        cache_write_multiplier=2.0,
     ),
+    # DeepSeek auto-caches, so multipliers are kept inert
     "deepseek": _ProviderSpec(
         api_key_env="DEEPSEEK_API_KEY",
         base_url="https://api.deepseek.com/anthropic",
         prompt_caching=False,
+        cache_read_multiplier=0,
+        cache_write_multiplier=0,
     ),
 }
 
@@ -76,6 +83,10 @@ class ProviderProfile:
         Cache-miss input price in USD per 1M tokens.
     output_price_per_mtok: float
         Output price in USD per 1M tokens.
+    cache_read_multiplier: float
+        Price of a cache-read token as a multiple of the input price.
+    cache_write_multiplier: float
+        Price of a cache-write token as a multiple of the input price.
     """
 
     name: str
@@ -85,11 +96,29 @@ class ProviderProfile:
     prompt_caching: bool
     input_price_per_mtok: float
     output_price_per_mtok: float
+    cache_read_multiplier: float
+    cache_write_multiplier: float
 
-    def estimate_cost(self, input_tokens: int, output_tokens: int) -> float:
-        """Return a USD cost estimate (upper bound under auto-caching)."""
+    def estimate_cost(
+        self,
+        input_tokens: int,
+        output_tokens: int,
+        *,
+        cache_read_tokens: int = 0,
+        cache_write_tokens: int = 0,
+    ) -> float:
+        """Return a USD cost estimate from per-class token counts.
+
+        ``input_tokens`` is the uncached input (the provider reports cached
+        tokens separately), billed at full rate. Cache reads and writes are
+        billed at their per-provider multiples of the input price. With no
+        cache tokens this reduces to plain input+output pricing.
+        """
+        base = self.input_price_per_mtok
         return (
-            input_tokens / 1_000_000 * self.input_price_per_mtok
+            input_tokens / 1_000_000 * base
+            + cache_read_tokens / 1_000_000 * base * self.cache_read_multiplier
+            + cache_write_tokens / 1_000_000 * base * self.cache_write_multiplier
             + output_tokens / 1_000_000 * self.output_price_per_mtok
         )
 
@@ -152,4 +181,6 @@ def resolve_profile(provider: str, model: str | None) -> ProviderProfile:
         prompt_caching=spec.prompt_caching,
         input_price_per_mtok=input_price,
         output_price_per_mtok=output_price,
+        cache_read_multiplier=spec.cache_read_multiplier,
+        cache_write_multiplier=spec.cache_write_multiplier,
     )
