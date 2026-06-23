@@ -105,11 +105,17 @@ struct SettingsView: View {
                 selection: providerBinding
             )
             if settings.llmProvider.models.count > 1 {
-                fieldLabel("Model")
-                SegControl(
-                    options: settings.llmProvider.models.map { ($0.label, $0.id) },
-                    selection: modelBinding
-                )
+                Row("Model") {
+                    Picker("", selection: modelBinding) {
+                        ForEach(settings.llmProvider.models, id: \.id) { model in
+                            Text(model.label).tag(model.id)
+                        }
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.menu)
+                    .font(Theme.Font.body(11.5))
+                    .tint(Theme.Colors.textSecondary)
+                }
             }
             fieldLabel("\(settings.llmProvider.displayName) API key")
             SecureField(settings.llmProvider.keyPlaceholder, text: $apiKey)

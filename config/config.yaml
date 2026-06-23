@@ -29,14 +29,14 @@ parsing:
 
 # wiki creation
 compilation:
-  provider: deepseek   # anthropic | deepseek 
-  model: deepseek-v4-pro   # must match the provider (see second_brain/llm_providers.py)
+  provider: anthropic            # anthropic | deepseek 
+  model: claude-sonnet-4-6       # must match the provider (see second_brain/llm_providers.py)
   max_tokens_per_page: 4000
   max_iterations: 20
   token_budget_per_run: 150000   # token ceiling per source (depth guard)
-  max_cost_per_build_usd: 0   # $ ceiling per build; 0 = no limit
-  window_reserve: 0.7   # max fraction of the model's context window one source may fill
-                        # before it is deferred as too large (leaves room for output)
+  max_cost_per_build_usd: 0      # $ ceiling per build; 0 = no limit
+  window_reserve: 0.7            # max fraction of the model's context window one source may fill
+                                 # before it is deferred as too large (leaves room for output)
 
 # group related sources to collapse redundant agent compiles and amortize per-run overhead
 clustering:

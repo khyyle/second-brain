@@ -36,12 +36,12 @@ enum LLMProvider: String, CaseIterable, Identifiable {
         switch self {
         case .anthropic:
             return [
-                ("claude-sonnet-4-6", "Sonnet"),
-                ("claude-opus-4-8", "Opus"),
-                ("claude-haiku-4-5", "Haiku"),
+                ("claude-sonnet-4-6", "Sonnet 4.6"),
+                ("claude-opus-4-8", "Opus 4.8"),
+                ("claude-haiku-4-5", "Haiku 4.5"),
             ]
         case .deepseek:
-            return [("deepseek-v4-pro", "Pro"), ("deepseek-v4-flash", "Flash")]
+            return [("deepseek-v4-pro", "V4 Pro"), ("deepseek-v4-flash", "V4 Flash")]
         }
     }
 
