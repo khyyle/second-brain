@@ -2,10 +2,10 @@
 
 ## First-time setup
 
-This project uses [uv](https://docs.astral.sh/uv/) for dependency and environment management. Install dependencies, including dev tooling, into the project virtual environment (`.venv`):
+This project uses [uv](https://docs.astral.sh/uv/) for dependency and environment management. Install dependencies into the project virtual environment (`.venv`):
 
 ```bash
-uv sync --extra dev
+uv sync
 ```
 
 That creates `.venv` and installs the dev tooling (`pytest`, `ruff`, `mypy`, `pre-commit`) alongside the runtime dependencies. Run any command inside the environment with `uv run` (e.g. `uv run pytest`), or use the `make` targets below.

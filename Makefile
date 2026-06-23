@@ -1,7 +1,7 @@
 .DEFAULT_GOAL := help
 
-sync: ## Install/refresh dependencies (incl. dev tools) into the uv env
-	uv sync --extra dev
+sync: ## Install/refresh dependencies into the uv env
+	uv sync
 
 install-hooks: ## Install pre-commit and commit-msg git hooks (run once after cloning)
 	uv run pre-commit install && uv run pre-commit install --hook-type commit-msg
