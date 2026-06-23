@@ -38,7 +38,7 @@ For asking questions instead of browsing, Second Brain ships an MCP server that 
 
 ## Settings
 
-The gear opens Settings. Here you can configure your Anthropic API key, a per-build spend cap, the handwriting parser, triage and search options, the folders to watch, and scheduling. You will need to set your Anthropic API key here before you can start building the wiki.
+The gear opens Settings. Here you can choose the compilation provider (Anthropic or DeepSeek) and its model, set that provider's API key, set a per-build spend cap, configure triage and search options, the folders to watch, and scheduling. You will need to set the selected provider's API key here before you can start building the wiki.
 
 ### Running on a schedule
 

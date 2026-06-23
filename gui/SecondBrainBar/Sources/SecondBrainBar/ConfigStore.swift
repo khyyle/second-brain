@@ -3,25 +3,28 @@ import Foundation
 /// The user-facing knobs surfaced in Settings. A subset of the pipeline's
 /// `config.yaml`; everything else in that file is left untouched.
 struct PipelineSettings: Equatable {
-    enum Handwriting: String { case chandra, claude }
-
-    var handwriting: Handwriting
     var triageEnabled: Bool
     var triageProfile: String
     var semanticEnabled: Bool
     var scheduleHours: [Int]
     var maxCostPerBuildUSD: Double
+    var provider: String
+    var model: String
 
     static let profiles = ["balanced", "technical", "skip_heavy", "project_heavy", "lenient"]
-    static let claudeModel = "claude-sonnet-4-6"
+
+    /// The selected compilation provider, defaulting to Anthropic if the
+    /// config holds an unrecognized value.
+    var llmProvider: LLMProvider { LLMProvider(rawValue: provider) ?? .anthropic }
 
     static let fallback = PipelineSettings(
-        handwriting: .chandra,
         triageEnabled: true,
         triageProfile: "balanced",
         semanticEnabled: true,
         scheduleHours: [8, 14, 20],
-        maxCostPerBuildUSD: 0
+        maxCostPerBuildUSD: 0,
+        provider: "anthropic",
+        model: "claude-sonnet-4-6"
     )
 }
 
@@ -43,16 +46,18 @@ enum ConfigStore {
             return .fallback
         }
         let doc = YAMLScalars(text)
-        let hw = doc.value(section: "parsing", key: "handwriting_parser") ?? "chandra"
         let profile = doc.value(section: "triage", key: "profile") ?? "balanced"
         let costCap = Double(doc.value(section: "compilation", key: "max_cost_per_build_usd") ?? "")
+        let provider = doc.value(section: "compilation", key: "provider") ?? "anthropic"
+        let model = doc.value(section: "compilation", key: "model") ?? "claude-sonnet-4-6"
         return PipelineSettings(
-            handwriting: hw == "chandra" ? .chandra : .claude,
             triageEnabled: doc.bool(section: "triage", key: "enabled", default: true),
             triageProfile: PipelineSettings.profiles.contains(profile) ? profile : "balanced",
             semanticEnabled: doc.bool(section: "search", key: "semantic_enabled", default: true),
             scheduleHours: parseHours(doc.value(section: "schedule", key: "hours") ?? ""),
-            maxCostPerBuildUSD: max(0, costCap ?? 0)
+            maxCostPerBuildUSD: max(0, costCap ?? 0),
+            provider: provider,
+            model: model
         )
     }
 
@@ -60,8 +65,6 @@ enum ConfigStore {
     static func save(_ s: PipelineSettings, to url: URL) -> Bool {
         guard let text = try? String(contentsOf: url, encoding: .utf8) else { return false }
         var doc = YAMLScalars(text)
-        let hw = s.handwriting == .chandra ? "chandra" : PipelineSettings.claudeModel
-        doc.set(section: "parsing", key: "handwriting_parser", value: hw)
         doc.set(section: "triage", key: "enabled", value: s.triageEnabled ? "true" : "false")
         doc.set(section: "triage", key: "profile", value: s.triageProfile)
         doc.set(section: "search", key: "semantic_enabled", value: s.semanticEnabled ? "true" : "false")
@@ -70,6 +73,8 @@ enum ConfigStore {
             section: "compilation", key: "max_cost_per_build_usd",
             value: String(format: "%g", s.maxCostPerBuildUSD)
         )
+        doc.set(section: "compilation", key: "provider", value: s.provider)
+        doc.set(section: "compilation", key: "model", value: s.model)
         do {
             try doc.text.write(to: url, atomically: true, encoding: .utf8)
             return true

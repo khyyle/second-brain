@@ -28,6 +28,24 @@ struct SettingsView: View {
         "lenient": "Lenient",
     ]
 
+    /// Switching provider resets the model to that provider's default and
+    /// reloads the key field to show the newly-selected provider's key.
+    private var providerBinding: Binding<LLMProvider> {
+        Binding(
+            get: { settings.llmProvider },
+            set: { newProvider in
+                settings.provider = newProvider.rawValue
+                settings.model = newProvider.defaultModel
+                loadedKey = EnvStore.readKey(config, keyName: newProvider.envKeyName)
+                apiKey = loadedKey
+            }
+        )
+    }
+
+    private var modelBinding: Binding<String> {
+        Binding(get: { settings.model }, set: { settings.model = $0 })
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             header
@@ -74,11 +92,31 @@ struct SettingsView: View {
     @ViewBuilder
     private var groups: some View {
         SettingsGroup(
-            title: "Anthropic API key",
-            help: "Used to build the wiki and for the Claude handwriting option. "
-                + "Stored locally in the root's .env--never committed or surfaced anywhere."
+            title: "Compilation provider",
+            help: "Which cloud model builds the wiki. Anthropic runs Claude; "
+                + "DeepSeek is cheaper and uses its Anthropic-compatible API. "
+                + "Each provider has its own API key below."
         ) {
-            SecureField("sk-ant-…", text: $apiKey)
+            SegControl(
+                options: LLMProvider.allCases.map { ($0.displayName, $0) },
+                selection: providerBinding
+            )
+            if settings.llmProvider.models.count > 1 {
+                Text("Model")
+                    .font(Theme.Font.meta(10))
+                    .foregroundStyle(Theme.Colors.textSecondary)
+                SegControl(
+                    options: settings.llmProvider.models.map { ($0.label, $0.id) },
+                    selection: modelBinding
+                )
+            }
+        }
+
+        SettingsGroup(
+            title: "\(settings.llmProvider.displayName) API key",
+            help: "Used to compile the wiki. Stored locally in a .env--"
+        ) {
+            SecureField(settings.llmProvider.keyPlaceholder, text: $apiKey)
                 .textFieldStyle(.plain)
                 .font(Theme.Font.meta(11))
                 .foregroundStyle(Theme.Colors.textPrimary)
@@ -97,24 +135,9 @@ struct SettingsView: View {
         }
 
         SettingsGroup(
-            title: "Handwriting",
-            help: "Applies only to handwritten and scanned pages. Chandra runs "
-                + "locally and free (4-bit quantization, ~38s/page on Apple "
-                + "Silicon). Claude is faster (~13s/page) but costs a few cents/"
-                + "page via the API. Typed pages always use Docling (local, free)."
-        ) {
-            SegControl(
-                options: [("Chandra", PipelineSettings.Handwriting.chandra),
-                          ("Claude", PipelineSettings.Handwriting.claude)],
-                selection: $settings.handwriting
-            )
-        }
-
-        SettingsGroup(
             title: "Build",
-            help: "Building the wiki calls the Claude API. A spend cap stops the "
-                + "build before the next document once the run's estimated cost "
-                + "crosses it; finished pages are kept and the rest stay staged. "
+            help: "Stops the build before the next document once a run's estimated cost "
+                + "crosses it. Finished pages will be kept and the rest staged. "
                 + "Leave blank for no limit."
         ) {
             Row("Spend cap per build") {
@@ -143,10 +166,10 @@ struct SettingsView: View {
                     .labelsHidden().toggleStyle(.switch).tint(Theme.Colors.accent)
             }
             Row("Style",
-                help: "How readily triage keeps versus skips a chat. Balanced is "
-                    + "the default; Technical favors STEM and code; Project-heavy "
-                    + "favors project notes; Skip-heavy and Lenient shift the bar "
-                    + "down and up.") {
+                help: "How readily triage keeps versus skips a chat. "
+                    + "Technical favors STEM and code, Project-heavy "
+                    + "favors project notes, Skip-heavy and Lenient "
+                    + "shift the bar down and up.") {
                 Picker("", selection: $settings.triageProfile) {
                     ForEach(PipelineSettings.profiles, id: \.self) { p in
                         Text(profileLabels[p] ?? p).tag(p)
@@ -279,7 +302,7 @@ struct SettingsView: View {
         scheduleHours = settings.scheduleHours
         scheduleEnabled = PipelineRunner.scheduleInstalled
         watched = SourcesStore.load(config)
-        loadedKey = EnvStore.readKey(config)
+        loadedKey = EnvStore.readKey(config, keyName: settings.llmProvider.envKeyName)
         apiKey = loadedKey
         for target in ["claude-desktop", "cursor"] {
             connectStatus[target] = PipelineRunner.isMCPConfigured(target) ? .done : .idle
@@ -295,7 +318,7 @@ struct SettingsView: View {
         // Only touch .env when the key actually changed, so a failed read
         // can never silently wipe an existing key.
         if apiKey != loadedKey {
-            EnvStore.writeKey(apiKey, config)
+            EnvStore.writeKey(apiKey, config, keyName: settings.llmProvider.envKeyName)
         }
 
         let wasInstalled = PipelineRunner.scheduleInstalled

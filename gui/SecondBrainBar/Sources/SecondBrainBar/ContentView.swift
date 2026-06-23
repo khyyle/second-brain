@@ -195,14 +195,17 @@ struct ContentView: View {
         } else {
             TextAction(
                 title: "Build wiki",
-                help: "Compile ingested files into the wiki (uses Claude API)",
+                help: "Compile ingested files into the wiki (uses the compilation provider's API)",
                 enabled: config.runScriptPath != nil
             ) {
                 if status?.isActive == true {
                     showingBusyAlert = true
                     return
                 }
-                guard !EnvStore.readKey(config).isEmpty else {
+                let keyName = ConfigStore.locate(config)
+                    .map { ConfigStore.load(from: $0).llmProvider.envKeyName }
+                    ?? LLMProvider.anthropic.envKeyName
+                guard !EnvStore.readKey(config, keyName: keyName).isEmpty else {
                     showingNoKeyAlert = true
                     return
                 }

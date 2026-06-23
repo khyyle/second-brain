@@ -1,18 +1,16 @@
 import Foundation
 
-/// Reads and writes the Anthropic API key in the project's `.env` -- the
-/// same file `run.sh` sources before every pipeline run (GUI-launched,
+/// Reads and writes provider API keys in the project's `.env` -- the same
+/// file `run.sh` sources before every pipeline run (GUI-launched,
 /// scheduled, or CLI), so a key set here reaches all of them. The file is
 /// written owner-only (chmod 600) and is gitignored.
 enum EnvStore {
-    static let keyName = "ANTHROPIC_API_KEY"
-
     static func locate(_ config: AppConfig) -> URL? {
         config.repoDir?.appending(path: ".env")
     }
 
-    /// The currently stored key, or "" if none / not locatable.
-    static func readKey(_ config: AppConfig) -> String {
+    /// The currently stored value for `keyName`, or "" if none / not locatable.
+    static func readKey(_ config: AppConfig, keyName: String) -> String {
         guard let url = locate(config),
               let text = try? String(contentsOf: url, encoding: .utf8) else { return "" }
         for line in text.components(separatedBy: "\n") {
@@ -23,16 +21,15 @@ enum EnvStore {
         return ""
     }
 
-    /// Set (or replace) the key line, preserving any other `.env` entries,
-    /// and lock the file to owner-only.
+    /// Set (or replace) the `keyName` line, preserving any other `.env`
+    /// entries, and lock the file to owner-only.
     @discardableResult
-    static func writeKey(_ value: String, _ config: AppConfig) -> Bool {
+    static func writeKey(_ value: String, _ config: AppConfig, keyName: String) -> Bool {
         guard let url = locate(config) else { return false }
         var lines = (try? String(contentsOf: url, encoding: .utf8))?
             .components(separatedBy: "\n") ?? []
 
-        // Write unquoted (Anthropic keys have no shell-special chars); the
-        // reader still tolerates quoted values if a user added them.
+        // Write unquoted, still tolerating quoted values if a user added them.
         let newLine = "\(keyName)=\(value)"
         if let i = lines.firstIndex(where: {
             $0.trimmingCharacters(in: .whitespaces).hasPrefix("\(keyName)=")
