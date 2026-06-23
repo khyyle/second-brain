@@ -77,7 +77,6 @@ def _install_fake_chandra(
     monkeypatch.setattr(pdf_handler, "_get_chandra", lambda config=None: fake)
     monkeypatch.setattr(pdf_handler, "_render_pdf_pages", lambda _p: list(pages))
     monkeypatch.setattr(pdf_handler, "check_parser_available", lambda _lane: None)
-    monkeypatch.setattr(pdf_handler, "_check_handwriting_available", lambda _c: None)
     return fake
 
 

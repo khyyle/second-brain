@@ -41,12 +41,10 @@ logger = logging.getLogger(__name__)
 # so we create them once and reuse across files within a single process.
 _docling_parser = None
 _chandra_parser = None
-_fallback_parser = None
 
 _INSTALL_HINTS = {
     ParseLane.DOCLING: "docling (install with: uv pip install docling)",
     ParseLane.CHANDRA: "mlx-vlm + chandra-ocr (install with: uv pip install mlx-vlm chandra-ocr)",
-    ParseLane.CLAUDE_FALLBACK: "anthropic (install with: uv pip install anthropic)",
 }
 
 
@@ -56,7 +54,7 @@ class ParserNotAvailableError(RuntimeError):
 
 @dataclass(frozen=True)
 class CacheStats:
-    """Page-cache effectiveness for a single PDF run, for logs and the UI."""
+    """Page-cache effectiveness for a single PDF run."""
 
     pages_total: int
     pages_from_cache: int
@@ -93,7 +91,6 @@ def check_parser_available(lane: ParseLane) -> None:
     module_map = {
         ParseLane.DOCLING: "docling",
         ParseLane.CHANDRA: "mlx_vlm",
-        ParseLane.CLAUDE_FALLBACK: "anthropic",
     }
     module_name = module_map.get(lane)
     if module_name is None:
@@ -124,53 +121,11 @@ def _get_chandra(config: Config):  # type: ignore[no-untyped-def]
     return _chandra_parser
 
 
-def _uses_chandra(config: Config) -> bool:
-    """Whether handwritten pages are parsed by Chandra (vs a Claude model)."""
-    return config.parsing.handwriting_parser == "chandra"
-
-
-def _get_fallback(config: Config):  # type: ignore[no-untyped-def]
-    """Lazy-load the Claude vision parser (used when handwriting_parser names a Claude model)."""
-    global _fallback_parser
-    if _fallback_parser is None:
-        from second_brain.parsing.claude_fallback import ClaudeFallbackParser
-
-        _fallback_parser = ClaudeFallbackParser(model=config.parsing.handwriting_parser)
-    return _fallback_parser
-
-
-def _get_handwriting_parser(config: Config):  # type: ignore[no-untyped-def]
-    """Return the configured handwriting parser (Chandra or Claude vision).
-
-    Both expose ``parse_pages(pages) -> list[str]``.
-    """
-    return _get_chandra(config) if _uses_chandra(config) else _get_fallback(config)
-
-
-def _handwriting_lane(config: Config) -> str:
-    """Parse-lane label recorded for handwritten pages, by configured parser."""
-    return ParseLane.CHANDRA.value if _uses_chandra(config) else ParseLane.CLAUDE_FALLBACK.value
-
-
 def _render_pdf_pages(file_path: Path) -> list[RenderedPage]:
     """Rasterize PDF pages (parser-agnostic; uses PyMuPDF, loads no model)."""
     from second_brain.parsing.chandra_parser import ChandraParser
 
     return ChandraParser.render_pdf_pages(file_path)
-
-
-def _check_handwriting_available(config: Config) -> None:
-    """Verify the configured handwriting parser is usable.
-
-    Raises
-    ------
-    ParserNotAvailableError
-        If the configured parser's dependency is missing.
-    """
-    if _uses_chandra(config):
-        check_parser_available(ParseLane.CHANDRA)
-    else:
-        check_parser_available(ParseLane.CLAUDE_FALLBACK)
 
 
 def _hash_bytes(data: bytes) -> str:
@@ -218,8 +173,8 @@ def _handwriting_pages_cached(
         marked failed and nothing from a failed batch is cached, so a
         retry re-OCRs cleanly.
     """
-    parser = _get_handwriting_parser(config)
-    lane = _handwriting_lane(config)
+    parser = _get_chandra(config)
+    lane = ParseLane.CHANDRA.value
     if not pages:
         return [], CacheStats(pages_total=0, pages_from_cache=0)
 
@@ -373,7 +328,7 @@ async def _parse_routed(
         return await _get_docling().parse(str(file_path)), None
 
     if distinct == {ParseLane.CHANDRA}:
-        _check_handwriting_available(config)
+        check_parser_available(ParseLane.CHANDRA)
         return await _parse_handwritten_with_cache(file_path, manifest, config)
 
     return await _parse_hybrid(file_path, page_lanes, manifest, config)
@@ -409,7 +364,7 @@ async def _parse_hybrid(
         Cache stats for the handwritten pages only.
     """
     check_parser_available(ParseLane.DOCLING)
-    _check_handwriting_available(config)
+    check_parser_available(ParseLane.CHANDRA)
 
     rendered = _render_pdf_pages(file_path)
 
@@ -508,7 +463,7 @@ async def process_pdf(
             check_parser_available(forced_lane)
             result = await _get_docling().parse(str(file_path))
         else:
-            _check_handwriting_available(config)
+            check_parser_available(ParseLane.CHANDRA)
             result, cache_stats = await _parse_handwritten_with_cache(file_path, manifest, config)
     else:
         page_lanes = classify_pdf_pages(file_path)

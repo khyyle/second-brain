@@ -25,8 +25,7 @@ sources:
 
 # document data extraction
 parsing:
-  handwriting_parser: chandra    # chandra (local, 38s/page) | claude (api, 13s/page, 0.015$/page)
-  chandra_precision: 4bit        # 4bit | 8bit
+  chandra_precision: 4bit        # 4bit | 8bit (local Chandra OCR for handwriting/scans)
 
 # wiki creation
 compilation:

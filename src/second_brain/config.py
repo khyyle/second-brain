@@ -70,9 +70,6 @@ class ParsingConfig(BaseModel):
 
     Fields:
     -------
-    handwriting_parser: str, default="chandra"
-        Parser for handwritten / scanned pages. Either "chandra" (local,
-        free) or a Claude vision model id such as "claude-sonnet-4-6".
     chandra_precision: str, default="4bit"
         Quantization for the local Chandra MLX model: "4bit" (fastest,
         smallest, accuracy within noise) or "8bit".
@@ -80,7 +77,6 @@ class ParsingConfig(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    handwriting_parser: str = "chandra"
     chandra_precision: str = "4bit"
 
     @field_validator("chandra_precision")
@@ -88,16 +84,6 @@ class ParsingConfig(BaseModel):
     def _validate_precision(cls, v: str) -> str:
         if v not in ("4bit", "8bit"):
             raise ValueError(f"chandra_precision must be '4bit' or '8bit', got '{v}'")
-        return v
-
-    @field_validator("handwriting_parser")
-    @classmethod
-    def _validate_handwriting(cls, v: str) -> str:
-        if v != "chandra" and not v.startswith("claude"):
-            raise ValueError(
-                "handwriting_parser must be 'chandra' or a Claude model id "
-                f"(e.g. 'claude-sonnet-4-6'), got '{v}'"
-            )
         return v
 
 

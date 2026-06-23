@@ -103,7 +103,6 @@ def test_hybrid_merges_docling_and_chandra_in_page_order(
     monkeypatch.setattr(pdf_handler, "_get_chandra", lambda config=None: fake_chandra)
     monkeypatch.setattr(pdf_handler, "_get_docling", lambda: fake_docling)
     monkeypatch.setattr(pdf_handler, "check_parser_available", lambda _lane: None)
-    monkeypatch.setattr(pdf_handler, "_check_handwriting_available", lambda _c: None)
     monkeypatch.setattr(
         pdf_handler,
         "_render_pdf_pages",
@@ -139,7 +138,6 @@ def test_all_typed_uses_docling_whole_doc(
     monkeypatch.setattr(pdf_handler, "_get_chandra", lambda config=None: fake_chandra)
     monkeypatch.setattr(pdf_handler, "_get_docling", lambda: fake_docling)
     monkeypatch.setattr(pdf_handler, "check_parser_available", lambda _lane: None)
-    monkeypatch.setattr(pdf_handler, "_check_handwriting_available", lambda _c: None)
     monkeypatch.setattr(
         pdf_handler,
         "_render_pdf_pages",
@@ -172,7 +170,6 @@ def test_all_handwritten_uses_chandra_with_cache(
     monkeypatch.setattr(pdf_handler, "_get_chandra", lambda config=None: fake_chandra)
     monkeypatch.setattr(pdf_handler, "_get_docling", lambda: fake_docling)
     monkeypatch.setattr(pdf_handler, "check_parser_available", lambda _lane: None)
-    monkeypatch.setattr(pdf_handler, "_check_handwriting_available", lambda _c: None)
     monkeypatch.setattr(
         pdf_handler,
         "_render_pdf_pages",
@@ -226,7 +223,6 @@ def test_failed_page_raises_and_is_not_cached(
 
     monkeypatch.setattr(pdf_handler, "_get_chandra", lambda config=None: failing)
     monkeypatch.setattr(pdf_handler, "check_parser_available", lambda _lane: None)
-    monkeypatch.setattr(pdf_handler, "_check_handwriting_available", lambda _c: None)
     monkeypatch.setattr(
         pdf_handler,
         "_render_pdf_pages",
@@ -253,7 +249,6 @@ def test_hybrid_reuses_chandra_page_cache(
     fake_docling = FakeDocling(typed_pages=[1])
     monkeypatch.setattr(pdf_handler, "_get_docling", lambda: fake_docling)
     monkeypatch.setattr(pdf_handler, "check_parser_available", lambda _lane: None)
-    monkeypatch.setattr(pdf_handler, "_check_handwriting_available", lambda _c: None)
     monkeypatch.setattr(
         pdf_handler,
         "_render_pdf_pages",

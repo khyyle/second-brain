@@ -20,7 +20,6 @@ class ParseLane(enum.Enum):
 
     DOCLING = "docling"
     CHANDRA = "chandra"
-    CLAUDE_FALLBACK = "claude_fallback"
     PASSTHROUGH = "passthrough"
 
 
