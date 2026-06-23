@@ -51,7 +51,7 @@ clustering:
 # pre-filter for document relevance
 triage:
   enabled: true
-  model: gemma3:4b               # local Ollama model
+  model: gemma4:12b              # local Ollama model
   ollama_host: http://localhost:11434
   min_word_count: 300            # free heuristic pre-filter
   worthwhile_threshold: 0.6      # Gemma confidence floor for "worthwhile"

@@ -74,7 +74,7 @@ def _installed_models(host: str) -> set[str] | None:
 def _is_present(required: str, installed: set[str]) -> bool:
     """Whether a required model is installed.
 
-    A required name with an explicit tag (``gemma3:4b``) must match exactly. An
+    A required name with an explicit tag (``gemma4:12b``) must match exactly. An
     untagged name (``nomic-embed-text``) matches any installed tag of that repo.
     """
     if ":" in required:

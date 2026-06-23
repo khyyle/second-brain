@@ -40,7 +40,7 @@ def test_unreachable_server(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> 
 
 
 def test_healthy_when_all_models_present(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    payload = {"models": [{"name": "gemma3:4b"}, {"name": "nomic-embed-text:latest"}]}
+    payload = {"models": [{"name": "gemma4:12b"}, {"name": "nomic-embed-text:latest"}]}
     monkeypatch.setattr(dependencies.httpx, "get", lambda *a, **k: _FakeResponse(payload))
 
     status = dependencies.check_ollama(_config(tmp_path))
@@ -52,7 +52,7 @@ def test_healthy_when_all_models_present(tmp_path: Path, monkeypatch: pytest.Mon
 
 def test_reports_missing_model(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # Embedding model absent; only the tagged Gemma is installed.
-    payload = {"models": [{"name": "gemma3:4b"}]}
+    payload = {"models": [{"name": "gemma4:12b"}]}
     monkeypatch.setattr(dependencies.httpx, "get", lambda *a, **k: _FakeResponse(payload))
 
     status = dependencies.check_ollama(_config(tmp_path))
@@ -64,10 +64,10 @@ def test_reports_missing_model(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
 
 
 def test_wrong_gemma_tag_is_missing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    # A tagged requirement (gemma3:4b) must match exactly, not just the repo.
-    payload = {"models": [{"name": "gemma3:12b"}, {"name": "nomic-embed-text:latest"}]}
+    # A tagged requirement (gemma4:12b) must match exactly, not just the repo.
+    payload = {"models": [{"name": "gemma4:4b"}, {"name": "nomic-embed-text:latest"}]}
     monkeypatch.setattr(dependencies.httpx, "get", lambda *a, **k: _FakeResponse(payload))
 
     status = dependencies.check_ollama(_config(tmp_path))
 
-    assert status.missing_models == ("gemma3:4b",)
+    assert status.missing_models == ("gemma4:12b",)

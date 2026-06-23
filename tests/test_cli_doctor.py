@@ -15,7 +15,7 @@ def _status(*, reachable: bool, missing: tuple[str, ...]) -> dependencies.Ollama
     return dependencies.OllamaStatus(
         host="http://localhost:11434",
         reachable=reachable,
-        required_models=("gemma3:4b", "nomic-embed-text"),
+        required_models=("gemma4:12b", "nomic-embed-text"),
         missing_models=missing,
     )
 

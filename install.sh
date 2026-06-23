@@ -52,7 +52,7 @@ if ! curl -s --max-time 5 http://localhost:11434/api/tags >/dev/null 2>&1; then
     echo "run 'ollama serve'), then re-run this installer." >&2
     exit 1
 fi
-ollama pull gemma3:4b
+ollama pull gemma4:12b
 ollama pull nomic-embed-text
 
 echo "[5/6] Preparing local OCR model (Chandra 4-bit MLX)..."

@@ -49,7 +49,7 @@ From the repository root:
 ./install.sh
 ```
 
-This installs the Python dependencies, builds the menu bar app into `/Applications`, and creates data folders under `~/second-brain/`. It requires Ollama to be installed and running, and pulls the `gemma3:4b` and `nomic-embed-text` models. Most of the multi-gigabyte download is the on-device parsing models: Docling for typed PDFs and Chandra (a ~3 GB MLX OCR model) for handwriting and scans.
+This installs the Python dependencies, builds the menu bar app into `/Applications`, and creates data folders under `~/second-brain/`. It requires Ollama to be installed and running, and pulls the `gemma4:12b` and `nomic-embed-text` models. Most of the multi-gigabyte download is the on-device parsing models: Docling for typed PDFs and Chandra (a ~3 GB MLX OCR model) for handwriting and scans.
 
 You can verify Ollama status via the app's Settings. To verify from the command line:
 

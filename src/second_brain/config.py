@@ -233,7 +233,7 @@ class TriageConfig(BaseModel):
     -------
     enabled: bool, default=True
         Master switch for the triage stage.
-    model: str, default="gemma3:4b"
+    model: str, default="gemma4:12b"
         Ollama model used to classify sources.
     ollama_host: str, default="http://localhost:11434"
         Base URL of the local Ollama server.
@@ -251,7 +251,7 @@ class TriageConfig(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     enabled: bool = True
-    model: str = "gemma3:4b"
+    model: str = "gemma4:12b"
     ollama_host: str = "http://localhost:11434"
     min_word_count: int = Field(default=300, ge=0)
     worthwhile_threshold: float = Field(default=0.6, ge=0.0, le=1.0)
