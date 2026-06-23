@@ -93,9 +93,9 @@ struct SettingsView: View {
     private var groups: some View {
         SettingsGroup(
             title: "Compilation provider",
-            help: "Which cloud model builds the wiki. Anthropic runs Claude; "
-                + "DeepSeek is cheaper and uses its Anthropic-compatible API. "
-                + "Each provider has its own API key below."
+            help: "The cloud model that builds the wiki. Anthropic runs Claude sonnet 4.6 while "
+                + "DeepSeek is cheaper. Each provider uses its own API key, "
+                + "stored locally in .env."
         ) {
             SegControl(
                 options: LLMProvider.allCases.map { ($0.displayName, $0) },
@@ -110,12 +110,9 @@ struct SettingsView: View {
                     selection: modelBinding
                 )
             }
-        }
-
-        SettingsGroup(
-            title: "\(settings.llmProvider.displayName) API key",
-            help: "Used to compile the wiki. Stored locally in a .env--"
-        ) {
+            Text("\(settings.llmProvider.displayName) API key")
+                .font(Theme.Font.meta(10))
+                .foregroundStyle(Theme.Colors.textSecondary)
             SecureField(settings.llmProvider.keyPlaceholder, text: $apiKey)
                 .textFieldStyle(.plain)
                 .font(Theme.Font.meta(11))

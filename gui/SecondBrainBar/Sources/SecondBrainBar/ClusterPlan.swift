@@ -10,7 +10,7 @@ struct ClusterPlan: Decodable {
     let enabled: Bool
     let sourceCount: Int
     let groupCount: Int
-    let estimatedCostUSD: Double
+    let costs: [String: Double]
     let groups: [ClusterGroup]
 
     enum CodingKeys: String, CodingKey {
@@ -19,9 +19,12 @@ struct ClusterPlan: Decodable {
         case enabled
         case sourceCount = "source_count"
         case groupCount = "group_count"
-        case estimatedCostUSD = "estimated_cost_usd"
+        case costs
         case groups
     }
+
+    /// Total estimated cost for `model`, from the plan's per-model map.
+    func cost(for model: String) -> Double { costs[model] ?? 0 }
 
     /// The raw paths of every source the plan covers.
     var memberPaths: Set<String> {
@@ -39,12 +42,14 @@ struct ClusterGroup: Decodable, Identifiable {
     let id: String
     let title: String
     let members: [ClusterMember]
-    let estimatedCostUSD: Double
+    let costs: [String: Double]
 
     enum CodingKeys: String, CodingKey {
         case id, title, members
-        case estimatedCostUSD = "estimated_cost_usd"
+        case costs
     }
+
+    func cost(for model: String) -> Double { costs[model] ?? 0 }
 }
 
 struct ClusterMember: Decodable, Hashable {

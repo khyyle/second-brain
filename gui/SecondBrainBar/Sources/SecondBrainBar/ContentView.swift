@@ -46,7 +46,7 @@ struct ContentView: View {
         .frame(width: Theme.Metric.popoverWidth, alignment: .topLeading)
         .background(Theme.backgroundGradient)
         .preferredColorScheme(.dark)
-        .alert("Anthropic API key required", isPresented: $showingNoKeyAlert) {
+        .alert("API key required", isPresented: $showingNoKeyAlert) {
             Button("Open Settings") {
                 withAnimation(.easeInOut(duration: 0.2)) { showingSettings = true }
             }

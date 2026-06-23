@@ -532,6 +532,7 @@ struct BuildTab: View {
     @State private var entries: [BuildLogEntry] = []
     @State private var status: PipelineStatus?
     @State private var loaded = false
+    @State private var compilationModel = "claude-sonnet-4-6"
 
     // A fresh plan drives the view (and the build honors it) as long as it
     // still covers exactly the staged set. Producing a plan is itself the
@@ -555,7 +556,8 @@ struct BuildTab: View {
         VStack(spacing: 1) {
             StagedHeader(
                 plan: activePlan,
-                fallbackCost: VaultData.estimatedBuildCost(staged),
+                fallbackCost: VaultData.estimatedBuildCost(staged, model: compilationModel),
+                model: compilationModel,
                 sourceCount: staged.count,
                 status: status,
                 grouping: grouping,
@@ -591,6 +593,7 @@ struct BuildTab: View {
                 ForEach(shownClusters) { group in
                     ClusterGroupRow(
                         group: group,
+                        model: compilationModel,
                         overrides: $overrides,
                         onCommit: writeOverrides,
                         onRemove: remove,
@@ -614,6 +617,7 @@ struct BuildTab: View {
                         ForEach(singles) { group in
                             ClusterGroupRow(
                                 group: group,
+                                model: compilationModel,
                                 overrides: $overrides,
                                 onCommit: writeOverrides,
                                 onRemove: remove,
@@ -666,6 +670,8 @@ struct BuildTab: View {
         plan = loadedPlan
         entries = BuildLog.recent(at: config.buildLog)
         status = PipelineStatus.read(from: config.statusFile)
+        compilationModel = ConfigStore.locate(config)
+            .map { ConfigStore.load(from: $0).model } ?? "claude-sonnet-4-6"
         loaded = true
     }
 
@@ -698,6 +704,7 @@ struct BuildTab: View {
 private struct StagedHeader: View {
     let plan: ClusterPlan?
     let fallbackCost: Double
+    let model: String
     let sourceCount: Int
     let status: PipelineStatus?
     let grouping: Bool
@@ -709,15 +716,18 @@ private struct StagedHeader: View {
         grouping || (status?.isActive == true && status?.phase == "compile")
     }
 
+    private var estimatedCost: Double {
+        plan?.cost(for: model) ?? fallbackCost
+    }
+
     var body: some View {
         HStack(spacing: 5) {
             Text("Staged for build")
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(Theme.Colors.textTertiary)
-            HelpButton(text: "Ingested files waiting to be compiled. Group "
-                + "bundles related chats so one topic becomes a single page "
-                + "instead of many; Build wiki then compiles each group. "
-                + "Cost is an estimate.")
+            HelpButton(text: "Ingested files that will be compiled when build is selected. 'Group' (chats only) "
+                + "bundles related conversation into one compilation to avoid duplicate calls/pages. "
+                + "Cost is a rough upper bound.")
             Spacer()
             if !running, sourceCount > 0 {
                 summary
@@ -736,7 +746,7 @@ private struct StagedHeader: View {
                     .help("The staged set changed since the last grouping — "
                         + "Regroup to refresh it.")
             } else {
-                Text("~$\(String(format: "%.2f", plan?.estimatedCostUSD ?? fallbackCost))")
+                Text("~$\(String(format: "%.2f", estimatedCost))")
                     .font(Theme.Font.meta(10))
                     .foregroundStyle(Theme.Colors.textTertiary)
                     .monospacedDigit()
@@ -753,6 +763,7 @@ private struct StagedHeader: View {
 /// per-source pop-out tuning), or a plain row for a single-source unit.
 private struct ClusterGroupRow: View {
     let group: ClusterGroup
+    let model: String
     @Binding var overrides: ClusterOverrides
     let onCommit: () -> Void
     let onRemove: (String) -> Void
@@ -838,7 +849,7 @@ private struct ClusterGroupRow: View {
     }
 
     private var cost: some View {
-        Text(String(format: "~$%.2f", group.estimatedCostUSD))
+        Text(String(format: "~$%.2f", group.cost(for: model)))
             .font(Theme.Font.meta(9.5))
             .foregroundStyle(Theme.Colors.textTertiary)
             .monospacedDigit()

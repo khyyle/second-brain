@@ -42,4 +42,15 @@ enum LLMProvider: String, CaseIterable, Identifiable {
     }
 
     var defaultModel: String { models[0].id }
+
+    /// Cache-miss (input, output) USD per 1M tokens for a model, for a
+    /// pre-build cost estimate. Mirrors _MODEL_PRICES in
+    /// second_brain/llm_providers.py. Unknown models fall back to Claude.
+    static func modelPrice(_ model: String) -> (input: Double, output: Double) {
+        switch model {
+        case "deepseek-v4-flash": return (0.14, 0.28)
+        case "deepseek-v4-pro": return (0.435, 0.87)
+        default: return (3.0, 15.0)  // claude-sonnet-4-6
+        }
+    }
 }

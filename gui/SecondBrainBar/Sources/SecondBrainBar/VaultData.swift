@@ -128,14 +128,13 @@ enum VaultData {
     /// agent re-reads each source over a few turns and writes ~2 pages.
     /// Calibrated to observed ~$0.07-0.20 per source; live cost during the
     /// build is authoritative.
-    static func estimatedBuildCost(_ staged: [StagedSource]) -> Double {
-        let inputPerMTok = 3.0
-        let outputPerMTok = 15.0
+    static func estimatedBuildCost(_ staged: [StagedSource], model: String) -> Double {
+        let price = LLMProvider.modelPrice(model)
         var usd = 0.0
         for s in staged {
             let tokens = max(Double(s.bytes) / 4.0, 500)
-            usd += tokens * 4 * inputPerMTok / 1_000_000   // ~4 turns of context
-            usd += 4000 * outputPerMTok / 1_000_000         // ~2 generated pages
+            usd += tokens * 4 * price.input / 1_000_000     // ~4 turns of context
+            usd += 4000 * price.output / 1_000_000          // ~2 generated pages
         }
         return usd
     }

@@ -103,6 +103,7 @@ def test_build_preview_groups_and_costs(tmp_path: Path, monkeypatch: pytest.Monk
             algorithm="threshold", signature_chars=8000, sources=("chatgpt",), enabled=True
         ),
         search=SimpleNamespace(),
+        compilation=SimpleNamespace(provider="anthropic", model="claude-sonnet-4-6"),
     )
 
     monkeypatch.setattr(preview_mod, "get_clusterer", lambda config: object())
@@ -118,6 +119,10 @@ def test_build_preview_groups_and_costs(tmp_path: Path, monkeypatch: pytest.Monk
     assert artifact["group_count"] == 2
     assert artifact["enabled"] is True
     assert artifact["estimated_cost_usd"] > 0
+    group_costs = artifact["groups"][0]["costs"]
+    assert group_costs["deepseek-v4-flash"] > 0
+    assert group_costs["deepseek-v4-flash"] < group_costs["claude-sonnet-4-6"]
+    assert set(artifact["costs"]) == set(group_costs)
     # Largest group first; its representative title comes from front matter.
     assert artifact["groups"][0]["title"] in {"Alpha", "Beta"}
     assert len(artifact["groups"][0]["members"]) == 2

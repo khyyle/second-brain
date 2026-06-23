@@ -20,6 +20,7 @@ from second_brain.clustering import get_clusterer
 from second_brain.clustering.sources import cluster_scoped_sources
 from second_brain.config import Config
 from second_brain.ingestion.manifest import Manifest
+from second_brain.llm_providers import SUPPORTED_MODELS, resolve_profile
 
 logger = logging.getLogger(__name__)
 
@@ -28,12 +29,10 @@ OVERRIDES_FILENAME = ".cluster-overrides.json"
 
 _TITLE_SCAN_BYTES = 4096
 
-# Cost model for the preview, matching the app's per-unit assumptions: the
+# Cost model for the preview, matching the app's per-unit assumptions. Assumed that the
 # agent re-reads each source over a few turns and writes ~2 pages per group.
 _INPUT_TURNS = 4
 _OUTPUT_TOKENS_PER_GROUP = 4000
-_INPUT_USD_PER_MTOK = 3.0
-_OUTPUT_USD_PER_MTOK = 15.0
 _CHARS_PER_TOKEN = 4
 
 
@@ -80,13 +79,29 @@ def _read_title(path: Path) -> str:
     return path.stem
 
 
-def _group_cost_usd(total_bytes: int) -> float:
+def _group_cost_usd(
+    total_bytes: int, input_usd_per_mtok: float, output_usd_per_mtok: float
+) -> float:
     """Estimate the USD cost of compiling one group from its total bytes."""
     input_tokens = max(total_bytes / _CHARS_PER_TOKEN, 1) * _INPUT_TURNS
     return (
-        input_tokens / 1_000_000 * _INPUT_USD_PER_MTOK
-        + _OUTPUT_TOKENS_PER_GROUP / 1_000_000 * _OUTPUT_USD_PER_MTOK
+        input_tokens / 1_000_000 * input_usd_per_mtok
+        + _OUTPUT_TOKENS_PER_GROUP / 1_000_000 * output_usd_per_mtok
     )
+
+
+def _model_prices() -> dict[str, tuple[float, float]]:
+    """Return (input, output) USD-per-Mtok for every selectable model.
+
+    Precomputed once per preview so the plan can carry a cost for each
+    model, letting the app switch models without re-running the preview.
+    """
+    prices: dict[str, tuple[float, float]] = {}
+    for provider, models in SUPPORTED_MODELS.items():
+        for model in models:
+            profile = resolve_profile(provider, model)
+            prices[model] = (profile.input_price_per_mtok, profile.output_price_per_mtok)
+    return prices
 
 
 def _staged_sources(config: Config, manifest: Manifest) -> list[str]:
@@ -137,6 +152,8 @@ def build_preview(
         each with a stable id, representative title, members, and cost.
     """
     staged = _staged_sources(config, manifest)
+    profile = resolve_profile(config.compilation.provider, config.compilation.model)
+    model_prices = _model_prices()
     clusters = cluster_scoped_sources(
         staged,
         config.raw_dir,
@@ -148,19 +165,24 @@ def build_preview(
     )
 
     groups: list[dict] = []
-    total_cost = 0.0
+    total_costs: dict[str, float] = dict.fromkeys(model_prices, 0.0)
     for members in clusters:
         sized = [(rel, (config.raw_dir / rel).stat().st_size) for rel in members]
         total_bytes = sum(size for _, size in sized)
         representative = max(sized, key=lambda pair: pair[1])[0]
-        cost = _group_cost_usd(total_bytes)
-        total_cost += cost
+        costs = {
+            model: _group_cost_usd(total_bytes, input_price, output_price)
+            for model, (input_price, output_price) in model_prices.items()
+        }
+        for model, cost in costs.items():
+            total_costs[model] += cost
         groups.append(
             {
                 "id": _group_id(members),
                 "title": _read_title(config.raw_dir / representative),
                 "members": [{"rel": rel, "bytes": size} for rel, size in sized],
-                "estimated_cost_usd": round(cost, 4),
+                "estimated_cost_usd": round(costs[profile.model], 4),
+                "costs": {model: round(cost, 4) for model, cost in costs.items()},
             }
         )
 
@@ -171,7 +193,8 @@ def build_preview(
         "enabled": config.clustering.enabled,
         "source_count": len(staged),
         "group_count": len(groups),
-        "estimated_cost_usd": round(total_cost, 2),
+        "estimated_cost_usd": round(total_costs[profile.model], 2),
+        "costs": {model: round(cost, 2) for model, cost in total_costs.items()},
         "groups": groups,
     }
 
