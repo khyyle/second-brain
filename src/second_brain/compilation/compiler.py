@@ -33,7 +33,7 @@ class MissingAPIKeyError(RuntimeError):
 
 
 # Per-turn output cap for one agent Messages API call.
-# NOTE: provider limits are Claude ~64K, DeepSeek V4 ~384K.
+# NOTE: provider limits are Opus/Sonnet 128K, Haiku 64K, DeepSeek V4 ~384K.
 _MAX_OUTPUT_TOKENS_PER_TURN = 16384
 
 # Cap a single file read so one large source can't blow the per-minute

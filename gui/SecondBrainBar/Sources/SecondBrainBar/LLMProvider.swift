@@ -35,7 +35,11 @@ enum LLMProvider: String, CaseIterable, Identifiable {
     var models: [(id: String, label: String)] {
         switch self {
         case .anthropic:
-            return [("claude-sonnet-4-6", "Sonnet")]
+            return [
+                ("claude-sonnet-4-6", "Sonnet"),
+                ("claude-opus-4-8", "Opus"),
+                ("claude-haiku-4-5", "Haiku"),
+            ]
         case .deepseek:
             return [("deepseek-v4-pro", "Pro"), ("deepseek-v4-flash", "Flash")]
         }
@@ -48,9 +52,11 @@ enum LLMProvider: String, CaseIterable, Identifiable {
     /// second_brain/llm_providers.py. Unknown models fall back to Claude.
     static func modelPrice(_ model: String) -> (input: Double, output: Double) {
         switch model {
+        case "claude-opus-4-8":   return (5.0, 25.0)
+        case "claude-haiku-4-5":  return (1.0, 5.0)
         case "deepseek-v4-flash": return (0.14, 0.28)
-        case "deepseek-v4-pro": return (0.435, 0.87)
-        default: return (3.0, 15.0)  // claude-sonnet-4-6
+        case "deepseek-v4-pro":   return (0.435, 0.87)
+        default:                  return (3.0, 15.0)  // claude-sonnet-4-6
         }
     }
 }

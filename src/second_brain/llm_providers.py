@@ -10,7 +10,7 @@ DeepSeek's Anthropic-compatible endpoint ignores ``cache_control`` but
 applies automatic server-side prefix caching, billed at a much lower
 cache-hit rate. We therefore do not send ``cache_control`` to DeepSeek,
 and the cost estimate below (cache-miss pricing) is an upper bound for it.
-Explicit caching is used for claude-sonnet.
+Explicit caching is used for Anthropic models.
 """
 
 from __future__ import annotations
@@ -20,13 +20,15 @@ from dataclasses import dataclass
 
 # Selectable models per provider.
 SUPPORTED_MODELS: dict[str, tuple[str, ...]] = {
-    "anthropic": ("claude-sonnet-4-6",),
+    "anthropic": ("claude-sonnet-4-6", "claude-opus-4-8", "claude-haiku-4-5"),
     "deepseek": ("deepseek-v4-flash", "deepseek-v4-pro"),
 }
 
 # USD per 1M tokens (cache-miss input, output)
 _MODEL_PRICES: dict[str, tuple[float, float]] = {
+    "claude-opus-4-8": (5.0, 25.0),
     "claude-sonnet-4-6": (3.0, 15.0),
+    "claude-haiku-4-5": (1.0, 5.0),
     "deepseek-v4-flash": (0.14, 0.28),
     "deepseek-v4-pro": (0.435, 0.87),
 }

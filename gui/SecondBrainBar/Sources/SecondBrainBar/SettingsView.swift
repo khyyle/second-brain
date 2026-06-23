@@ -93,9 +93,9 @@ struct SettingsView: View {
     private var groups: some View {
         SettingsGroup(
             title: "Compilation provider",
-            help: "The cloud model that builds the wiki. Anthropic runs Claude sonnet 4.6 while "
-                + "DeepSeek is cheaper. Each provider uses its own API key, "
-                + "stored locally in .env."
+            help: "The cloud model that builds the wiki. Anthropic runs Claude; "
+                + "DeepSeek is cheaper. Pick a model to trade off cost against "
+                + "quality. Each provider uses its own API key, stored locally in .env."
         ) {
             SegControl(
                 options: LLMProvider.allCases.map { ($0.displayName, $0) },
