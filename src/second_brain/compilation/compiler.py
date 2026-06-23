@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-import fnmatch
 import logging
 import os
-import re
 import shutil
 import subprocess
 import threading
@@ -13,10 +11,12 @@ from pathlib import Path
 
 import anthropic
 
-from second_brain.compilation.agent_prompt import (
+from second_brain.compilation.agent import (
     COMPILATION_SYSTEM_PROMPT,
     WIKI_TOOLS,
+    WikiToolExecutor,
     build_compilation_prompt,
+    compact_history,
 )
 from second_brain.compilation.structure import rebuild_structure
 from second_brain.config import Config
@@ -35,10 +35,6 @@ class MissingAPIKeyError(RuntimeError):
 # Per-turn output cap for one agent Messages API call.
 # NOTE: provider limits are Opus/Sonnet 128K, Haiku 64K, DeepSeek V4 ~384K.
 _MAX_OUTPUT_TOKENS_PER_TURN = 16384
-
-# Cap a single file read so one large source can't blow the per-minute
-# input-token budget (~6k tokens). The agent can grep for specifics.
-_MAX_READ_CHARS = 24_000
 
 # Holding folder under raw/ for skipped sources: kept out of the build
 # but recoverable until a build finalizes the curation.
@@ -145,273 +141,6 @@ def _build_work_units(config: Config, raw_dir: Path, new_sources: list[str]) -> 
         clusters = [[source] for source in new_sources]
 
     return _split_oversized(clusters, config.clustering.max_sources_per_run)
-
-
-class _WikiToolExecutor:
-    """
-    Sandboxed tool execution scoped to the wiki directory.
-
-    All file paths are resolved and validated to prevent the LLM agent
-    from reading or writing outside the wiki and raw directories.
-    """
-
-    def __init__(
-        self,
-        wiki_dir: Path,
-        raw_dir: Path,
-        dry_run: bool = False,
-        data_dir: Path | None = None,
-    ) -> None:
-        """
-        Parameters:
-        -----------
-        wiki_dir: Path
-            Root directory of the wiki.
-        raw_dir: Path
-            Directory containing raw parsed source files.
-        dry_run: bool
-            If ``True``, record intended writes without
-            touching the filesystem.
-        data_dir: Path | None
-            Vault root; when set, each page change is appended to the build
-            log as it happens so progress is observable mid-run.
-        """
-        self._wiki_dir = wiki_dir
-        self._raw_dir = raw_dir
-        self._dry_run = dry_run
-        self._data_dir = data_dir
-        self._changes: list[dict] = []
-
-    def _record(self, action: str, rel_path: str) -> None:
-        """Record a page change and append it to the build log immediately."""
-        self._changes.append({"action": action, "path": rel_path})
-        if self._data_dir is not None and not self._dry_run:
-            from second_brain.build_log import append_build_actions
-
-            append_build_actions(self._data_dir, [{"action": action, "path": rel_path}])
-
-    def _resolve(self, rel_path: str) -> Path:
-        """
-        Resolve a relative path to the wiki or raw directory.
-
-        Paths starting with ``raw/`` or ``../raw/`` are rooted to
-        the raw directory; all others resolve against the wiki
-        directory. Both are checked for directory-traversal attacks.
-
-        Parameters:
-        -----------
-        rel_path: str
-            Relative path as provided by the LLM agent.
-
-        Returns:
-        --------
-        Path
-            Resolved absolute path.
-
-        Raises:
-        -------
-        PermissionError
-            If the resolved path escapes its sandbox.
-        """
-        if rel_path.startswith("raw/") or rel_path.startswith("../raw/"):
-            clean = rel_path.replace("../raw/", "").replace("raw/", "")
-            resolved = (self._raw_dir / clean).resolve()
-            if not str(resolved).startswith(str(self._raw_dir.resolve())):
-                raise PermissionError(f"Path escapes raw directory: {rel_path}")
-            return resolved
-
-        resolved = (self._wiki_dir / rel_path).resolve()
-        if not str(resolved).startswith(str(self._wiki_dir.resolve())):
-            raise PermissionError(f"Path escapes wiki directory: {rel_path}")
-        return resolved
-
-    def execute(self, tool_name: str, tool_input: dict) -> str:
-        """
-        Dispatch a tool call from the agent.
-
-        Parameters
-        ----------
-        tool_name: str
-            Name of the tool (e.g., ``"read_file"``).
-        tool_input: dict
-            Arguments forwarded from the LLM tool-use block.
-
-        Returns
-        -------
-        str
-            Human-readable result or error message.
-        """
-        try:
-            if tool_name == "read_file":
-                return self._read(tool_input["path"])
-            elif tool_name == "write_file":
-                return self._write(tool_input["path"], tool_input["content"])
-            elif tool_name == "edit_file":
-                return self._edit(
-                    tool_input["path"],
-                    tool_input["old_string"],
-                    tool_input["new_string"],
-                )
-            elif tool_name == "glob_files":
-                return self._glob(tool_input["pattern"])
-            elif tool_name == "grep_files":
-                return self._grep(
-                    tool_input["pattern"],
-                    tool_input.get("glob", "**/*.md"),
-                )
-            else:
-                return f"Unknown tool: {tool_name}"
-        except Exception as e:
-            return f"Error: {e}"
-
-    def _read(self, rel_path: str) -> str:
-        path = self._resolve(rel_path)
-        if not path.exists():
-            return f"File not found: {rel_path}"
-        text = path.read_text(encoding="utf-8")
-        if len(text) > _MAX_READ_CHARS:
-            return (
-                text[:_MAX_READ_CHARS]
-                + f"\n\n[truncated: {_MAX_READ_CHARS} of {len(text)} chars shown — "
-                "use grep_files to locate specific sections]"
-            )
-        return text
-
-    def _write(self, rel_path: str, content: str) -> str:
-        """
-        Write content to a file, creating parents as needed.
-
-        Parameters
-        ----------
-        rel_path: str
-            Relative path from wiki root.
-        content: str
-            Full file content to write.
-
-        Returns
-        -------
-        str
-            Confirmation message with character count.
-        """
-        if self._dry_run:
-            self._record("created", rel_path)
-            return f"[dry-run] Would write {len(content)} chars to {rel_path}"
-
-        path = self._resolve(rel_path)
-        # Distinguish a new page from a rewrite for the build log.
-        action = "updated" if path.exists() else "created"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(content, encoding="utf-8")
-        self._record(action, rel_path)
-        return f"Wrote {len(content)} chars to {rel_path}"
-
-    def _edit(self, rel_path: str, old: str, new: str) -> str:
-        """
-        Replace a unique substring in a file.
-
-        Parameters
-        ----------
-        rel_path: str
-            Relative path from wiki root.
-        old: str
-            Exact string to find (must appear exactly once).
-        new: str
-            Replacement string.
-
-        Returns
-        -------
-        str
-            Confirmation or error message.
-        """
-        path = self._resolve(rel_path)
-        if not path.exists():
-            return f"File not found: {rel_path}"
-
-        content = path.read_text(encoding="utf-8")
-        count = content.count(old)
-        if count == 0:
-            return f"old_string not found in {rel_path}"
-        if count > 1:
-            return f"old_string appears {count} times in {rel_path} — must be unique"
-
-        if self._dry_run:
-            self._record("updated", rel_path)
-            return f"[dry-run] Would edit {rel_path}"
-
-        content = content.replace(old, new, 1)
-        path.write_text(content, encoding="utf-8")
-        self._record("updated", rel_path)
-        return f"Edited {rel_path}"
-
-    def _glob(self, pattern: str) -> str:
-        """
-        Find files matching a glob pattern.
-
-        Search is restricted to known content directories to
-        prevent the agent from listing arbitrary paths.
-
-        Parameters
-        ----------
-        pattern: str
-            Glob pattern (e.g., ``"concepts/*.md"``).
-
-        Returns
-        -------
-        str
-            Newline-separated relative paths, or
-            ``"No matches found"``.
-        """
-        matches = []
-        for content_dir in ("concepts", "problems", "projects", "insights", "_meta"):
-            dir_path = self._wiki_dir / content_dir
-            if not dir_path.exists():
-                continue
-            for f in dir_path.rglob("*"):
-                if f.is_file() and fnmatch.fnmatch(f.name, pattern.split("/")[-1]):
-                    matches.append(str(f.relative_to(self._wiki_dir)))
-        return "\n".join(sorted(matches)) if matches else "No matches found"
-
-    def _grep(self, pattern: str, file_glob: str) -> str:
-        """
-        Search file contents for a regex pattern.
-
-        Results are capped at 100 matches to prevent excessively
-        large tool results from consuming context window.
-
-        Parameters
-        ----------
-        pattern: str
-            Regex pattern (matched case-insensitively).
-        file_glob: str
-            Glob restricting which files to search.
-
-        Returns
-        -------
-        str
-            Newline-separated ``path:line: content`` matches,
-            or ``"No matches found"``.
-        """
-        compiled = re.compile(pattern, re.IGNORECASE)
-        results: list[str] = []
-        for md_file in self._wiki_dir.rglob(file_glob.lstrip("*").lstrip("/")):
-            if not md_file.is_file():
-                continue
-            try:
-                content = md_file.read_text(encoding="utf-8")
-            except (OSError, UnicodeDecodeError):
-                continue
-            for i, line in enumerate(content.splitlines(), 1):
-                if compiled.search(line):
-                    rel = md_file.relative_to(self._wiki_dir)
-                    results.append(f"{rel}:{i}: {line.strip()}")
-            if len(results) > 100:
-                results.append("... (truncated)")
-                break
-        return "\n".join(results) if results else "No matches found"
-
-    @property
-    def changes(self) -> list[dict]:
-        return self._changes
 
 
 def _find_new_sources(config: Config, manifest: Manifest) -> list[str]:
@@ -680,7 +409,7 @@ def _run_agent(
 
     profile = resolve_profile(config.compilation.provider, config.compilation.model)
     client = anthropic.Anthropic(**profile.client_kwargs())
-    executor = _WikiToolExecutor(wiki_dir, raw_dir, data_dir=config.data_dir)
+    executor = WikiToolExecutor(wiki_dir, raw_dir, data_dir=config.data_dir)
 
     prompt = build_compilation_prompt(sources, wiki_dir)
 
@@ -692,14 +421,15 @@ def _run_agent(
     system: str | list[dict]
     tools = [dict(t) for t in WIKI_TOOLS]
     if profile.prompt_caching:
+        cache_control = {"type": "ephemeral", "ttl": "1h"}  # otherwise defaults to 5 min ttl
         system = [
             {
                 "type": "text",
                 "text": COMPILATION_SYSTEM_PROMPT,
-                "cache_control": {"type": "ephemeral"},
+                "cache_control": cache_control,
             }
         ]
-        tools[-1] = {**tools[-1], "cache_control": {"type": "ephemeral"}}
+        tools[-1] = {**tools[-1], "cache_control": cache_control}
     else:
         system = COMPILATION_SYSTEM_PROMPT
 
@@ -707,6 +437,8 @@ def _run_agent(
     token_budget = config.compilation.token_budget_per_run
     total_input_tokens = 0
     total_output_tokens = 0
+    total_cache_read_tokens = 0
+    total_cache_write_tokens = 0
     cur, tot = progress if progress else (0, 0)
 
     for iteration in range(max_iterations):
@@ -718,7 +450,7 @@ def _run_agent(
 
         # Shrink stale tool outputs before re-sending the history, so a
         # large early file read isn't billed on every later turn.
-        _compact_history(messages)
+        compact_history(messages)
 
         response = client.messages.create(
             model=profile.model,
@@ -730,8 +462,15 @@ def _run_agent(
 
         total_input_tokens += response.usage.input_tokens
         total_output_tokens += response.usage.output_tokens
+        total_cache_read_tokens += getattr(response.usage, "cache_read_input_tokens", 0) or 0
+        total_cache_write_tokens += getattr(response.usage, "cache_creation_input_tokens", 0) or 0
         total_tokens = total_input_tokens + total_output_tokens
-        cost = profile.estimate_cost(total_input_tokens, total_output_tokens)
+        cost = profile.estimate_cost(
+            total_input_tokens,
+            total_output_tokens,
+            cache_read_tokens=total_cache_read_tokens,
+            cache_write_tokens=total_cache_write_tokens,
+        )
         write_status(
             config.data_dir,
             phase="compile",
@@ -756,9 +495,8 @@ def _run_agent(
             logger.info("Agent completed after %d iterations", iteration + 1)
             break
 
-        # Hard stop before the next (most expensive) turn if we've blown the
-        # budget. Checked after appending the assistant turn so the partial
-        # work done so far is preserved on disk.
+        # Stop before the next turn once over budget. Checked after appending
+        # the assistant turn so work already done stays on disk.
         if total_tokens >= token_budget:
             logger.warning(
                 "Token budget exceeded (%d >= %d) after %d iterations — stopping early",
@@ -786,52 +524,21 @@ def _run_agent(
 
         messages.append({"role": "user", "content": tool_results})
 
-    cost = profile.estimate_cost(total_input_tokens, total_output_tokens)
+    cost = profile.estimate_cost(
+        total_input_tokens,
+        total_output_tokens,
+        cache_read_tokens=total_cache_read_tokens,
+        cache_write_tokens=total_cache_write_tokens,
+    )
     logger.info(
-        "Agent finished: %d changes, %d in + %d out tokens, ~$%.2f",
+        "Agent finished: %d changes, %d in + %d out tokens (%d cache read), ~$%.2f",
         len(executor.changes),
         total_input_tokens,
         total_output_tokens,
+        total_cache_read_tokens,
         cost,
     )
     return cost
-
-
-def _compact_history(messages: list[dict], keep_last: int = 2, max_chars: int = 600) -> None:
-    """Shrink large tool outputs in older turns to keep requests small.
-
-    The agent re-sends the whole message history each turn, so an early
-    full-file read would otherwise inflate every later request (and blow
-    low input-token-per-minute rate limits). The most recent ``keep_last``
-    user turns are left intact; older oversized tool results are replaced
-    with a placeholder. The agent can re-read a file if it still needs it.
-
-    Parameters
-    ----------
-    messages: list[dict]
-        The running conversation, mutated in place.
-    keep_last: int
-        Number of most-recent user turns to leave untouched.
-    max_chars: int
-        Tool-result size above which an old result is collapsed.
-    """
-    placeholder = "[earlier output omitted to save context — re-read if needed]"
-    user_indices = [i for i, m in enumerate(messages) if m.get("role") == "user"]
-    protected = set(user_indices[-keep_last:])
-    for i, message in enumerate(messages):
-        if message.get("role") != "user" or i in protected:
-            continue
-        content = message.get("content")
-        if not isinstance(content, list):  # the initial prompt is a plain string
-            continue
-        for block in content:
-            if (
-                isinstance(block, dict)
-                and block.get("type") == "tool_result"
-                and isinstance(block.get("content"), str)
-                and len(block["content"]) > max_chars
-            ):
-                block["content"] = placeholder
 
 
 def _git_restore(wiki_dir: Path) -> None:
