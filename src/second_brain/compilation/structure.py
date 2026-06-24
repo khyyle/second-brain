@@ -115,12 +115,12 @@ def discover_all_pages(wiki_dir: Path) -> dict[str, WikiPage]:
         dir_path = wiki_dir / content_dir
         if not dir_path.exists():
             continue
-        for md_file in dir_path.rglob("*.md"):
+        for md_file in dir_path.glob("*.md"):
             content = md_file.read_text(encoding="utf-8")
             stem = md_file.stem
             pages[stem] = WikiPage(
                 path=md_file,
-                rel_path=str(md_file.relative_to(wiki_dir)),
+                rel_path=f"{content_dir}/{md_file.name}",
                 stem=stem,
                 frontmatter=_parse_frontmatter(content),
                 outgoing_links=_extract_wikilinks(content),

@@ -10,6 +10,8 @@ import fnmatch
 import re
 from pathlib import Path
 
+from second_brain.compilation.structure import CONTENT_DIRS
+
 COMPILATION_SYSTEM_PROMPT = """\
 You are a knowledge-base compilation agent. Your job is to read raw parsed \
 source documents and compile them into a structured, interlinked wiki.
@@ -49,6 +51,9 @@ Every page MUST have YAML frontmatter with at minimum:
 - sources: list of source document filenames
 
 ## Rules
+- The wiki is flat: write each page directly in its content folder
+  (e.g. concepts/gradient-descent.md), never in a subfolder. Group by topic
+  with frontmatter `domains`, not directories.
 - File names use kebab-case (e.g., gradient-descent.md)
 - Use [[wikilinks]] for cross-references; link by bare page stem only
   (e.g. [[gradient-descent]]), never folder-prefixed ([[concepts/...]]) or
@@ -441,6 +446,15 @@ class WikiToolExecutor:
         str
             Confirmation message with character count.
         """
+        # error if nested file creation is attempted structure is already enforced
+        # via backlinks and nesting would muddle this structure
+        parts = Path(rel_path).parts
+        if len(parts) > 2 and parts[0] in CONTENT_DIRS:
+            return (
+                f"Error: write pages flat as {parts[0]}/<name>.md, not in subfolders. "
+                "Group topics with frontmatter 'domains' instead."
+            )
+
         if self._dry_run:
             self._record("created", rel_path)
             return f"[dry-run] Would write {len(content)} chars to {rel_path}"

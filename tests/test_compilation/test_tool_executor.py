@@ -21,6 +21,34 @@ def _executor(tmp_path: Path) -> tuple[WikiToolExecutor, Path, Path]:
     return WikiToolExecutor(wiki, raw), wiki, raw
 
 
+def test_write_rejects_nested_content_page(tmp_path: Path) -> None:
+    executor, wiki, _raw = _executor(tmp_path)
+
+    out = executor.execute("write_file", {"path": "concepts/mathematics/foo.md", "content": "x"})
+
+    assert out.startswith("Error:")
+    assert not (wiki / "concepts" / "mathematics" / "foo.md").exists()
+
+
+def test_write_allows_flat_content_page(tmp_path: Path) -> None:
+    executor, wiki, _raw = _executor(tmp_path)
+
+    out = executor.execute("write_file", {"path": "concepts/foo.md", "content": "x"})
+
+    assert out.startswith("Wrote")
+    assert (wiki / "concepts" / "foo.md").exists()
+
+
+def test_write_allows_nested_meta_path(tmp_path: Path) -> None:
+    # _meta is not a content bucket, so the flat-page rule does not apply.
+    executor, wiki, _raw = _executor(tmp_path)
+
+    out = executor.execute("write_file", {"path": "_meta/schema_proposals.yaml", "content": "x"})
+
+    assert out.startswith("Wrote")
+    assert (wiki / "_meta" / "schema_proposals.yaml").exists()
+
+
 def test_read_file_pages_long_source(tmp_path: Path) -> None:
     executor, _wiki, raw = _executor(tmp_path)
     (raw / "chatgpt" / "big.md").write_text("A" * (_MAX_READ_CHARS + 500), encoding="utf-8")

@@ -118,7 +118,7 @@ class _GraphCache:
             if not d.exists():
                 continue
             latest = max(latest, d.stat().st_mtime)
-            for f in d.rglob("*.md"):
+            for f in d.glob("*.md"):
                 latest = max(latest, f.stat().st_mtime)
         return latest
 
@@ -232,7 +232,7 @@ class WikiTools:
             if not dir_path.exists():
                 continue
             latest = max(latest, dir_path.stat().st_mtime)
-            for md_file in dir_path.rglob("*.md"):
+            for md_file in dir_path.glob("*.md"):
                 latest = max(latest, md_file.stat().st_mtime)
         return latest
 
@@ -305,6 +305,16 @@ class WikiTools:
             )
         return "\n---\n".join(results)
 
+    def _resolve_page(self, title: str) -> Path | None:
+        """Resolve a title/slug to its page file, or None if no page matches."""
+        # the wiki is flat by design, probe <content_dir>/<slug>.md
+        slug = title.lower().replace(" ", "-")
+        for content_dir in CONTENT_DIRS:
+            path = self._wiki / content_dir / f"{slug}.md"
+            if path.exists():
+                return path
+        return None
+
     def read_page(self, title: str) -> str:
         """
         Read a wiki page by stem or title.
@@ -319,12 +329,9 @@ class WikiTools:
         str
             Full markdown content, or a not-found message.
         """
-        slug = title.lower().replace(" ", "-")
-        for content_dir in CONTENT_DIRS:
-            path = self._wiki / content_dir / f"{slug}.md"
-            if path.exists():
-                return path.read_text(encoding="utf-8")
-
+        path = self._resolve_page(title)
+        if path is not None:
+            return path.read_text(encoding="utf-8")
         return f"Page not found: {title}"
 
     def list_pages(
@@ -502,29 +509,24 @@ class WikiTools:
             Concatenated source previews (first 2000 chars each), with a
             coverage note when paged, or a not-found / no-sources message.
         """
-        slug = title.lower().replace(" ", "-")
-        for content_dir in CONTENT_DIRS:
-            path = self._wiki / content_dir / f"{slug}.md"
-            if not path.exists():
-                continue
-            content = path.read_text(encoding="utf-8")
-            fm = _parse_frontmatter(content)
-            sources = fm.get("sources", [])
-            if not sources:
-                return f"No sources listed for {title}."
+        path = self._resolve_page(title)
+        if path is None:
+            return f"Page not found: {title}"
+        fm = _parse_frontmatter(path.read_text(encoding="utf-8"))
+        sources = fm.get("sources", [])
+        if not sources:
+            return f"No sources listed for {title}."
 
-            offset = max(offset, 0)
-            window = sources[offset : offset + max(limit, 1)]
-            results = []
-            for src in window:
-                resolved = self._resolve_source(src)
-                if resolved:
-                    results.append(f"### {src}\n{resolved.read_text(encoding='utf-8')[:2000]}")
-                else:
-                    results.append(f"### {src}\n(source file not found)")
-            return "\n\n".join(results) + _more_note(len(window), len(sources), offset=offset)
-
-        return f"Page not found: {title}"
+        offset = max(offset, 0)
+        window = sources[offset : offset + max(limit, 1)]
+        results = []
+        for src in window:
+            resolved = self._resolve_source(src)
+            if resolved:
+                results.append(f"### {src}\n{resolved.read_text(encoding='utf-8')[:2000]}")
+            else:
+                results.append(f"### {src}\n(source file not found)")
+        return "\n\n".join(results) + _more_note(len(window), len(sources), offset=offset)
 
     def get_sources_summary(self, title: str) -> str:
         """
@@ -544,27 +546,23 @@ class WikiTools:
         str
             Per-source previews, or a not-found / no-sources message.
         """
-        slug = title.lower().replace(" ", "-")
-        for content_dir in CONTENT_DIRS:
-            path = self._wiki / content_dir / f"{slug}.md"
-            if not path.exists():
+        path = self._resolve_page(title)
+        if path is None:
+            return f"Page not found: {title}"
+        fm = _parse_frontmatter(path.read_text(encoding="utf-8"))
+        sources = fm.get("sources", [])
+        if not sources:
+            return f"No sources listed for {title}."
+
+        results = []
+        for src in sources:
+            resolved = self._resolve_source(src)
+            if not resolved:
+                results.append(f"### {src}\n(source file not found)")
                 continue
-            fm = _parse_frontmatter(path.read_text(encoding="utf-8"))
-            sources = fm.get("sources", [])
-            if not sources:
-                return f"No sources listed for {title}."
-
-            results = []
-            for src in sources:
-                resolved = self._resolve_source(src)
-                if not resolved:
-                    results.append(f"### {src}\n(source file not found)")
-                    continue
-                preview = _source_preview(resolved.read_text(encoding="utf-8"))
-                results.append(f"### {src}\n{preview}")
-            return "\n\n".join(results)
-
-        return f"Page not found: {title}"
+            preview = _source_preview(resolved.read_text(encoding="utf-8"))
+            results.append(f"### {src}\n{preview}")
+        return "\n\n".join(results)
 
     def find_related(self, title: str, depth: int = 2, limit: int = DEFAULT_RELATED_LIMIT) -> str:
         """
