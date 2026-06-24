@@ -57,6 +57,21 @@ def test_find_related_sees_nested_subdomain_pages(tmp_path: Path) -> None:
     assert "[[nested-topic|" in out  # resolved page, not a gap
 
 
+def test_find_related_caps_fan_out(tmp_path: Path) -> None:
+    tools = _make_tools(tmp_path)
+    # One hub linking to many neighbors; the cap must bound the listing.
+    targets = [f"n{i}" for i in range(60)]
+    _write_page(tools._wiki, "hub", targets)
+    for stem in targets:
+        _write_page(tools._wiki, stem, [])
+
+    out = tools.find_related("hub", depth=1, limit=10)
+
+    assert out.count("- [[") == 10
+    assert "of 60" in out
+    assert "raise limit" in out  # capped, not paged
+
+
 def test_graph_cache_detects_deletion(tmp_path: Path) -> None:
     tools = _make_tools(tmp_path)
     _write_page(tools._wiki, "a", ["b"])

@@ -71,9 +71,17 @@ def list_pages(
     domain: str | None = None,
     tag: str | None = None,
     content_type: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
 ) -> str:
-    """List all wiki pages, optionally filtered by domain, tag, or content type."""
-    return _get_tools().list_pages(domain=domain, tag=tag, content_type=content_type)
+    """List wiki pages, optionally filtered by domain, tag, or content type.
+
+    Returns at most `limit` pages starting at `offset`; when more match, the
+    result ends with a note giving the total and the next offset to page.
+    """
+    return _get_tools().list_pages(
+        domain=domain, tag=tag, content_type=content_type, limit=limit, offset=offset
+    )
 
 
 @mcp.tool()
@@ -97,9 +105,13 @@ def capture_note(content: str, title: str | None = None, topic: str | None = Non
 
 
 @mcp.tool()
-def get_sources(title: str) -> str:
-    """Retrieve the raw source documents that a wiki page was compiled from."""
-    return _get_tools().get_sources(title)
+def get_sources(title: str, limit: int = 10, offset: int = 0) -> str:
+    """Retrieve the raw source documents that a wiki page was compiled from.
+
+    Returns at most `limit` sources starting at `offset`; a page built from
+    many sources is paged, with a note giving the total and the next offset.
+    """
+    return _get_tools().get_sources(title, limit=limit, offset=offset)
 
 
 @mcp.tool()
@@ -113,9 +125,13 @@ def get_sources_summary(title: str) -> str:
 
 
 @mcp.tool()
-def find_related(title: str, depth: int = 2) -> str:
-    """Find pages related to a concept via wikilinks and backlink graph traversal."""
-    return _get_tools().find_related(title, depth)
+def find_related(title: str, depth: int = 2, limit: int = 50) -> str:
+    """Find pages related to a concept via wikilinks and backlink graph traversal.
+
+    Returns at most `limit` related pages; the reachable set grows quickly with
+    `depth`, so the result is capped with a note giving the total found.
+    """
+    return _get_tools().find_related(title, depth, limit=limit)
 
 
 def serve() -> None:

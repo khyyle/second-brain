@@ -22,6 +22,31 @@ logger = logging.getLogger(__name__)
 
 SYNC_MIN_INTERVAL_SECONDS = 1.0
 
+# Default caps on how much a single tool returns, so a large wiki can't flood
+# the caller's context window. Each capped tool also reports the total and how
+# to fetch more, so a partial result is never silently mistaken for the whole.
+DEFAULT_LIST_LIMIT = 50
+DEFAULT_RELATED_LIMIT = 50
+DEFAULT_SOURCES_LIMIT = 10
+MAX_INDEX_CHARS = 8000
+
+
+def _more_note(shown: int, total: int, *, offset: int = 0, pageable: bool = True) -> str:
+    """A trailing coverage line, or '' when the whole result is shown.
+
+    When ``pageable``, the note tells the caller the next ``offset`` to fetch;
+    otherwise it just reports how many more were withheld (for a capped result
+    with no stable paging order, like graph traversal).
+    """
+    if offset + shown >= total:
+        return "" if offset == 0 else f"\n\n(showing {offset + 1}-{offset + shown} of {total})"
+    if pageable:
+        return (
+            f"\n\n(showing {offset + 1}-{offset + shown} of {total}; "
+            f"pass offset={offset + shown} for more)"
+        )
+    return f"\n\n(showing {shown} of {total}; raise limit to see more)"
+
 
 def _source_preview(text: str) -> str:
     """Return a source's frontmatter block plus its first body paragraph.
@@ -307,6 +332,8 @@ class WikiTools:
         domain: str | None = None,
         tag: str | None = None,
         content_type: str | None = None,
+        limit: int = DEFAULT_LIST_LIMIT,
+        offset: int = 0,
     ) -> str:
         """
         List wiki pages with optional filters.
@@ -319,34 +346,56 @@ class WikiTools:
             Filter by tag.
         content_type: str | None
             Filter by content type.
+        limit: int
+            Maximum pages to return in this call.
+        offset: int
+            Number of leading matches to skip, for paging.
 
         Returns
         -------
         str
-            Newline-separated list of matching pages.
+            Newline-separated matching pages, with a coverage note when the
+            result is paged.
         """
         pages = self._search.list_pages(domain=domain, content_type=content_type, tag=tag)
-        if not pages:
+        total = len(pages)
+        if total == 0:
             return "No pages match the given filters."
 
-        lines = []
-        for p in pages:
-            lines.append(f"- {p['title']} ({p['content_type']}) — {p['path']}")
-        return "\n".join(lines)
+        offset = max(offset, 0)
+        window = pages[offset : offset + max(limit, 1)]
+        if not window:
+            return f"No pages at offset {offset} (total {total})."
+
+        lines = [f"- {p['title']} ({p['content_type']}) — {p['path']}" for p in window]
+        return "\n".join(lines) + _more_note(len(window), total, offset=offset)
 
     def read_index(self) -> str:
         """
         Read the master index view.
 
+        The index grows with the wiki, so it is truncated past a character
+        budget with a pointer to browse by filter instead of returning an
+        unbounded dump.
+
         Returns
         -------
         str
-            Index markdown content, or a prompt to run compilation.
+            Index markdown content (possibly truncated), or a prompt to run
+            compilation.
         """
         index_path = self._wiki / "_views" / "index.md"
-        if index_path.exists():
-            return index_path.read_text(encoding="utf-8")
-        return "Index not yet generated. Run compilation first."
+        if not index_path.exists():
+            return "Index not yet generated. Run compilation first."
+
+        text = index_path.read_text(encoding="utf-8")
+        if len(text) <= MAX_INDEX_CHARS:
+            return text
+        return (
+            text[:MAX_INDEX_CHARS]
+            + f"\n\n[index truncated at {MAX_INDEX_CHARS} of {len(text)} chars — "
+            "use list_pages(domain=...) or search to browse specific pages]"
+        )
 
     def capture_note(
         self,
@@ -434,7 +483,7 @@ class WikiTools:
         matches = list(self._raw.rglob(Path(src).name))
         return matches[0] if matches else None
 
-    def get_sources(self, title: str) -> str:
+    def get_sources(self, title: str, limit: int = DEFAULT_SOURCES_LIMIT, offset: int = 0) -> str:
         """
         Retrieve raw source documents for a wiki page.
 
@@ -442,12 +491,16 @@ class WikiTools:
         ----------
         title: str
             Page title or slug whose sources to look up.
+        limit: int
+            Maximum number of sources to return in this call.
+        offset: int
+            Number of leading sources to skip, for paging a many-source page.
 
         Returns
         -------
         str
-            Concatenated source previews (first 2000 chars each),
-            or a not-found / no-sources message.
+            Concatenated source previews (first 2000 chars each), with a
+            coverage note when paged, or a not-found / no-sources message.
         """
         slug = title.lower().replace(" ", "-")
         for content_dir in CONTENT_DIRS:
@@ -460,14 +513,16 @@ class WikiTools:
             if not sources:
                 return f"No sources listed for {title}."
 
+            offset = max(offset, 0)
+            window = sources[offset : offset + max(limit, 1)]
             results = []
-            for src in sources:
+            for src in window:
                 resolved = self._resolve_source(src)
                 if resolved:
                     results.append(f"### {src}\n{resolved.read_text(encoding='utf-8')[:2000]}")
                 else:
                     results.append(f"### {src}\n(source file not found)")
-            return "\n\n".join(results)
+            return "\n\n".join(results) + _more_note(len(window), len(sources), offset=offset)
 
         return f"Page not found: {title}"
 
@@ -511,7 +566,7 @@ class WikiTools:
 
         return f"Page not found: {title}"
 
-    def find_related(self, title: str, depth: int = 2) -> str:
+    def find_related(self, title: str, depth: int = 2, limit: int = DEFAULT_RELATED_LIMIT) -> str:
         """
         Find pages related to a concept via backlink graph traversal.
 
@@ -521,11 +576,15 @@ class WikiTools:
             Page title or slug to start from.
         depth: int
             Number of link hops to traverse.
+        limit: int
+            Maximum number of related pages to return; the reachable set can
+            grow combinatorially with depth, so it is capped.
 
         Returns
         -------
         str
-            Wikilink list of related pages, or a not-found message.
+            Wikilink list of related pages, with a count note when capped, or
+            a not-found message.
         """
         slug = title.lower().replace(" ", "-")
         pages, graph = self._cache.get()
@@ -549,12 +608,14 @@ class WikiTools:
         if not related:
             return f"No related pages found for {title}."
 
+        ordered = sorted(related)
+        window = ordered[: max(limit, 1)]
         lines = []
-        for stem in sorted(related):
+        for stem in window:
             page = pages.get(stem)
             if page:
                 t = page.frontmatter.get("title", stem)
                 lines.append(f"- [[{stem}|{t}]]")
             else:
                 lines.append(f"- [[{stem}]] (gap)")
-        return "\n".join(lines)
+        return "\n".join(lines) + _more_note(len(window), len(ordered), pageable=False)
