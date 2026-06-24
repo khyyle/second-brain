@@ -67,17 +67,24 @@ Only the build step is required to leave the machine. Everything needed to captu
 
 Everything sits under the vault root, `~/second-brain/`:
 
-- `drops/` — the capture queue. Files land here and are removed once ingested.
-- `raw/` — parsed Markdown, one tree per source lane. This is what the build step reads.
-- `wiki/` — the compiled knowledge base. Plain Markdown, tracked with git.
-- `inbox/` — copies of review-tier sources awaiting a manual decision.
-- `logs/` — run logs, including `pipeline.log` for detached runs.
-- `manifest.db` — ingestion state, the page cache, and triage decisions.
-- `search.db` — the keyword and embedding index, rebuilt from the wiki on demand.
+```
+~/second-brain/
+├── drops/          capture queue. Files land here and are removed once ingested
+├── raw/            parsed Markdown, one tree per source lane and read during compilation
+├── wiki/           the compiled knowledge base (plain Markdown, git-tracked)
+├── inbox/          copies of review-tier sources awaiting a manual decision
+├── logs/           run logs, including pipeline.log for detached runs
+├── manifest.db     ingestion state, page cache, and triage decisions
+├── search.db       keyword + embedding index, rebuilt from the wiki
+├── sources.json    GUI-managed list of watched folders
+└── (dotfiles)      run coordination with the menu bar app — see below
+```
+
+`manifest.db` and `search.db` are detailed in [wiki structure](wiki-structure.md#the-two-databases).
 
 A few dotfiles coordinate a run with the menu bar app: `.status.json` (a progress heartbeat), `.build-log.jsonl` (a created/updated history), `.stop` (a cooperative stop flag), and — once you preview clustering — `.clusters.json` (the proposed grouping) plus `.cluster-overrides.json` (your split/pop tweaks). The cluster files are disposable: a finished build consumes them, and re-previewing rewrites them from scratch.
 
-Configuration lives in the repository: `config/config.yaml` holds the pipeline settings, `.env` holds the Anthropic API key (owner-only, never committed), and `sources.json` under the vault holds GUI-managed watched folders.
+Configuration lives in the repository, not the vault: `config/config.yaml` holds the pipeline settings and `.env` holds the Anthropic API key (owner-only, never committed).
 
 ## Hashing and caching
 
