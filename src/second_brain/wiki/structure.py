@@ -16,6 +16,12 @@ logger = logging.getLogger(__name__)
 _WIKILINK_RE = re.compile(r"\[\[([^\]|]+)(?:\|[^\]]+)?\]\]")
 # DOTALL so .*? spans multi-line YAML blocks between --- fences
 _FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n", re.DOTALL)
+_FRONTMATTER_EDGE_FIELDS = {
+    "prerequisites": "prerequisite",
+    "related": "related",
+    "concepts_tested": "tests",
+    "concepts_used": "uses",
+}
 
 CONTENT_DIRS = ("concepts", "problems", "projects", "insights")
 
@@ -83,6 +89,21 @@ def _normalize_link_target(target: str) -> str:
     return target.strip()
 
 
+def _normalize_edge_target(target: str) -> str:
+    """Normalize a frontmatter or body link target to a comparable page stem.
+
+    Frontmatter values are either wikilinks (``"[[statistical-models]]"``) or
+    free text naming a not-yet-written fundamental (``"probability
+    distributions"``). Stripping the ``[[ ]]`` wrapper and lower-casing and
+    hyphenating free text collapse both onto the stem form pages use, so an
+    edge resolves to a page the moment one exists.
+    """
+    text = target.strip()
+    if text.startswith("[[") and text.endswith("]]"):
+        text = text[2:-2]
+    return _normalize_link_target(text).lower().replace(" ", "-")
+
+
 def _extract_wikilinks(content: str) -> list[str]:
     """Return all wikilink target stems found in the content, normalized."""
     return [stem for raw in _WIKILINK_RE.findall(content) if (stem := _normalize_link_target(raw))]
@@ -93,6 +114,44 @@ def _count_words(content: str) -> int:
     fm = _FRONTMATTER_RE.match(content)
     body = content[fm.end() :] if fm else content
     return len(body.split())
+
+
+def extract_typed_edges(content: str) -> list[tuple[str, str]]:
+    """Return ``(target_stem, kind)`` edges a page declares.
+
+    Typed edges come from the frontmatter relationship fields; body
+    ``[[wikilinks]]`` become ``mention`` edges. A target may be a gap (no page
+    of that stem exists yet) — resolving target to page is left to the caller.
+
+    Parameters:
+    -----------
+    content: str
+        a full compiled markdown page
+
+    Returns:
+    --------
+    edges: list[tuple[str, str]]
+        An array of edges outgoing from `content`, formatted as (`target`, `type`)
+    """
+    frontmatter = _parse_frontmatter(content)
+    edges: list[tuple[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+
+    for edge_field, kind in _FRONTMATTER_EDGE_FIELDS.items():
+        for item in frontmatter.get(edge_field) or []:
+            if not isinstance(item, str):
+                continue
+            target = _normalize_edge_target(item)
+            if target and (target, kind) not in seen:
+                seen.add((target, kind))
+                edges.append((target, kind))
+
+    body = content[m.end() :] if (m := _FRONTMATTER_RE.match(content)) else content
+    for target in _extract_wikilinks(body):
+        if (target, "mention") not in seen:
+            seen.add((target, "mention"))
+            edges.append((target, "mention"))
+    return edges
 
 
 def discover_all_pages(wiki_dir: Path) -> dict[str, WikiPage]:

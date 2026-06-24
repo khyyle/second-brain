@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from second_brain.config import SearchConfig
+from second_brain.wiki.structure import extract_typed_edges
 
 logger = logging.getLogger(__name__)
 
@@ -133,6 +134,16 @@ class SearchIndex:
                     embedded_hash TEXT
                 )
             """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS wiki_links (
+                    source TEXT NOT NULL,
+                    target TEXT NOT NULL,
+                    kind TEXT NOT NULL,
+                    PRIMARY KEY (source, target, kind)
+                )
+            """)
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_wiki_links_source ON wiki_links(source)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_wiki_links_target ON wiki_links(target)")
 
         if self._semantic:
             self._init_vec_table()
@@ -262,6 +273,13 @@ class SearchIndex:
                     content_hash,
                     mtime,
                 ),
+            )
+            # delete every edge this page declares
+            conn.execute("DELETE FROM wiki_links WHERE source = ?", (stem,))
+            # then insert its current set
+            conn.executemany(
+                "INSERT OR IGNORE INTO wiki_links (source, target, kind) VALUES (?, ?, ?)",
+                [(stem, target, kind) for target, kind in extract_typed_edges(content)],
             )
 
     def embed_pending(self, limit: int | None = None) -> int:
@@ -491,10 +509,12 @@ class SearchIndex:
         return [dict(r) for r in rows]
 
     def _delete_page(self, stem: str) -> None:
-        """Remove a page from the FTS, metadata, and vector tables."""
+        """Remove a page from the FTS, metadata, link, and vector tables"""
         with self._conn() as conn:
             conn.execute("DELETE FROM wiki_fts WHERE stem = ?", (stem,))
             conn.execute("DELETE FROM wiki_meta WHERE stem = ?", (stem,))
+            # only delete edges coming out of the page
+            conn.execute("DELETE FROM wiki_links WHERE source = ?", (stem,))
         if self._semantic:
             try:
                 with self._vec_conn() as conn:
@@ -608,6 +628,7 @@ class SearchIndex:
         with self._conn() as conn:
             conn.execute("DELETE FROM wiki_fts")
             conn.execute("DELETE FROM wiki_meta")
+            conn.execute("DELETE FROM wiki_links")
         if self._semantic:
             try:
                 with self._vec_conn() as conn:
