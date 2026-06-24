@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import logging
 import re
 from collections import defaultdict
@@ -214,18 +213,6 @@ def generate_index(wiki_dir: Path, pages: dict[str, WikiPage]) -> Path:
     return index_path
 
 
-def generate_backlinks(wiki_dir: Path, graph: LinkGraph) -> Path:
-    """Write backlinks.json mapping each page to its incoming links."""
-    backlinks = {target: sorted(sources) for target, sources in graph.backward.items() if sources}
-    out_path = wiki_dir / "_meta" / "backlinks.json"
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text(
-        json.dumps(backlinks, indent=2, sort_keys=True),
-        encoding="utf-8",
-    )
-    return out_path
-
-
 def detect_orphans(pages: dict[str, WikiPage], graph: LinkGraph) -> list[str]:
     """
     Detect pages with zero incoming links.
@@ -435,7 +422,6 @@ def rebuild_structure(wiki_dir: Path) -> dict:
     graph = build_link_graph(pages)
 
     generate_index(wiki_dir, pages)
-    generate_backlinks(wiki_dir, graph)
     orphans = detect_orphans(pages, graph)
     gaps = detect_gaps(pages, graph)
     generate_gaps_view(wiki_dir, gaps)

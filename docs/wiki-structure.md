@@ -10,8 +10,7 @@ The wiki is the `wiki/` subtree of the vault root. It contains plain Markdown, s
 wiki/
 ├── concepts/  problems/  projects/  insights/   content pages — the graph nodes
 ├── _meta/
-│   ├── topic_schema.yaml      content types, the domain vocabulary, and rules
-│   └── backlinks.json         generated incoming-link map
+│   └── topic_schema.yaml      content types, the domain vocabulary, and rules
 └── _views/                    generated browse aids
     ├── index.md  gaps.md  recently-updated.md
     └── domains/<domain>.md
@@ -37,8 +36,8 @@ A new wiki is initialized with **no domains**. Over time, the compilation agent 
 | ----------------------------------- | -------------------------------------------------- |
 | The page files (frontmatter + body) | `search.db` (keyword + embedding index)            |
 | `_meta/topic_schema.yaml`           | `_views/` (index, gaps, recently-updated, domains) |
-| `raw/` parsed sources               | `_meta/backlinks.json`                             |
-| `manifest.db` (ingestion state)     | the in-memory link graph the MCP traverses         |
+| `raw/` parsed sources               | the in-memory link graph the MCP traverses         |
+| `manifest.db` (ingestion state)     | —                                                  |
 
 
 Everything in the right column can be regenerated from the left. Deleting it costs only the time to rebuild.
