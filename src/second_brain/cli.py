@@ -647,7 +647,7 @@ def health(ctx: click.Context) -> None:
     """Run health checks on the wiki."""
     config: Config = ctx.obj["config"]
 
-    from second_brain.compilation.health import run_health_check
+    from second_brain.wiki.health import run_health_check
 
     report = run_health_check(config.wiki_dir, config.raw_dir)
     click.echo(report.summary())

@@ -10,7 +10,7 @@ import fnmatch
 import re
 from pathlib import Path
 
-from second_brain.compilation.structure import CONTENT_DIRS
+from second_brain.wiki.structure import CONTENT_DIRS
 
 COMPILATION_SYSTEM_PROMPT = """\
 You are a knowledge-base compilation agent. Your job is to read raw parsed \

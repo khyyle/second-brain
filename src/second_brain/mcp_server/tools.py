@@ -8,7 +8,8 @@ import time
 from datetime import UTC, datetime
 from pathlib import Path
 
-from second_brain.compilation.structure import (
+from second_brain.mcp_server.search import SearchIndex
+from second_brain.wiki.structure import (
     CONTENT_DIRS,
     LinkGraph,
     WikiPage,
@@ -16,7 +17,6 @@ from second_brain.compilation.structure import (
     build_link_graph,
     discover_all_pages,
 )
-from second_brain.mcp_server.search import SearchIndex
 
 logger = logging.getLogger(__name__)
 

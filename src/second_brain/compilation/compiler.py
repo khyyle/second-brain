@@ -19,10 +19,10 @@ from second_brain.compilation.agent import (
     build_source_block,
     compact_history,
 )
-from second_brain.compilation.structure import rebuild_structure
 from second_brain.config import Config
 from second_brain.ingestion.manifest import DEFERRED_DECISION, Manifest
 from second_brain.llm_providers import ProviderProfile, resolve_profile
+from second_brain.wiki.structure import rebuild_structure
 
 logger = logging.getLogger(__name__)
 
@@ -265,7 +265,7 @@ def run_compilation(
     wiki_dir = config.wiki_dir
     raw_dir = config.raw_dir
 
-    from second_brain.compilation.schema import load_schema, write_default_schema
+    from second_brain.wiki.schema import load_schema, write_default_schema
 
     if not (wiki_dir / "_meta" / "topic_schema.yaml").exists():
         write_default_schema(wiki_dir)

@@ -6,7 +6,7 @@ import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from second_brain.compilation.structure import (
+from second_brain.wiki.structure import (
     build_link_graph,
     detect_gaps,
     detect_orphans,

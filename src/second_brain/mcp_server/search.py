@@ -531,7 +531,7 @@ class SearchIndex:
         int
             Number of pages (re)indexed during this sync.
         """
-        from second_brain.compilation.structure import CONTENT_DIRS, _parse_frontmatter
+        from second_brain.wiki.structure import CONTENT_DIRS, _parse_frontmatter
 
         with self._conn() as conn:
             rows = conn.execute("SELECT stem, content_hash, mtime FROM wiki_meta").fetchall()
@@ -603,7 +603,7 @@ class SearchIndex:
         int
             Number of pages indexed.
         """
-        from second_brain.compilation.structure import CONTENT_DIRS, _parse_frontmatter
+        from second_brain.wiki.structure import CONTENT_DIRS, _parse_frontmatter
 
         with self._conn() as conn:
             conn.execute("DELETE FROM wiki_fts")

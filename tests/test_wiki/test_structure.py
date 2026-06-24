@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from second_brain.compilation.structure import (
+from second_brain.wiki.structure import (
     _extract_wikilinks,
     _normalize_link_target,
     build_link_graph,
