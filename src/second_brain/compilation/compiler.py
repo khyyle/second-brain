@@ -384,10 +384,13 @@ def run_compilation(
                         progress=(index, total),
                     )
                 except Exception:
-                    # A transient failure (rate limit, network) on one group
-                    # shouldn't abort the whole batch. Leave it uncompiled so
-                    # the next build retries it.
-                    logger.exception("Compile failed for %s — skipping", ", ".join(unit))
+                    # A transient failure (rate limit, network, an API call
+                    # killed by the machine sleeping) shouldn't abort the batch.
+                    # Discard the group's partial, uncommitted pages so an
+                    # interrupted build leaves nothing dangling, and leave it
+                    # uncompiled for the next build to redo cleanly.
+                    logger.exception("Compile failed for %s — rolling back", ", ".join(unit))
+                    _git_restore(wiki_dir)
                     continue
                 if stop_requested(config.data_dir):
                     # Stopped mid-group: discard its partial, uncommitted
@@ -623,9 +626,6 @@ def _run_agent(
 def _git_restore(wiki_dir: Path) -> None:
     """
     Discard uncommitted wiki changes, restoring to the last commit.
-
-    Used when a build is stopped mid-source so the partial pages it wrote
-    don't linger. Best-effort: failures are logged, not raised.
 
     Parameters
     ----------
