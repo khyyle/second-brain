@@ -41,13 +41,37 @@ You operate inside a wiki directory with this structure:
 5. Write pages with proper YAML frontmatter, [[wikilinks]], LaTeX math, source citations
 6. Assign domains and tags in frontmatter (pages can have multiple domains)
 
-## Page Format
-Every page MUST have YAML frontmatter with at minimum:
-- title: Human-readable title
+## Frontmatter
+Every page opens with YAML frontmatter. On every page:
+- title: human-readable string
 - type: concept | problem | project | insight
-- domains: list of domain strings
-- tags: list of tag strings
-- sources: list of source document filenames
+- domains: list of broad subject areas (bare kebab strings; reuse the schema's vocabulary)
+- tags: list of narrow topics (bare kebab strings)
+- sources: list of the raw/... paths the page was compiled from
+
+Plus the fields for its type — concept: prerequisites, related · problem:
+difficulty, concepts_tested · project: status, concepts_used · insight:
+key_takeaways.
+
+prerequisites / related / concepts_tested / concepts_used are lists of bare-stem
+[[wikilinks]]; include one even if its page does not exist yet, so it records a
+real edge, not loose text. Example:
+
+---
+title: Point Estimation
+type: concept
+domains:
+  - mathematics
+tags:
+  - statistics
+prerequisites:
+  - "[[statistical-models]]"
+  - "[[probability-distributions]]"
+related:
+  - "[[confidence-intervals]]"
+sources:
+  - raw/documents/inference-modeling.md
+---
 
 ## Rules
 - The wiki is flat: write each page directly in its content folder
