@@ -38,14 +38,13 @@ You operate inside a wiki directory with this structure:
    b. Does a related page exist? → update it
    c. Is this new? → create a new page in the right folder
    d. Is a page too long (>4000 words)? → split it
-5. Write pages with proper YAML frontmatter, [[wikilinks]], LaTeX math, source citations
-6. Assign domains and tags in frontmatter (pages can have multiple domains)
+5. Write or update each page per the Frontmatter and Rules below
 
 ## Frontmatter
 Every page opens with YAML frontmatter. On every page:
 - title: human-readable string
 - type: concept | problem | project | insight
-- domains: list of broad subject areas (bare kebab strings; reuse the schema's vocabulary)
+- domains: list of broad subject areas (bare kebab strings)
 - tags: list of narrow topics (bare kebab strings)
 - sources: list of the raw/... paths the page was compiled from
 
@@ -87,7 +86,7 @@ sources:
 - Domains are broad subject areas (e.g. mathematics, finance, biology). Reuse an
   existing one from the schema when it fits; add a new domain only for a genuinely
   distinct broad area, not a narrow topic (that's a tag or its own page).
-- Do NOT rebuild index.md, backlinks, or structural metadata — that runs separately
+- Do NOT rebuild index.md or structural metadata — that runs separately
 
 ## Quality Standards
 - Pages should be 500-3000 words
@@ -105,59 +104,42 @@ updated and end your turn.
 """
 
 
-def build_compilation_prompt(
-    new_sources: list[str],
-    wiki_dir: Path,
-) -> str:
+def build_compilation_prompt(new_sources: list[str]) -> str:
     """
-    Build the per-run instructions for the agent.
-
-    The source documents themselves are presented separately (see
-    :func:`build_source_block`); this is the instruction preamble that names
-    them and lays out the steps.
+    Build the per-run task message, detailing sources and start sequence.
 
     Parameters:
     -----------
     new_sources: list[str]
         Relative paths of raw source documents to compile.
-    wiki_dir: Path
-        Root directory of the wiki (used to check for schema).
 
     Returns:
     --------
     str
-        Formatted instruction string for the compilation agent.
+        The per-run task message for the compilation agent.
     """
+    # sources are presented separately, see :func:`build_source_block`
     source_list = "\n".join(f"- raw/{s}" for s in new_sources)
-
-    schema_path = wiki_dir / "_meta" / "topic_schema.yaml"
-    schema_note = ""
-    if schema_path.exists():
-        schema_note = "\nThe schema file is at: _meta/topic_schema.yaml — read it first.\n"
 
     return f"""\
 Compile these source documents into the wiki (paths under raw/, full text provided below):
 
 {source_list}
 
-{schema_note}
-Instructions:
+To start:
 1. Read _meta/topic_schema.yaml
-2. Search existing wiki pages for related content
-3. Create or update wiki pages from the sources provided below
-4. Ensure all pages have proper frontmatter, [[wikilinks]], and source citations
+2. Search existing pages so you update rather than duplicate
+3. Create or update pages from the sources
 
-Re-read any source section with read_file/grep_files (raw/ paths) only if you
-need to relocate a specific passage; their full text is already provided."""
+Re-read a source with read_file/grep_files (raw/ paths) only to relocate a
+passage; their full text is already provided."""
 
 
 def build_source_block(sources: list[str], raw_dir: Path) -> str:
     """Concatenate the raw source documents for inline presentation.
 
     Each source is read in full and labeled with its raw/ path so the agent
-    can attribute and cite it. Presenting the source inline (rather than
-    making the agent fetch it) lets the orchestrator cache it as a stable
-    prefix, so re-sending it each turn is cheap.
+    can attribute and cite it.
 
     Parameters
     ----------

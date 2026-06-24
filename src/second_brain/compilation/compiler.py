@@ -483,7 +483,7 @@ def _run_agent(
 
     # Present the source content inline so it can be cached as a stable prefix;
     # the agent then synthesizes rather than spending turns re-reading it.
-    instructions = build_compilation_prompt(sources, wiki_dir)
+    instructions = build_compilation_prompt(sources)
     source_block = build_source_block(sources, raw_dir)
     user_content: list[dict] = [
         {"type": "text", "text": instructions},
