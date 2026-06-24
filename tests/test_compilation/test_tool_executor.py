@@ -43,10 +43,10 @@ def test_write_allows_nested_meta_path(tmp_path: Path) -> None:
     # _meta is not a content bucket, so the flat-page rule does not apply.
     executor, wiki, _raw = _executor(tmp_path)
 
-    out = executor.execute("write_file", {"path": "_meta/schema_proposals.yaml", "content": "x"})
+    out = executor.execute("write_file", {"path": "_meta/topic_schema.yaml", "content": "x"})
 
     assert out.startswith("Wrote")
-    assert (wiki / "_meta" / "schema_proposals.yaml").exists()
+    assert (wiki / "_meta" / "topic_schema.yaml").exists()
 
 
 def test_read_file_pages_long_source(tmp_path: Path) -> None:

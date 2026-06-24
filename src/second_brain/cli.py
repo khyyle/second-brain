@@ -355,6 +355,10 @@ def compile(ctx: click.Context, full: bool, dry_run: bool) -> None:
     click.echo(f"Total links: {stats['total_links']}")
     click.echo(f"Orphans: {stats['orphans']}")
     click.echo(f"Gaps: {stats['gaps']}")
+    domains = stats.get("domains") or {}
+    if domains:
+        summary = ", ".join(f"{name} ({count})" for name, count in sorted(domains.items()))
+        click.echo(f"Domains: {summary}")
 
 
 @main.command(name="preview-clusters")

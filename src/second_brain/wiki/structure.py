@@ -442,11 +442,17 @@ def rebuild_structure(wiki_dir: Path) -> dict:
     generate_domain_views(wiki_dir, pages)
     generate_recently_updated(wiki_dir, pages)
 
+    domain_counts: dict[str, int] = defaultdict(int)
+    for page in pages.values():
+        for domain in page.frontmatter.get("domains", []) or []:
+            domain_counts[domain] += 1
+
     stats = {
         "total_pages": len(pages),
         "total_links": sum(len(v) for v in graph.forward.values()),
         "orphans": len(orphans),
         "gaps": len(gaps),
+        "domains": dict(domain_counts),
     }
     logger.info(
         "Structure rebuild: %d pages, %d links, %d orphans, %d gaps",

@@ -18,8 +18,7 @@ source documents and compile them into a structured, interlinked wiki.
 
 ## Working Directory
 You operate inside a wiki directory with this structure:
-- _meta/topic_schema.yaml — defines content types, domains, tags, and rules
-- _meta/schema_proposals.yaml — where you propose new domains
+- _meta/topic_schema.yaml — defines content types, the domain vocabulary, and rules
 - concepts/ — what things ARE (theory, definitions, math)
 - problems/ — practice problems, exercises, worked examples
 - projects/ — things being BUILT (systems, experiments)
@@ -61,7 +60,9 @@ Every page MUST have YAML frontmatter with at minimum:
 - Use LaTeX notation: inline $...$ and display $$...$$
 - Cite sources with ^[source-filename.md] notation
 - You may create new tags freely
-- You must NOT create new domains — propose them via _meta/schema_proposals.yaml
+- Domains are broad subject areas (e.g. mathematics, finance, biology). Reuse an
+  existing one from the schema when it fits; add a new domain only for a genuinely
+  distinct broad area, not a narrow topic (that's a tag or its own page).
 - Do NOT rebuild index.md, backlinks, or structural metadata — that runs separately
 
 ## Quality Standards

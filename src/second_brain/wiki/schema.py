@@ -1,4 +1,4 @@
-"""Topic schema management — load, validate, and propose changes."""
+"""Topic schema management — the wiki's content types and domain vocabulary."""
 
 from __future__ import annotations
 
@@ -9,6 +9,12 @@ from pathlib import Path
 import yaml
 
 logger = logging.getLogger(__name__)
+
+_SCHEMA_HEADER = (
+    "# Topic Schema — the compilation agent MUST read this before writing.\n"
+    "# Domains live in frontmatter metadata, NOT in folder paths.\n"
+    "# Folders are typed buckets (concepts/, problems/, projects/, insights/).\n\n"
+)
 
 DEFAULT_SCHEMA: dict = {
     "content_types": {
@@ -64,62 +70,8 @@ DEFAULT_SCHEMA: dict = {
             ],
         },
     },
-    "domains": {
-        "mathematics": {
-            "description": "Pure mathematical foundations",
-            "common_tags": [
-                "linear-algebra",
-                "calculus",
-                "probability",
-                "optimization",
-                "discrete-math",
-                "differential-equations",
-                "number-theory",
-                "real-analysis",
-                "abstract-algebra",
-            ],
-        },
-        "physics": {
-            "description": "Physical sciences",
-            "common_tags": [
-                "classical-mechanics",
-                "thermodynamics",
-                "electromagnetism",
-                "quantum-mechanics",
-                "statistical-mechanics",
-                "optics",
-            ],
-        },
-        "computer-science": {
-            "description": "CS coursework and applied CS",
-            "common_tags": [
-                "algorithms",
-                "data-structures",
-                "machine-learning",
-                "deep-learning",
-                "systems",
-                "programming",
-                "nlp",
-                "computer-vision",
-            ],
-        },
-        "chemistry": {
-            "description": "Chemistry",
-            "common_tags": ["general", "organic", "physical", "spectroscopy"],
-        },
-        "engineering": {
-            "description": "Engineering courses",
-            "common_tags": ["electrical", "environmental", "bioengineering", "signals"],
-        },
-        "economics": {
-            "description": "Economics and finance",
-            "common_tags": ["microeconomics", "game-theory", "finance", "market-design"],
-        },
-        "humanities": {
-            "description": "Humanities",
-            "common_tags": ["writing", "history", "philosophy", "rhetoric"],
-        },
-    },
+    # Empty by default so the agent grows this vocab from the user's content over time
+    "domains": {},
     "page_rules": {
         "target_length": "500-3000 words",
         "split_threshold": 4000,
@@ -129,7 +81,7 @@ DEFAULT_SCHEMA: dict = {
     },
     "agent_permissions": {
         "can_create_tags": True,
-        "can_create_domains": False,
+        "can_create_domains": True,
         "can_split_pages": True,
         "can_merge_pages": True,
         "can_retag": True,
@@ -235,46 +187,48 @@ def write_default_schema(wiki_dir: Path) -> Path:
     """
     schema_path = wiki_dir / "_meta" / "topic_schema.yaml"
     schema_path.parent.mkdir(parents=True, exist_ok=True)
-
-    header = (
-        "# Topic Schema — the compilation agent MUST read this before writing.\n"
-        "# Domains live in frontmatter metadata, NOT in folder paths.\n"
-        "# Folders are typed buckets (concepts/, problems/, projects/, insights/).\n\n"
-    )
     schema_path.write_text(
-        header + yaml.dump(DEFAULT_SCHEMA, default_flow_style=False, sort_keys=False),
+        _SCHEMA_HEADER + yaml.dump(DEFAULT_SCHEMA, default_flow_style=False, sort_keys=False),
         encoding="utf-8",
     )
     logger.info("Wrote default schema to %s", schema_path)
     return schema_path
 
 
-def append_schema_proposal(wiki_dir: Path, proposal: dict) -> None:
-    """
-    Append a schema change proposal for human review.
+def register_domains(wiki_dir: Path, domains: set[str]) -> list[str]:
+    """Add domains the agent has used to the schema's vocabulary.
 
-    The agent cannot create new domains directly -- it writes
-    proposals here for the user to approve and merge into
-    ``topic_schema.yaml``.
+    The agent creates domains as it compiles; recording the ones it used keeps
+    ``topic_schema.yaml`` the canonical list it reuses on later runs (and that
+    the GUI edits), so the vocabulary converges instead of fragmenting. Only
+    writes when there is something new to add.
 
     Parameters
     ----------
     wiki_dir: Path
         Root directory of the wiki.
-    proposal: dict
-        Proposal payload; should include a ``"description"`` key.
-    """
-    proposals_path = wiki_dir / "_meta" / "schema_proposals.yaml"
-    existing: list = []
-    if proposals_path.exists():
-        with open(proposals_path) as f:
-            existing = yaml.safe_load(f) or []
-        if not isinstance(existing, list):
-            existing = [existing]
+    domains: set[str]
+        Domain names found in page frontmatter.
 
-    existing.append(proposal)
-    proposals_path.write_text(
-        yaml.dump(existing, default_flow_style=False, sort_keys=False),
+    Returns
+    -------
+    list[str]
+        The newly registered domain names.
+    """
+    schema_path = wiki_dir / "_meta" / "topic_schema.yaml"
+    if not schema_path.exists():
+        return []
+    raw = yaml.safe_load(schema_path.read_text(encoding="utf-8")) or {}
+    existing = raw.get("domains") or {}
+    new = sorted(name for name in domains if name and name not in existing)
+    if not new:
+        return []
+    for name in new:
+        existing[name] = {"description": "", "common_tags": []}
+    raw["domains"] = existing
+    schema_path.write_text(
+        _SCHEMA_HEADER + yaml.dump(raw, default_flow_style=False, sort_keys=False),
         encoding="utf-8",
     )
-    logger.info("Appended schema proposal: %s", proposal.get("description", ""))
+    logger.info("Registered %d new domain(s): %s", len(new), ", ".join(new))
+    return new

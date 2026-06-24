@@ -265,12 +265,10 @@ def run_compilation(
     wiki_dir = config.wiki_dir
     raw_dir = config.raw_dir
 
-    from second_brain.wiki.schema import load_schema, write_default_schema
+    from second_brain.wiki.schema import write_default_schema
 
     if not (wiki_dir / "_meta" / "topic_schema.yaml").exists():
         write_default_schema(wiki_dir)
-
-    load_schema(wiki_dir)
 
     if force_full:
         new_sources = sorted(str(f.relative_to(raw_dir)) for f in raw_dir.rglob("*.md"))
@@ -424,6 +422,11 @@ def run_compilation(
     stats = rebuild_structure(wiki_dir)
 
     if not dry_run:
+        # Record any domains the agent introduced this build so the schema stays
+        # the canonical vocabulary it reuses next time.
+        from second_brain.wiki.schema import register_domains
+
+        register_domains(wiki_dir, set(stats.get("domains", {})))
         _git_commit(wiki_dir)
 
     return {**stats, "sources_compiled": compiled_count, "sources_deferred": deferred_count}
