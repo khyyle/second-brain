@@ -47,6 +47,16 @@ def test_find_related_traverses_both_directions(tmp_path: Path) -> None:
     assert "[[c" in out
 
 
+def test_find_related_sees_nested_subdomain_pages(tmp_path: Path) -> None:
+    tools = _make_tools(tmp_path)
+    _write_page(tools._wiki, "a", ["nested-topic"])
+    # A page filed under a subdomain directory must still join the graph.
+    _write_page(tools._wiki, "nested-topic", [], content_dir="concepts/mathematics")
+
+    out = tools.find_related("a", depth=1)
+    assert "[[nested-topic|" in out  # resolved page, not a gap
+
+
 def test_graph_cache_detects_deletion(tmp_path: Path) -> None:
     tools = _make_tools(tmp_path)
     _write_page(tools._wiki, "a", ["b"])

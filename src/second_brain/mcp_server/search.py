@@ -544,7 +544,7 @@ class SearchIndex:
             dir_path = wiki_dir / content_dir
             if not dir_path.exists():
                 continue
-            for md_file in dir_path.glob("*.md"):
+            for md_file in dir_path.rglob("*.md"):
                 stem = md_file.stem
                 seen_stems.add(stem)
                 file_mtime = md_file.stat().st_mtime
@@ -568,7 +568,7 @@ class SearchIndex:
                     domains=fm.get("domains", []),
                     tags=fm.get("tags", []),
                     word_count=len(content.split()),
-                    path=f"{content_dir}/{md_file.name}",
+                    path=str(md_file.relative_to(wiki_dir)),
                     mtime=file_mtime,
                 )
                 indexed_count += 1
@@ -620,7 +620,7 @@ class SearchIndex:
             dir_path = wiki_dir / content_dir
             if not dir_path.exists():
                 continue
-            for md_file in dir_path.glob("*.md"):
+            for md_file in dir_path.rglob("*.md"):
                 content = md_file.read_text(encoding="utf-8")
                 fm = _parse_frontmatter(content)
                 self.index_page(
@@ -631,7 +631,7 @@ class SearchIndex:
                     domains=fm.get("domains", []),
                     tags=fm.get("tags", []),
                     word_count=len(content.split()),
-                    path=f"{content_dir}/{md_file.name}",
+                    path=str(md_file.relative_to(wiki_dir)),
                     mtime=md_file.stat().st_mtime,
                 )
                 count += 1

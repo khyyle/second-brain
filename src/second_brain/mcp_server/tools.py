@@ -93,7 +93,7 @@ class _GraphCache:
             if not d.exists():
                 continue
             latest = max(latest, d.stat().st_mtime)
-            for f in d.glob("*.md"):
+            for f in d.rglob("*.md"):
                 latest = max(latest, f.stat().st_mtime)
         return latest
 
@@ -207,7 +207,7 @@ class WikiTools:
             if not dir_path.exists():
                 continue
             latest = max(latest, dir_path.stat().st_mtime)
-            for md_file in dir_path.glob("*.md"):
+            for md_file in dir_path.rglob("*.md"):
                 latest = max(latest, md_file.stat().st_mtime)
         return latest
 
