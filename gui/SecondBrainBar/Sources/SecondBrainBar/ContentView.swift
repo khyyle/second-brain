@@ -6,6 +6,7 @@ import SwiftUI
 private enum Tab: String, CaseIterable, Identifiable {
     case ingest = "Ingest"
     case build = "Build"
+    case domains = "Domains"
     case chats = "Chats"
     var id: String { rawValue }
 }
@@ -152,9 +153,10 @@ struct ContentView: View {
         ScrollView {
             VStack(spacing: 1) {
                 switch tab {
-                case .ingest: IngestTab(config: config)
-                case .chats:  ChatsTab(config: config)
-                case .build:  BuildTab(config: config)
+                case .ingest:  IngestTab(config: config)
+                case .build:   BuildTab(config: config)
+                case .domains: DomainsTab(config: config)
+                case .chats:   ChatsTab(config: config)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .topLeading)

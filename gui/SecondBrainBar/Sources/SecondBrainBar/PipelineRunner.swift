@@ -114,6 +114,24 @@ enum PipelineRunner {
         }
     }
 
+    /// Run a management subcommand and capture its standard output, or nil if
+    /// it failed to launch or exited non-zero. Call off the main thread.
+    static func runManagedCapturing(repoDir: URL, command: String) -> String? {
+        let process = managedProcess(repoDir: repoDir, command: command)
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = nil  // diagnostic logs land here; ignore them
+        do {
+            try process.run()
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            process.waitUntilExit()
+            guard process.terminationStatus == 0 else { return nil }
+            return String(decoding: data, as: UTF8.self)
+        } catch {
+            return nil
+        }
+    }
+
     /// Health of the local Ollama dependency, as reported by `doctor --json`.
     struct OllamaHealth {
         let healthy: Bool

@@ -93,6 +93,20 @@ def _require_ollama(config: Config) -> None:
         raise click.ClickException(status.message())
 
 
+def _sync_search_index(config: Config) -> None:
+    """Reconcile the search index with the wiki after an edit.
+
+    Domain edits change page frontmatter, so the keyword index's domain column
+    goes stale until reconciled. ``sync_from_wiki`` only touches the pages whose
+    content actually changed.
+    """
+    if not config.wiki_dir.exists():
+        return
+    from second_brain.mcp_server.search import SearchIndex
+
+    SearchIndex(config.search_db_path, config.search).sync_from_wiki(config.wiki_dir)
+
+
 @click.group()
 @click.option("--config", "config_path", default=None, help="Path to config.yaml")
 @click.option("-v", "--verbose", is_flag=True, help="Enable debug logging")
@@ -515,6 +529,81 @@ def triage_set(ctx: click.Context, raw_path: str, decision: str) -> None:
         raw_path, decision, confidence=1.0, reason="manual override"
     )
     click.echo(f"Set {raw_path} -> {decision}")
+
+
+@main.group()
+def domain() -> None:
+    """View and edit the wiki's domain vocabulary."""
+    pass
+
+
+@domain.command(name="list")
+@click.option("--json", "as_json", is_flag=True, help="Emit machine-readable JSON")
+@click.pass_context
+def domain_list(ctx: click.Context, as_json: bool) -> None:
+    """List domains with their page counts."""
+    config: Config = ctx.obj["config"]
+    from second_brain.wiki.domain_ops import list_domains
+
+    domains = list_domains(config.wiki_dir)
+    if as_json:
+        payload = [
+            {"name": d.name, "count": d.page_count, "in_schema": d.in_schema} for d in domains
+        ]
+        click.echo(json.dumps(payload))
+        return
+    if not domains:
+        click.echo("No domains yet.")
+        return
+    for d in domains:
+        click.echo(f"  {d.name} ({d.page_count})")
+
+
+@domain.command(name="rename")
+@click.argument("old")
+@click.argument("new")
+@click.pass_context
+def domain_rename(ctx: click.Context, old: str, new: str) -> None:
+    """Rename domain OLD to NEW across every page and the schema."""
+    config: Config = ctx.obj["config"]
+    from second_brain.wiki.domain_ops import rename_domain
+
+    try:
+        changed = rename_domain(config.wiki_dir, old, new)
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
+    _sync_search_index(config)
+    click.echo(f"Renamed '{old}' to '{new}' across {changed} page(s)")
+
+
+@domain.command(name="merge")
+@click.argument("dest")
+@click.argument("sources", nargs=-1, required=True)
+@click.pass_context
+def domain_merge(ctx: click.Context, dest: str, sources: tuple[str, ...]) -> None:
+    """Merge one or more SOURCES domains into DEST."""
+    config: Config = ctx.obj["config"]
+    from second_brain.wiki.domain_ops import merge_domains
+
+    try:
+        changed = merge_domains(config.wiki_dir, list(sources), dest)
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
+    _sync_search_index(config)
+    click.echo(f"Merged {', '.join(sources)} into '{dest}' across {changed} page(s)")
+
+
+@domain.command(name="delete")
+@click.argument("name")
+@click.pass_context
+def domain_delete(ctx: click.Context, name: str) -> None:
+    """Remove domain NAME from every page and the schema."""
+    config: Config = ctx.obj["config"]
+    from second_brain.wiki.domain_ops import delete_domain
+
+    changed = delete_domain(config.wiki_dir, name)
+    _sync_search_index(config)
+    click.echo(f"Deleted '{name}' from {changed} page(s)")
 
 
 @main.group()

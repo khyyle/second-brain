@@ -232,3 +232,43 @@ def register_domains(wiki_dir: Path, domains: set[str]) -> list[str]:
     )
     logger.info("Registered %d new domain(s): %s", len(new), ", ".join(new))
     return new
+
+
+def remap_schema_domains(wiki_dir: Path, mapping: dict[str, str | None]) -> None:
+    """Rename, merge, or delete domain keys in the schema vocabulary.
+
+    ``mapping`` maps an existing domain name to its new name, or to ``None`` to
+    delete it; several sources mapping to one target express a merge. A target
+    that does not yet exist is created so the vocabulary stays in sync with page
+    frontmatter after a bulk edit. A renamed/merged source keeps the target's
+    own metadata when the target already existed, otherwise carries the source's.
+
+    Parameters
+    ----------
+    wiki_dir: Path
+        Root directory of the wiki.
+    mapping: dict[str, str | None]
+        Old domain name to new name, or ``None`` to delete.
+    """
+    schema_path = wiki_dir / "_meta" / "topic_schema.yaml"
+    if not schema_path.exists():
+        return
+    raw = yaml.safe_load(schema_path.read_text(encoding="utf-8")) or {}
+    domains = raw.get("domains") or {}
+
+    result: dict = {}
+    for name, meta in domains.items():
+        if name in mapping and mapping[name] != name:
+            continue  # merged, renamed, or deleted away
+        result[name] = meta
+    for source, target in mapping.items():
+        if target is not None and target not in result:
+            result[target] = domains.get(source) or {"description": "", "common_tags": []}
+
+    if result == domains:
+        return
+    raw["domains"] = result
+    schema_path.write_text(
+        _SCHEMA_HEADER + yaml.dump(raw, default_flow_style=False, sort_keys=False),
+        encoding="utf-8",
+    )
