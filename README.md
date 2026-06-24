@@ -99,6 +99,7 @@ For deeper dives:
 - [Using the app](docs/using-the-app.md) — the menu bar app, day to day.
 - [Command line](docs/cli.md) — running the pipeline from the terminal.
 - [Architecture](docs/architecture.md) — how the pipeline works and where data lives on disk.
+- [Wiki structure](docs/wiki-structure.md) — the vault layout, the page graph, and what is source vs. derived.
 - [Data lifecycle and deletion](docs/lifecycle.md) — hashing, caching, and what each kind of delete removes.
 
 ## License
