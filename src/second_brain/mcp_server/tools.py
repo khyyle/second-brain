@@ -78,6 +78,10 @@ class _GraphCache:
         """
         Get the most recent mtime across all wiki content dirs.
 
+        Includes each content directory's own mtime, not just its files', so a
+        deletion is detected: removing a page bumps the directory's mtime but
+        may leave the max file mtime unchanged.
+
         Returns
         -------
         float
@@ -88,6 +92,7 @@ class _GraphCache:
             d = self._wiki_dir / content_dir
             if not d.exists():
                 continue
+            latest = max(latest, d.stat().st_mtime)
             for f in d.glob("*.md"):
                 latest = max(latest, f.stat().st_mtime)
         return latest
