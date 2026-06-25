@@ -471,6 +471,48 @@ class SearchIndex:
                 )
         return hits
 
+    def rank_by_similarity(self, source: str, candidates: set[str]) -> list[str]:
+        """
+        Order ``candidates`` by embedding similarity to ``source``, closest first.
+
+        Only candidates that already have an embedding are returned, so the
+        caller can fall back to its own ordering for the rest. Returns an empty
+        list when Ollama is off or ``source`` itself is unembedded
+        (e.g. compiled but not yet embedded), in which case no ranking is possible.
+
+        Parameters
+        ----------
+        source: str
+            Stem whose embedding the candidates are measured against.
+        candidates: set[str]
+            Stems to order.
+
+        Returns
+        -------
+        list[str]
+            The embedded subset of ``candidates``, ascending by cosine distance
+            to ``source``.
+        """
+        if not self._semantic or not candidates:
+            return []
+        placeholders = ",".join("?" * len(candidates))
+        try:
+            with self._vec_conn() as conn:
+                source_row = conn.execute(
+                    "SELECT embedding FROM wiki_vec WHERE stem = ?", (source,)
+                ).fetchone()
+                if source_row is None:
+                    return []
+                rows = conn.execute(
+                    f"SELECT stem FROM wiki_vec WHERE stem IN ({placeholders}) "
+                    "ORDER BY vec_distance_cosine(embedding, ?)",
+                    [*candidates, source_row["embedding"]],
+                ).fetchall()
+        except sqlite3.Error as exc:
+            logger.debug("Similarity ranking unavailable: %s", exc)
+            return []
+        return [row["stem"] for row in rows]
+
     @staticmethod
     def _kind_filter(kinds: tuple[str, ...] | None) -> tuple[str, list[str]]:
         """
@@ -671,6 +713,50 @@ class SearchIndex:
             rows = conn.execute(query, params).fetchall()
 
         return [dict(r) for r in rows]
+
+    def domain_counts(self) -> dict[str, int]:
+        """
+        Count how many pages declare each domain.
+
+        Returns
+        -------
+        dict[str, int]
+            ``{domain: page_count}`` over every indexed page.
+        """
+        counts: dict[str, int] = {}
+        with self._conn() as conn:
+            rows = conn.execute("SELECT domains FROM wiki_meta").fetchall()
+
+        # domains are stored comma-joined, so split each row back into names
+        for row in rows:
+            for domain in (row["domains"] or "").split(","):
+                cleaned = domain.strip()
+                if cleaned:
+                    counts[cleaned] = counts.get(cleaned, 0) + 1
+        return counts
+
+    def list_gaps(self) -> list[tuple[str, int]]:
+        """
+        Find link targets that have no page, ranked by how many pages want them.
+
+        A gap is a ``wiki_links`` target with no matching ``wiki_meta`` row, e.g., a
+        concept other pages reference but that has not been written yet.
+
+        Returns
+        -------
+        list[tuple[str, int]]
+            ``(target, reference_count)`` pairs, most-referenced first.
+        """
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT l.target, COUNT(DISTINCT l.source) AS refs "
+                "FROM wiki_links l "
+                "LEFT JOIN wiki_meta m ON m.stem = l.target "
+                "WHERE m.stem IS NULL "
+                "GROUP BY l.target "
+                "ORDER BY refs DESC, l.target"
+            ).fetchall()
+        return [(row["target"], row["refs"]) for row in rows]
 
     def _delete_page(self, stem: str) -> None:
         """Remove a page from the FTS, metadata, link, and vector tables"""

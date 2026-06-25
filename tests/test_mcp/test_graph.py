@@ -29,11 +29,19 @@ def _write_page(wiki: Path, stem: str, links: list[str], content_dir: str = "con
     return path
 
 
-def _write_concept(wiki: Path, stem: str, prerequisites: list[str]) -> Path:
-    """Write a concept page whose frontmatter declares ``prerequisites`` as wikilinks."""
+def _write_concept(
+    wiki: Path,
+    stem: str,
+    prerequisites: list[str] | None = None,
+    domains: list[str] | None = None,
+) -> Path:
+    """Write a concept page declaring ``prerequisites`` as wikilinks and ``domains``."""
     path = wiki / "concepts" / f"{stem}.md"
     path.parent.mkdir(parents=True, exist_ok=True)
     lines = ["---", f"title: {stem}", "type: concept"]
+    if domains:
+        lines.append("domains:")
+        lines += [f"  - {domain}" for domain in domains]
     if prerequisites:
         lines.append("prerequisites:")
         lines += [f'  - "[[{prerequisite}]]"' for prerequisite in prerequisites]
@@ -198,3 +206,50 @@ def test_dependents_reports_none(tmp_path: Path) -> None:
     _sync(tools)
 
     assert "Nothing depends on" in tools.dependents("statistical-models")
+
+
+def test_find_related_falls_back_to_alphabetical_without_semantic(tmp_path: Path) -> None:
+    # _make_tools disables semantic, so ranking is impossible and order is alphabetical.
+    tools = _make_tools(tmp_path)
+    _write_page(tools._wiki, "source", ["zeta", "alpha", "mid"])
+    for stem in ("zeta", "alpha", "mid"):
+        _write_page(tools._wiki, stem, [])
+    _sync(tools)
+
+    out = tools.find_related("source", depth=1)
+
+    assert out.index("alpha") < out.index("mid") < out.index("zeta")
+
+
+def test_list_gaps_ranks_by_reference_count(tmp_path: Path) -> None:
+    tools = _make_tools(tmp_path)
+    _write_concept(tools._wiki, "a", ["popular-gap", "lonely-gap"])
+    _write_concept(tools._wiki, "b", ["popular-gap"])
+    _sync(tools)
+
+    out = tools.list_gaps()
+
+    # popular-gap is referenced by two pages, lonely-gap by one, so it ranks first.
+    assert out.index("popular-gap") < out.index("lonely-gap")
+    assert "2 references" in out
+
+
+def test_list_gaps_reports_none(tmp_path: Path) -> None:
+    tools = _make_tools(tmp_path)
+    _write_concept(tools._wiki, "self-contained", [])
+    _sync(tools)
+
+    assert "No gaps" in tools.list_gaps()
+
+
+def test_list_domains_counts_pages(tmp_path: Path) -> None:
+    tools = _make_tools(tmp_path)
+    _write_concept(tools._wiki, "a", domains=["mathematics", "economics"])
+    _write_concept(tools._wiki, "b", domains=["mathematics"])
+    _sync(tools)
+
+    out = tools.list_domains()
+
+    # mathematics has two pages, economics one, so it ranks first.
+    assert out.index("mathematics") < out.index("economics")
+    assert "mathematics (2 pages)" in out

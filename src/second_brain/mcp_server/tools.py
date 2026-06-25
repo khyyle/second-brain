@@ -20,11 +20,15 @@ SYNC_MIN_INTERVAL_SECONDS = 1.0
 # Default caps on how much a single tool returns, so a large wiki can't flood
 # the caller's context window. Each capped tool also reports the total and how
 # to fetch more, so a partial result is never silently mistaken for the whole.
+DEFAULT_SEARCH_LIMIT = 10
 DEFAULT_LIST_LIMIT = 50
 DEFAULT_RELATED_LIMIT = 50
+DEFAULT_RELATED_DEPTH = 2
 DEFAULT_SOURCES_LIMIT = 10
+DEFAULT_GAPS_LIMIT = 50
 DEFAULT_PREREQUISITE_DEPTH = 6
 MAX_INDEX_CHARS = 8000
+MAX_SOURCE_LENGTH_CHARS = 2000
 
 
 def _more_note(shown: int, total: int, *, offset: int = 0, pageable: bool = True) -> str:
@@ -217,21 +221,24 @@ class WikiTools:
                 latest = max(latest, md_file.stat().st_mtime)
         return latest
 
-    def search_wiki(self, query: str, limit: int = 10) -> str:
+    def search_wiki(self, query: str, limit: int = DEFAULT_SEARCH_LIMIT) -> str:
         """
-        Search wiki pages and return formatted results.
+        Keyword-search wiki pages, ranked by BM25 relevance.
 
         Parameters
         ----------
         query: str
-            FTS5 search expression.
+            An FTS5 match expression or plain text.
         limit: int
-            Maximum number of results.
+            Maximum number of pages to return.
 
         Returns
         -------
         str
-            Markdown-formatted search results or a no-results message.
+            One block per matching page with its title, content type, domains, and a
+            short excerpt of the body with the matched terms emphasized or a
+            no-results message. Doesn't return full page bodies; read a page
+            in full with ``read_page``.
         """
         hits = self._search.search(query, limit=limit)
         if not hits:
@@ -246,23 +253,26 @@ class WikiTools:
             )
         return "\n---\n".join(results)
 
-    def semantic_search(self, query: str, limit: int = 10) -> str:
+    def semantic_search(self, query: str, limit: int = DEFAULT_SEARCH_LIMIT) -> str:
         """
-        Semantic (embedding) search over wiki pages.
+        Find wiki pages by meaning, using embedding nearest-neighbor search.
+
+        Matches on conceptual similarity rather than shared words, so it surfaces
+        related pages even when the query wording does not appear in them.
 
         Parameters
         ----------
         query: str
-            Natural-language query.
+            A natural-language query to match by meaning.
         limit: int
-            Maximum number of results.
+            Maximum number of pages to return.
 
         Returns
         -------
         str
-            Markdown-formatted results, or a clear notice when the
-            semantic layer is unavailable so the caller can use
-            ``search_wiki`` instead.
+            One block per matching page with its title, content type, domains, and a
+            relevance distance (closest first). Falls back to a notice pointing at
+            ``search_wiki`` when the semantic layer is unavailable.
         """
         if not self._search.semantic_enabled:
             return (
@@ -298,7 +308,7 @@ class WikiTools:
 
     def read_page(self, title: str) -> str:
         """
-        Read a wiki page by stem or title.
+        Read a single wiki page in full by its title or slug.
 
         Parameters
         ----------
@@ -308,7 +318,8 @@ class WikiTools:
         Returns
         -------
         str
-            Full markdown content, or a not-found message.
+            The complete page file (YAML frontmatter and markdown body) or a
+            not-found message.
         """
         path = self._resolve_page(title)
         if path is not None:
@@ -324,16 +335,18 @@ class WikiTools:
         offset: int = 0,
     ) -> str:
         """
-        List wiki pages with optional filters.
+        List wiki pages matching the given filters, ordered by title.
+
+        Filters combine with AND--omitting all of them lists every page.
 
         Parameters
         ----------
         domain: str | None
-            Filter by knowledge domain.
+            Keep only pages declaring this knowledge domain.
         tag: str | None
-            Filter by tag.
+            Keep only pages carrying this tag.
         content_type: str | None
-            Filter by content type.
+            Keep only pages of this type (e.g. ``concept``, ``problem``).
         limit: int
             Maximum pages to return in this call.
         offset: int
@@ -342,8 +355,9 @@ class WikiTools:
         Returns
         -------
         str
-            Newline-separated matching pages, with a coverage note when the
-            result is paged.
+            One line per page including its title, content type, and file path, followed
+            by a coverage note when more pages match than this call returned, or a
+            no-matches message.
         """
         pages = self._search.list_pages(domain=domain, content_type=content_type, tag=tag)
         total = len(pages)
@@ -360,23 +374,21 @@ class WikiTools:
 
     def read_index(self) -> str:
         """
-        Read the master index view.
-
-        The index grows with the wiki, so it is truncated past a character
-        budget with a pointer to browse by filter instead of returning an
-        unbounded dump.
+        Read the master index: every page as a wikilink, grouped by domain.
 
         Returns
         -------
         str
-            Index markdown content (possibly truncated), or a prompt to run
-            compilation.
+            The index markdown, truncated with a pointer to ``list_pages`` past
+            the budget, or a prompt to run compilation when it does not exist yet.
         """
         index_path = self._wiki / "_views" / "index.md"
         if not index_path.exists():
             return "Index not yet generated. Run compilation first."
 
         text = index_path.read_text(encoding="utf-8")
+        # the index grows unbounded with wiki size so truncate past character budget
+        # and recommend browsing by domains.
         if len(text) <= MAX_INDEX_CHARS:
             return text
         return (
@@ -473,7 +485,7 @@ class WikiTools:
 
     def get_sources(self, title: str, limit: int = DEFAULT_SOURCES_LIMIT, offset: int = 0) -> str:
         """
-        Retrieve raw source documents for a wiki page.
+        Retrieve the raw source documents a wiki page was compiled from.
 
         Parameters
         ----------
@@ -487,8 +499,10 @@ class WikiTools:
         Returns
         -------
         str
-            Concatenated source previews (first 2000 chars each), with a
-            coverage note when paged, or a not-found / no-sources message.
+            Each source under its path heading, truncated to its first MAX_SOURCE_LENGTH_CHARS
+            characters, followed by a coverage note when more sources remain, or
+            a not-found / no-sources message. For judging relevance without the
+            full text, use ``get_sources_summary``.
         """
         path = self._resolve_page(title)
         if path is None:
@@ -504,7 +518,9 @@ class WikiTools:
         for src in window:
             resolved = self._resolve_source(src)
             if resolved:
-                results.append(f"### {src}\n{resolved.read_text(encoding='utf-8')[:2000]}")
+                results.append(
+                    f"### {src}\n{resolved.read_text(encoding='utf-8')[:MAX_SOURCE_LENGTH_CHARS]}"
+                )
             else:
                 results.append(f"### {src}\n(source file not found)")
         return "\n\n".join(results) + _more_note(len(window), len(sources), offset=offset)
@@ -513,9 +529,8 @@ class WikiTools:
         """
         Summarize a page's sources with frontmatter and opening text only.
 
-        Returns each source's frontmatter block and first paragraph rather
-        than its full body, so a caller can judge relevance cheaply before
-        pulling complete sources with ``get_sources``.
+        A cheap way to judge each source's relevance before pulling its full body
+        with ``get_sources``.
 
         Parameters
         ----------
@@ -525,7 +540,8 @@ class WikiTools:
         Returns
         -------
         str
-            Per-source previews, or a not-found / no-sources message.
+            Each source under its path heading, showing only its frontmatter block
+            and first paragraph, or a not-found / no-sources message.
         """
         path = self._resolve_page(title)
         if path is None:
@@ -545,7 +561,9 @@ class WikiTools:
             results.append(f"### {src}\n{preview}")
         return "\n\n".join(results)
 
-    def find_related(self, title: str, depth: int = 2, limit: int = DEFAULT_RELATED_LIMIT) -> str:
+    def find_related(
+        self, title: str, depth: int = DEFAULT_RELATED_DEPTH, limit: int = DEFAULT_RELATED_LIMIT
+    ) -> str:
         """
         List the pages connected to a page, in either direction across all link kinds.
 
@@ -554,15 +572,17 @@ class WikiTools:
         title: str
             Page title or slug to start from.
         depth: int
-            How many hops to walk out.
+            How many link hops to walk outward from the starting page.
         limit: int
             Maximum number of pages to list.
 
         Returns
         -------
         str
-            A wikilink list with gaps marked, plus a coverage note when capped,
-            or a not-found / no-relations message.
+            One wikilink per connected page, ordered by semantic similarity to the
+            starting page (most relevant first) and marking pages that don't exist
+            yet as gaps, followed by a coverage note when the result is capped, or
+            a not-found / no-relations message.
         """
         slug = title.lower().replace(" ", "-")
         if not self._search.page_titles({slug}):
@@ -579,8 +599,11 @@ class WikiTools:
         if not related:
             return f"No related pages found for {title}."
 
-        # Cap the fan-out so a high-degree hub can't flood the caller's context.
-        ordered = sorted(related)
+        # rank by similarity to the source so the cap keeps the most relevant
+        ranked = self._search.rank_by_similarity(slug, related)
+        ordered = ranked + sorted(related - set(ranked))
+
+        # cap the fan-out so a high-degree hub can't flood the caller's context.
         window = ordered[: max(limit, 1)]
         titles = self._search.page_titles(set(window))
         lines = [f"- {_wikilink(stem, titles)}" for stem in window]
@@ -650,8 +673,11 @@ class WikiTools:
         Returns
         -------
         str
-            A numbered fundamentals-first map of the prerequisite graph, or a
-            not-found / no-prerequisites message.
+            A numbered fundamentals-first list of the prerequisites as wikilinks
+            (gaps marked, the queried page tagged ``(target)``, each annotated
+            with which earlier entries it builds on), followed by a shared-
+            foundations note, and a cycle or depth-cutoff note when either
+            applies. Falls back to a not-found / no-prerequisites message.
         """
         slug = title.lower().replace(" ", "-")
         if not self._search.page_titles({slug}):
@@ -737,3 +763,53 @@ class WikiTools:
         titles = self._search.page_titles(set(window))
         lines = [f"- {_wikilink(stem, titles)}" for stem in window]
         return "\n".join(lines) + _more_note(len(window), len(ordered), pageable=False)
+
+    def list_domains(self) -> str:
+        """
+        List the knowledge domains in the wiki with their page counts.
+
+        Returns:
+        --------
+        str
+            One line per domain with its name and page count, ordered by descending
+            count then name, or an empty-wiki notice.
+        """
+        counts = self._search.domain_counts()
+        if not counts:
+            return "No domains yet."
+        ordered = sorted(counts.items(), key=lambda item: (-item[1], item[0]))
+        return "\n".join(f"- {domain} ({count} pages)" for domain, count in ordered)
+
+    def list_gaps(self, limit: int = DEFAULT_GAPS_LIMIT, offset: int = 0) -> str:
+        """
+        List referenced-but-unwritten concepts, most-referenced first.
+
+        Parameters:
+        -----------
+        limit: int
+            Maximum number of gaps to return in this call.
+        offset: int
+            Number of leading gaps to skip, for paging.
+
+        Returns:
+        --------
+        str
+            One line per gap with its wikilink and how many pages reference it,
+            ordered by descending reference count, followed by a coverage note
+            when paged, or a no-gaps notice.
+        """
+        gaps = self._search.list_gaps()
+        total = len(gaps)
+        if total == 0:
+            return "No gaps: every referenced concept has a page."
+
+        offset = max(offset, 0)
+        window = gaps[offset : offset + max(limit, 1)]
+        if not window:
+            return f"No gaps at offset {offset} (total {total})."
+
+        lines = [
+            f"- [[{target}]] ({refs} reference{'s' if refs != 1 else ''})"
+            for target, refs in window
+        ]
+        return "\n".join(lines) + _more_note(len(window), total, offset=offset)

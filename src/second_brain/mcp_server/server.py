@@ -8,7 +8,16 @@ from mcp.server.fastmcp import FastMCP
 
 from second_brain.config import load_config
 from second_brain.mcp_server.search import SearchIndex
-from second_brain.mcp_server.tools import WikiTools
+from second_brain.mcp_server.tools import (
+    DEFAULT_GAPS_LIMIT,
+    DEFAULT_LIST_LIMIT,
+    DEFAULT_PREREQUISITE_DEPTH,
+    DEFAULT_RELATED_DEPTH,
+    DEFAULT_RELATED_LIMIT,
+    DEFAULT_SEARCH_LIMIT,
+    DEFAULT_SOURCES_LIMIT,
+    WikiTools,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +46,7 @@ def _get_tools() -> WikiTools:
 
 
 @mcp.tool()
-def search_wiki(query: str, limit: int = 10) -> str:
+def search_wiki(query: str, limit: int = DEFAULT_SEARCH_LIMIT) -> str:
     """Search wiki pages by keyword (full-text BM25). Best for exact terms and names.
 
     Plain text works directly (e.g. `gradient descent`); FTS5 operators
@@ -49,7 +58,7 @@ def search_wiki(query: str, limit: int = 10) -> str:
 
 
 @mcp.tool()
-def semantic_search(query: str, limit: int = 10) -> str:
+def semantic_search(query: str, limit: int = DEFAULT_SEARCH_LIMIT) -> str:
     """Search wiki pages by meaning using embeddings, for fuzzy/conceptual queries.
 
     Complements `search_wiki`: use this when the exact wording is unknown
@@ -71,7 +80,7 @@ def list_pages(
     domain: str | None = None,
     tag: str | None = None,
     content_type: str | None = None,
-    limit: int = 50,
+    limit: int = DEFAULT_LIST_LIMIT,
     offset: int = 0,
 ) -> str:
     """List wiki pages, optionally filtered by domain, tag, or content type.
@@ -105,7 +114,7 @@ def capture_note(content: str, title: str | None = None, topic: str | None = Non
 
 
 @mcp.tool()
-def get_sources(title: str, limit: int = 10, offset: int = 0) -> str:
+def get_sources(title: str, limit: int = DEFAULT_SOURCES_LIMIT, offset: int = 0) -> str:
     """Retrieve the raw source documents that a wiki page was compiled from.
 
     Returns at most `limit` sources starting at `offset`; a page built from
@@ -125,7 +134,9 @@ def get_sources_summary(title: str) -> str:
 
 
 @mcp.tool()
-def find_related(title: str, depth: int = 2, limit: int = 50) -> str:
+def find_related(
+    title: str, depth: int = DEFAULT_RELATED_DEPTH, limit: int = DEFAULT_RELATED_LIMIT
+) -> str:
     """Find pages loosely connected to a concept, in any direction across all link types.
 
     Walks the link graph outward over every relationship (prerequisites, related,
@@ -138,7 +149,7 @@ def find_related(title: str, depth: int = 2, limit: int = 50) -> str:
 
 
 @mcp.tool()
-def prerequisite_closure(title: str, max_depth: int = 6) -> str:
+def prerequisite_closure(title: str, max_depth: int = DEFAULT_PREREQUISITE_DEPTH) -> str:
     """Lay out what a concept builds on, from fundamentals up to the concept itself.
 
     Use this to explain or derive a topic from first principles. It walks the
@@ -151,7 +162,7 @@ def prerequisite_closure(title: str, max_depth: int = 6) -> str:
 
 
 @mcp.tool()
-def dependents(title: str, limit: int = 50) -> str:
+def dependents(title: str, limit: int = DEFAULT_RELATED_LIMIT) -> str:
     """List the pages that build on a concept by declaring it a prerequisite.
 
     Walks prerequisites in the reverse direction from `prerequisite_closure`, but
@@ -159,6 +170,28 @@ def dependents(title: str, limit: int = 50) -> str:
     concept leads next. Returns at most `limit` pages, with a note giving the total.
     """
     return _get_tools().dependents(title, limit=limit)
+
+
+@mcp.tool()
+def list_domains() -> str:
+    """List the knowledge domains in the wiki, with how many pages each holds.
+
+    The cheapest map of what this knowledge base covers. Start here when you
+    don't yet know the vault, then narrow with `list_pages(domain=...)` or search.
+    """
+    return _get_tools().list_domains()
+
+
+@mcp.tool()
+def list_gaps(limit: int = DEFAULT_GAPS_LIMIT, offset: int = 0) -> str:
+    """List concepts that pages reference but that have no page yet.
+
+    These are the wiki's known holes, ranked by how many pages point at them
+    (most-wanted first) -useful for deciding what to learn or write next, and
+    for avoiding `read_page` calls on concepts that don't exist. Returns at most
+    `limit` starting at `offset`, with a note giving the total and next offset.
+    """
+    return _get_tools().list_gaps(limit=limit, offset=offset)
 
 
 def serve() -> None:
