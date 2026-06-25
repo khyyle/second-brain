@@ -134,6 +134,11 @@ class SearchIndex:
                     embedded_hash TEXT
                 )
             """)
+            # for a given wiki_link:
+            # - `source` is the page that declares the link
+            # - `target` is what it points at.
+            # for example, 'prerequisite' edges run from the dependent
+            # page (source) to the concept it needs (target).
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS wiki_links (
                     source TEXT NOT NULL,
@@ -466,25 +471,123 @@ class SearchIndex:
                 )
         return hits
 
-    def neighbors(self, stems: set[str], kinds: tuple[str, ...] | None = None) -> set[str]:
+    @staticmethod
+    def _kind_filter(kinds: tuple[str, ...] | None) -> tuple[str, list[str]]:
         """
-        Find stems directly linked to or from any of ``stems`` — one level of
-        incoming and outgoing links. The result may include members of ``stems``
-        (e.g. a mutual link).
+        Build the SQL fragment and params that restrict a query to ``kinds``.
 
-        Parameters:
-        -----------
+        The fragment extends an existing ``WHERE`` clause, and is empty when
+        ``kinds`` is ``None`` (every kind allowed).
+
+        Parameters
+        ----------
+        kinds: tuple[str, ...] | None
+            Edge kinds to keep; each must be one of
+            ``second_brain.wiki.structure.LINK_KINDS``.
+
+        Returns
+        -------
+        clause: str
+            A trailing ``" AND kind IN (...)"`` fragment, or ``""``.
+        params: list[str]
+            The kind values to bind, positionally matching the fragment.
+
+        Raises
+        ------
+        ValueError
+            If ``kinds`` contains a value that is not a known edge kind.
+        """
+        if not kinds:
+            return "", []
+        unknown = set(kinds) - set(LINK_KINDS)
+        if unknown:
+            raise ValueError(
+                f"Unknown edge kind(s): {sorted(unknown)}. Valid kinds: {list(LINK_KINDS)}"
+            )
+        return f" AND kind IN ({','.join('?' * len(kinds))})", list(kinds)
+
+    def neighbors(
+        self,
+        stems: set[str],
+        kinds: tuple[str, ...] | None = None,
+        following: str = "both",
+    ) -> set[str]:
+        """
+        Find the stems one edge away from any of ``stems`` in the link graph.
+
+        Parameters
+        ----------
         stems: set[str]
-            Page stems to find the neighbors of.
+            Page stems to walk out from.
         kinds: tuple[str, ...] | None, default=None
             Edge kinds to traverse; each must be one of
-            `second_brain.wiki.structure.LINK_KINDS`. ``None`` traverses
+            ``second_brain.wiki.structure.LINK_KINDS``. ``None`` traverses
             every kind.
+        following: str
+            Which end of each edge to walk toward: ``"targets"`` for what a
+            page points at (e.g. its prerequisites), ``"sources"`` for what
+            points at it (e.g. its dependents), or ``"both"`` for the union.
 
         Returns
         -------
         set[str]
-            Neighboring stems, which may include gaps (no page of that stem).
+            The reached stems, which may include members of ``stems`` (a mutual
+            link) and gaps (a stem with no page).
+
+        Raises
+        ------
+        ValueError
+            If ``kinds`` has an unknown edge kind, or ``following`` is not
+            ``"targets"``, ``"sources"``, or ``"both"``.
+        """
+        if not stems:
+            return set()
+        if following not in ("targets", "sources", "both"):
+            raise ValueError(
+                f"following must be 'targets', 'sources', or 'both', got '{following}'"
+            )
+        kind_sql, kind_params = self._kind_filter(kinds)
+        placeholders = ",".join("?" * len(stems))
+
+        reached: set[str] = set()
+        with self._conn() as conn:
+            if following in ("targets", "both"):
+                outgoing = conn.execute(
+                    f"SELECT target FROM wiki_links WHERE source IN ({placeholders}){kind_sql}",
+                    [*stems, *kind_params],
+                ).fetchall()
+                reached.update(row["target"] for row in outgoing)
+
+            if following in ("sources", "both"):
+                incoming = conn.execute(
+                    f"SELECT source FROM wiki_links WHERE target IN ({placeholders}){kind_sql}",
+                    [*stems, *kind_params],
+                ).fetchall()
+                reached.update(row["source"] for row in incoming)
+        return reached
+
+    def edges_from(
+        self, stems: set[str], kinds: tuple[str, ...] | None = None
+    ) -> list[tuple[str, str]]:
+        """
+        Read the edges that originate at any of ``stems``.
+
+        Unlike :meth:`neighbors`, this keeps each edge's endpoints paired, so a
+        caller can rebuild the local subgraph rather than a flat neighbor set.
+
+        Parameters
+        ----------
+        stems: set[str]
+            Stems to read outgoing edges from; each is matched as an edge source.
+        kinds: tuple[str, ...] | None
+            Edge kinds to include; each must be one of
+            ``second_brain.wiki.structure.LINK_KINDS``. ``None`` includes every
+            kind.
+
+        Returns
+        -------
+        list[tuple[str, str]]
+            ``(source, target)`` pairs, where the target may be a gap (no page).
 
         Raises
         ------
@@ -492,42 +595,23 @@ class SearchIndex:
             If ``kinds`` contains a value that is not a known edge kind.
         """
         if not stems:
-            return set()
-        if kinds:
-            unknown = set(kinds) - set(LINK_KINDS)
-            if unknown:
-                raise ValueError(
-                    f"Unknown edge kind(s): {sorted(unknown)}. Valid kinds: {list(LINK_KINDS)}"
-                )
-
+            return []
+        kind_sql, kind_params = self._kind_filter(kinds)
         placeholders = ",".join("?" * len(stems))
-        kind_sql = ""
-        kind_params: list[str] = []
-        if kinds:
-            kind_sql = f" AND kind IN ({','.join('?' * len(kinds))})"
-            kind_params = list(kinds)
-
-        neighbors: set[str] = set()
         with self._conn() as conn:
-            outgoing = conn.execute(
-                f"SELECT target FROM wiki_links WHERE source IN ({placeholders}){kind_sql}",
+            rows = conn.execute(
+                "SELECT source, target FROM wiki_links "
+                f"WHERE source IN ({placeholders}){kind_sql}",
                 [*stems, *kind_params],
             ).fetchall()
-            neighbors.update(row["target"] for row in outgoing)
-
-            incoming = conn.execute(
-                f"SELECT source FROM wiki_links WHERE target IN ({placeholders}){kind_sql}",
-                [*stems, *kind_params],
-            ).fetchall()
-            neighbors.update(row["source"] for row in incoming)
-        return neighbors
+        return [(row["source"], row["target"]) for row in rows]
 
     def page_titles(self, stems: set[str]) -> dict[str, str]:
         """
         Find the title of each stem that is a real page.
 
-        Parameters:
-        -----------
+        Parameters
+        ----------
         stems: set[str]
             Page stems to look up.
 

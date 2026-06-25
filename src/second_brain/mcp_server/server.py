@@ -126,12 +126,39 @@ def get_sources_summary(title: str) -> str:
 
 @mcp.tool()
 def find_related(title: str, depth: int = 2, limit: int = 50) -> str:
-    """Find pages related to a concept via wikilinks and backlink graph traversal.
+    """Find pages loosely connected to a concept, in any direction across all link types.
 
-    Returns at most `limit` related pages; the reachable set grows quickly with
-    `depth`, so the result is capped with a note giving the total found.
+    Walks the link graph outward over every relationship (prerequisites, related,
+    mentions, and their backlinks) up to `depth` hops, answering the open-ended
+    "what touches this?" without imposing order. For the ordered chain a concept
+    builds on, use `prerequisite_closure`; for what builds on it, use `dependents`.
+    Returns at most `limit` pages, with a note giving the total found.
     """
     return _get_tools().find_related(title, depth, limit=limit)
+
+
+@mcp.tool()
+def prerequisite_closure(title: str, max_depth: int = 6) -> str:
+    """Lay out what a concept builds on, from fundamentals up to the concept itself.
+
+    Use this to explain or derive a topic from first principles. It walks the
+    page's prerequisites transitively and returns them in learning order
+    (fundamentals first, the topic last), flags any prerequisite that has no
+    page yet, and notes concepts that several branches share. Then read the
+    listed pages with `read_page` to pull the ones you actually need.
+    """
+    return _get_tools().prerequisite_closure(title, max_depth=max_depth)
+
+
+@mcp.tool()
+def dependents(title: str, limit: int = 50) -> str:
+    """List the pages that build on a concept by declaring it a prerequisite.
+
+    Walks prerequisites in the reverse direction from `prerequisite_closure`, but
+    only one hop--the pages that directly require this one. Use it to see where a
+    concept leads next. Returns at most `limit` pages, with a note giving the total.
+    """
+    return _get_tools().dependents(title, limit=limit)
 
 
 def serve() -> None:

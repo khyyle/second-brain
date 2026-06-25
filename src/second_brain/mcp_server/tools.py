@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import heapq
 import logging
 import threading
 import time
+from collections import defaultdict
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -21,14 +23,15 @@ SYNC_MIN_INTERVAL_SECONDS = 1.0
 DEFAULT_LIST_LIMIT = 50
 DEFAULT_RELATED_LIMIT = 50
 DEFAULT_SOURCES_LIMIT = 10
+DEFAULT_PREREQUISITE_DEPTH = 6
 MAX_INDEX_CHARS = 8000
 
 
 def _more_note(shown: int, total: int, *, offset: int = 0, pageable: bool = True) -> str:
     """A trailing coverage line, or '' when the whole result is shown.
 
-    When ``pageable``, the note tells the caller the next ``offset`` to fetch;
-    otherwise it just reports how many more were withheld (for a capped result
+    When ``pageable``, the note tells the caller the next ``offset`` to fetch.
+    Otherwise it just reports how many more were withheld (for a capped result
     with no stable paging order, like graph traversal).
     """
     if offset + shown >= total:
@@ -42,7 +45,7 @@ def _more_note(shown: int, total: int, *, offset: int = 0, pageable: bool = True
 
 
 def _source_preview(text: str) -> str:
-    """Return a source's frontmatter block plus its first body paragraph.
+    """Grab a source's frontmatter block plus its first body paragraph.
 
     Parameters
     ----------
@@ -67,6 +70,69 @@ def _source_preview(text: str) -> str:
         if lead:
             return f"{header}\n\n{lead}".strip()
     return header or "(empty source)"
+
+
+def _wikilink(stem: str, titles: dict[str, str]) -> str:
+    """Render a stem as a wikilink, marking it a gap when no page resolves it."""
+    return f"[[{stem}|{titles[stem]}]]" if stem in titles else f"[[{stem}]] (gap)"
+
+
+def _topological_order(
+    nodes: set[str],
+    prerequisites_of: dict[str, set[str]],
+) -> tuple[list[str], list[str]]:
+    """
+    Order ``nodes`` so each comes after every prerequisite it depends on.
+
+    Parameters
+    ----------
+    nodes: set[str]
+        Every stem to order, including prerequisite gaps that have no page.
+    prerequisites_of: dict[str, set[str]]
+        Each stem mapped to the stems it directly depends on.
+
+    Returns
+    -------
+    ordered: list[str]
+        Stems fundamentals-first; mutually independent stems fall in
+        alphabetical order so the result is reproducible.
+    cyclic: list[str]
+        Stems left out because a dependency cycle never lets their pending
+        prerequisite count reach zero; empty when the input is acyclic.
+    """
+    # implemented via Kahn's algorithm
+
+    # map each node to the prerequisites it still waits on, ignoring any outside the closure
+    pending = {node: set(prerequisites_of.get(node, set())) & nodes for node in nodes}
+
+    # map each prerequisite to the nodes waiting on it
+    waiting_on: dict[str, set[str]] = defaultdict(set)
+    for node, prerequisites in pending.items():
+        for prerequisite in prerequisites:
+            waiting_on[prerequisite].add(node)
+
+    # initialize the queue with nodes that don't have prerequisites
+    ready = [node for node, prerequisites in pending.items() if not prerequisites]
+    heapq.heapify(ready)
+
+    # topo-sorted list we'll add to as we go
+    ordered: list[str] = []
+    while ready:
+        node = heapq.heappop(ready)  # grab lexicographically next node
+        ordered.append(node)
+
+        # drop the emitted node from everything that was waiting on it
+        for dependent in waiting_on.get(node, set()):
+            pending[dependent].discard(node)
+
+            # that was its last prerequisite, so it's ready now
+            if not pending[dependent]:
+                heapq.heappush(ready, dependent)
+
+    # anything never emitted was stuck in a cycle
+    cyclic = sorted(nodes - set(ordered))
+
+    return ordered, cyclic
 
 
 class WikiTools:
@@ -481,7 +547,7 @@ class WikiTools:
 
     def find_related(self, title: str, depth: int = 2, limit: int = DEFAULT_RELATED_LIMIT) -> str:
         """
-        List the pages reachable from a page by following its links.
+        List the pages connected to a page, in either direction across all link kinds.
 
         Parameters
         ----------
@@ -513,12 +579,161 @@ class WikiTools:
         if not related:
             return f"No related pages found for {title}."
 
-        # cap so high degree nodes can't flood the callers context window
+        # Cap the fan-out so a high-degree hub can't flood the caller's context.
         ordered = sorted(related)
         window = ordered[: max(limit, 1)]
         titles = self._search.page_titles(set(window))
-        lines = [
-            f"- [[{stem}|{titles[stem]}]]" if stem in titles else f"- [[{stem}]] (gap)"
-            for stem in window
-        ]
+        lines = [f"- {_wikilink(stem, titles)}" for stem in window]
+        return "\n".join(lines) + _more_note(len(window), len(ordered), pageable=False)
+
+    def _walk_prerequisite_edges(
+        self, start: str, max_depth: int
+    ) -> tuple[list[tuple[str, str]], int, bool]:
+        """
+        Collect prerequisite edges reachable from ``start``, breadth-first.
+
+        Parameters
+        ----------
+        start: str
+            Stem to walk out from.
+        max_depth: int
+            Greatest number of hops to follow.
+
+        Returns
+        -------
+        edges: list[tuple[str, str]]
+            ``(dependent, prerequisite)`` pairs found along the walk.
+        depth_reached: int
+            How many hops were actually taken.
+        truncated: bool
+            True when the depth cap halted the walk with prerequisites still
+            left to expand.
+        """
+        edges: list[tuple[str, str]] = []
+        recorded: set[tuple[str, str]] = set()
+        visited: set[str] = {start}
+        frontier: set[str] = {start}
+        depth_reached = 0
+        while frontier and depth_reached < max_depth:
+            depth_reached += 1
+            unexplored: set[str] = set()
+            # a page's prerequisites are the targets of its prerequisite edges
+            for dependent, prerequisite in self._search.edges_from(
+                frontier, kinds=("prerequisite",)
+            ):
+                if (dependent, prerequisite) not in recorded:
+                    recorded.add((dependent, prerequisite))
+                    edges.append((dependent, prerequisite))
+                if prerequisite not in visited:
+                    visited.add(prerequisite)
+                    unexplored.add(prerequisite)
+            frontier = unexplored
+        return edges, depth_reached, bool(frontier)
+
+    def prerequisite_closure(self, title: str, max_depth: int = DEFAULT_PREREQUISITE_DEPTH) -> str:
+        """
+        Lay out everything a page rests on, in the order you would learn it.
+
+        Walks ``prerequisite`` edges outward and returns the reachable concepts
+        sorted fundamentals-first, so the result reads as a derivation from
+        first principles up to the page itself. Prerequisites that have no page
+        yet are flagged as gaps, concepts shared across branches are called out,
+        and the walk is bounded by ``max_depth``.
+
+        Parameters
+        ----------
+        title: str
+            Page title or slug to derive from its fundamentals.
+        max_depth: int
+            Greatest number of prerequisite hops to follow before stopping.
+
+        Returns
+        -------
+        str
+            A numbered fundamentals-first map of the prerequisite graph, or a
+            not-found / no-prerequisites message.
+        """
+        slug = title.lower().replace(" ", "-")
+        if not self._search.page_titles({slug}):
+            return f"Page not found: {title}"
+
+        edges, depth_reached, truncated = self._walk_prerequisite_edges(slug, max(max_depth, 1))
+        if not edges:
+            return f"{title} declares no prerequisites, so it has no derivation to lay out."
+
+        prerequisites_of: dict[str, set[str]] = defaultdict(set)
+        dependents_of: dict[str, set[str]] = defaultdict(set)
+        nodes: set[str] = {slug}
+        for dependent, prerequisite in edges:
+            prerequisites_of[dependent].add(prerequisite)
+            dependents_of[prerequisite].add(dependent)
+            nodes.update((dependent, prerequisite))
+
+        ordered, cyclic = _topological_order(nodes, prerequisites_of)
+        titles = self._search.page_titles(nodes)
+        position = {stem: index for index, stem in enumerate(ordered, start=1)}
+
+        lines = [f"Prerequisites for {_wikilink(slug, titles)}, fundamentals first:", ""]
+        for index, stem in enumerate(ordered, start=1):
+            marker = " (target)" if stem == slug else ""
+            prerequisite_indices = sorted(
+                position[p] for p in prerequisites_of.get(stem, set()) if p in position
+            )
+            trail = (
+                f" — builds on {', '.join(map(str, prerequisite_indices))}"
+                if prerequisite_indices
+                else ""
+            )
+            lines.append(f"{index}. {_wikilink(stem, titles)}{marker}{trail}")
+
+        shared: list[str] = []
+        for stem in ordered:
+            dependent_indices = sorted(
+                position[d] for d in dependents_of.get(stem, set()) if d in position
+            )
+            if len(dependent_indices) >= 2:
+                where = ", ".join(map(str, dependent_indices))
+                shared.append(f"{_wikilink(stem, titles)} (under {where})")
+        if shared:
+            lines += ["", f"Shared foundations: {'; '.join(shared)}."]
+        if cyclic:
+            cycle = ", ".join(_wikilink(stem, titles) for stem in cyclic)
+            lines += ["", f"Prerequisite cycle (unordered): {cycle}."]
+        if truncated:
+            lines += ["", f"Stopped at depth {depth_reached}, deeper prerequisites not expanded."]
+        return "\n".join(lines)
+
+    def dependents(self, title: str, limit: int = DEFAULT_RELATED_LIMIT) -> str:
+        """
+        List the pages that build on a page by declaring it a prerequisite.
+
+        Parameters
+        ----------
+        title: str
+            Page title or slug to look up dependents for.
+        limit: int
+            Maximum number of dependents to list in this call.
+
+        Returns
+        -------
+        str
+            A wikilink list of the dependent pages, with a coverage note when
+            the result is capped, or a not-found / none message.
+        """
+        slug = title.lower().replace(" ", "-")
+        if not self._search.page_titles({slug}):
+            return f"Page not found: {title}"
+
+        # dependents declare this page as a prerequisite, so they're the sources of its edges
+        dependent_stems = self._search.neighbors(
+            {slug}, kinds=("prerequisite",), following="sources"
+        )
+        dependent_stems.discard(slug)
+        if not dependent_stems:
+            return f"Nothing depends on {title} as a prerequisite."
+
+        ordered = sorted(dependent_stems)
+        window = ordered[: max(limit, 1)]
+        titles = self._search.page_titles(set(window))
+        lines = [f"- {_wikilink(stem, titles)}" for stem in window]
         return "\n".join(lines) + _more_note(len(window), len(ordered), pageable=False)
