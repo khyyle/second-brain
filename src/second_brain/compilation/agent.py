@@ -10,6 +10,7 @@ import fnmatch
 import re
 from pathlib import Path
 
+from second_brain.mcp_server.tools import WikiTools
 from second_brain.wiki.structure import CONTENT_DIRS
 
 COMPILATION_SYSTEM_PROMPT = """\
@@ -285,6 +286,61 @@ WIKI_TOOLS = [
 ]
 
 
+# Read-only wiki-exploration tools the agent gets when compilation.explore_tools is on.
+# These query the compiled wiki (not raw sources), complementing the file tools above.
+EXPLORE_TOOL_NAMES = (
+    "search_wiki",
+    "semantic_search",
+    "find_related",
+    "prerequisite_closure",
+    "dependents",
+    "list_gaps",
+    "read_page",
+    "list_domains",
+)
+
+EXPLORE_TOOLS_GUIDANCE = (
+    "You also have read-only wiki-exploration tools: search_wiki, semantic_search, "
+    "find_related, prerequisite_closure, dependents, list_gaps, read_page, and "
+    "list_domains. Use them to find existing pages to link or update so you avoid "
+    "creating duplicates and wire new pages into the existing graph. They reflect "
+    "the wiki as it was before this run, so pages you create now will not appear in "
+    "their results--you already know what you have written this run."
+)
+
+
+def explore_tool_schemas() -> list[dict]:
+    """
+    Return Anthropic-format schemas for the wiki-exploration tools.
+
+    Derived from the MCP server's tool registry so the descriptions and parameter
+    schemas have a single source of truth shared with the MCP client, rather than
+    being duplicated here.
+
+    Returns
+    -------
+    list[dict]
+        ``{name, description, input_schema}`` dicts in ``EXPLORE_TOOL_NAMES`` order.
+    """
+    import asyncio
+
+    from second_brain.mcp_server.server import mcp
+
+    registered = {t.name: t for t in asyncio.run(mcp.list_tools())}
+    schemas: list[dict] = []
+    for name in EXPLORE_TOOL_NAMES:
+        tool = registered.get(name)
+        if tool is not None:
+            schemas.append(
+                {
+                    "name": tool.name,
+                    "description": tool.description,
+                    "input_schema": tool.inputSchema,
+                }
+            )
+    return schemas
+
+
 # Maximum characters returned by a single read. Longer files are paged via the
 # read_file offset argument.
 _MAX_READ_CHARS = 24_000
@@ -308,6 +364,7 @@ class WikiToolExecutor:
         raw_dir: Path,
         dry_run: bool = False,
         data_dir: Path | None = None,
+        read_tools: WikiTools | None = None,
     ) -> None:
         """
         Parameters
@@ -321,11 +378,15 @@ class WikiToolExecutor:
         data_dir: Path | None
             Vault root; when set, each page change is appended to the build log
             as it happens so progress is observable mid-run.
+        read_tools: WikiTools | None
+            When provided, the agent can also call the wiki-exploration tools in
+            ``EXPLORE_TOOL_NAMES``, dispatched to this instance's methods.
         """
         self._wiki_dir = wiki_dir
         self._raw_dir = raw_dir
         self._dry_run = dry_run
         self._data_dir = data_dir
+        self._read_tools = read_tools
         self._changes: list[dict] = []
 
     def execute(self, tool_name: str, tool_input: dict) -> str:
@@ -362,6 +423,9 @@ class WikiToolExecutor:
                     tool_input["pattern"],
                     tool_input.get("glob", "**/*.md"),
                 )
+            elif self._read_tools is not None and tool_name in EXPLORE_TOOL_NAMES:
+                # exploration tools share the MCP read methods, dispatched by name
+                return getattr(self._read_tools, tool_name)(**tool_input)
             else:
                 return f"Unknown tool: {tool_name}"
         except Exception as e:

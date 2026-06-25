@@ -51,7 +51,9 @@ class FakeClient:
 def _make_config(tmp_path: Path, *, budget: int, max_iter: int) -> Config:
     cfg = Config(
         data_dir=tmp_path / "sb",
-        compilation=CompilationConfig(token_budget_per_run=budget, max_iterations=max_iter),
+        compilation=CompilationConfig(
+            token_budget_per_run=budget, max_iterations=max_iter, explore_tools=False
+        ),
     )
     cfg.ensure_directories()
     return cfg

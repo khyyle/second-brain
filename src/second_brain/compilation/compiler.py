@@ -13,11 +13,13 @@ import anthropic
 
 from second_brain.compilation.agent import (
     COMPILATION_SYSTEM_PROMPT,
+    EXPLORE_TOOLS_GUIDANCE,
     WIKI_TOOLS,
     WikiToolExecutor,
     build_compilation_prompt,
     build_source_block,
     compact_history,
+    explore_tool_schemas,
 )
 from second_brain.config import Config
 from second_brain.ingestion.manifest import DEFERRED_DECISION, Manifest
@@ -479,11 +481,28 @@ def _run_agent(
 
     profile = resolve_profile(config.compilation.provider, config.compilation.model)
     client = anthropic.Anthropic(**profile.client_kwargs())
-    executor = WikiToolExecutor(wiki_dir, raw_dir, data_dir=config.data_dir)
+
+    # When exploration is enabled, give the agent the read-only wiki tools backed by a
+    # one-time pre-run index snapshot. The agent's own writes don't touch the index, so
+    # search/graph results stay fixed to the wiki as it was before this run.
+    read_tools = None
+    explore_schemas: list[dict] = []
+    if config.compilation.explore_tools:
+        from second_brain.mcp_server.search import SearchIndex
+        from second_brain.mcp_server.tools import WikiTools
+
+        search_index = SearchIndex(config.search_db_path, config.search)
+        search_index.sync_from_wiki(wiki_dir)
+        read_tools = WikiTools(wiki_dir, raw_dir, search_index)
+        explore_schemas = explore_tool_schemas()
+
+    executor = WikiToolExecutor(wiki_dir, raw_dir, data_dir=config.data_dir, read_tools=read_tools)
 
     # Present the source content inline so it can be cached as a stable prefix;
     # the agent then synthesizes rather than spending turns re-reading it.
     instructions = build_compilation_prompt(sources)
+    if config.compilation.explore_tools:
+        instructions = f"{instructions}\n\n{EXPLORE_TOOLS_GUIDANCE}"
     source_block = build_source_block(sources, raw_dir)
     user_content: list[dict] = [
         {"type": "text", "text": instructions},
@@ -495,7 +514,7 @@ def _run_agent(
     # changes each unit). Only Anthropic honors cache_control; DeepSeek caches
     # prefixes automatically.
     system: str | list[dict]
-    tools = [dict(t) for t in WIKI_TOOLS]
+    tools = [dict(t) for t in (*WIKI_TOOLS, *explore_schemas)]
     if profile.prompt_caching:
         system = [
             {

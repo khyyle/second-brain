@@ -112,6 +112,10 @@ class CompilationConfig(BaseModel):
         Fraction of the model's context window a source may fill before it is
         deferred as too large, leaving headroom for the wiki context the agent
         reads plus its generated output.
+    explore_tools: bool, default=True
+        When True, the compilation agent also gets read-only wiki exploration
+        tools (keyword/semantic search and graph traversal) for finding existing
+        pages to link or update. Set False to reduce build cost.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -123,6 +127,7 @@ class CompilationConfig(BaseModel):
     token_budget_per_run: int = Field(default=150_000, gt=0)
     max_cost_per_build_usd: float = Field(default=0.0, ge=0.0)
     window_reserve: float = Field(default=0.7, gt=0.0, le=1.0)
+    explore_tools: bool = True
 
     @model_validator(mode="after")
     def _validate_provider_model(self) -> CompilationConfig:
