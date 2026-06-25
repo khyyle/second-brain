@@ -9,14 +9,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from second_brain.mcp_server.search import SearchIndex
-from second_brain.wiki.structure import (
-    CONTENT_DIRS,
-    LinkGraph,
-    WikiPage,
-    _parse_frontmatter,
-    build_link_graph,
-    discover_all_pages,
-)
+from second_brain.wiki.structure import CONTENT_DIRS, _parse_frontmatter
 
 logger = logging.getLogger(__name__)
 
@@ -76,88 +69,11 @@ def _source_preview(text: str) -> str:
     return header or "(empty source)"
 
 
-class _GraphCache:
-    """In-memory cache of the wiki link graph, invalidated by mtime.
-
-    Avoids rebuilding the full link graph on every MCP tool call by
-    tracking the latest modification time across wiki content dirs and
-    rate-limiting filesystem stat checks to once per second.
-    """
-
-    def __init__(self, wiki_dir: Path) -> None:
-        """
-        Initialize the cache for a wiki directory.
-
-        Parameters
-        ----------
-        wiki_dir: Path
-            Root directory of the compiled wiki.
-        """
-        self._wiki_dir = wiki_dir
-        self._pages: dict[str, WikiPage] = {}
-        self._graph: LinkGraph | None = None
-        self._last_mtime: float = 0.0
-        self._last_check: float = 0.0
-
-    def _current_mtime(self) -> float:
-        """
-        Get the most recent mtime across all wiki content dirs.
-
-        Includes each content directory's own mtime, not just its files', so a
-        deletion is detected: removing a page bumps the directory's mtime but
-        may leave the max file mtime unchanged.
-
-        Returns
-        -------
-        float
-            Latest ``st_mtime`` found, or ``0.0`` if no files exist.
-        """
-        latest = 0.0
-        for content_dir in CONTENT_DIRS:
-            d = self._wiki_dir / content_dir
-            if not d.exists():
-                continue
-            latest = max(latest, d.stat().st_mtime)
-            for f in d.glob("*.md"):
-                latest = max(latest, f.stat().st_mtime)
-        return latest
-
-    def get(self) -> tuple[dict[str, WikiPage], LinkGraph]:
-        """
-        Return the cached page map and link graph.
-
-        Rebuilds only when wiki files have changed. Filesystem checks
-        are rate-limited to at most once per second.
-
-        Returns
-        -------
-        pages: dict[str, WikiPage]
-            Mapping of stem to WikiPage.
-        graph: LinkGraph
-            Forward and backward link adjacency sets.
-        """
-        now = time.monotonic()
-        if now - self._last_check < 1.0 and self._graph is not None:
-            return self._pages, self._graph
-
-        self._last_check = now
-        current = self._current_mtime()
-
-        if current != self._last_mtime or self._graph is None:
-            self._pages = discover_all_pages(self._wiki_dir)
-            self._graph = build_link_graph(self._pages)
-            self._last_mtime = current
-            logger.debug("Graph cache rebuilt: %d pages", len(self._pages))
-
-        return self._pages, self._graph
-
-
 class WikiTools:
     """Implements the tool functions exposed via MCP.
 
     Acts as the service layer between the MCP server endpoints and the
-    underlying search index, filesystem, and link graph. Holds a
-    ``_GraphCache`` for efficient repeated graph queries.
+    underlying search index, filesystem, and link graph.
     """
 
     def __init__(self, wiki_dir: Path, raw_dir: Path, search_index: SearchIndex) -> None:
@@ -176,7 +92,6 @@ class WikiTools:
         self._wiki = wiki_dir
         self._raw = raw_dir
         self._search = search_index
-        self._cache = _GraphCache(wiki_dir)
         self._last_sync_check = 0.0
         self._last_sync_mtime = -1.0
         self._embed_lock = threading.Lock()
@@ -566,54 +481,44 @@ class WikiTools:
 
     def find_related(self, title: str, depth: int = 2, limit: int = DEFAULT_RELATED_LIMIT) -> str:
         """
-        Find pages related to a concept via backlink graph traversal.
+        List the pages reachable from a page by following its links.
 
         Parameters
         ----------
         title: str
             Page title or slug to start from.
         depth: int
-            Number of link hops to traverse.
+            How many hops to walk out.
         limit: int
-            Maximum number of related pages to return; the reachable set can
-            grow combinatorially with depth, so it is capped.
+            Maximum number of pages to list.
 
         Returns
         -------
         str
-            Wikilink list of related pages, with a count note when capped, or
-            a not-found message.
+            A wikilink list with gaps marked, plus a coverage note when capped,
+            or a not-found / no-relations message.
         """
         slug = title.lower().replace(" ", "-")
-        pages, graph = self._cache.get()
-
-        if slug not in pages:
+        if not self._search.page_titles({slug}):
             return f"Page not found: {title}"
 
         related: set[str] = set()
         frontier = {slug}
-
         for _ in range(depth):
-            next_frontier: set[str] = set()
-            for node in frontier:
-                next_frontier.update(graph.forward.get(node, set()))
-                next_frontier.update(graph.backward.get(node, set()))
-            next_frontier -= related
-            next_frontier.discard(slug)
-            related.update(next_frontier)
-            frontier = next_frontier
+            frontier = self._search.neighbors(frontier) - related - {slug}
+            if not frontier:
+                break
+            related.update(frontier)
 
         if not related:
             return f"No related pages found for {title}."
 
+        # cap so high degree nodes can't flood the callers context window
         ordered = sorted(related)
         window = ordered[: max(limit, 1)]
-        lines = []
-        for stem in window:
-            page = pages.get(stem)
-            if page:
-                t = page.frontmatter.get("title", stem)
-                lines.append(f"- [[{stem}|{t}]]")
-            else:
-                lines.append(f"- [[{stem}]] (gap)")
+        titles = self._search.page_titles(set(window))
+        lines = [
+            f"- [[{stem}|{titles[stem]}]]" if stem in titles else f"- [[{stem}]] (gap)"
+            for stem in window
+        ]
         return "\n".join(lines) + _more_note(len(window), len(ordered), pageable=False)

@@ -22,6 +22,10 @@ _FRONTMATTER_EDGE_FIELDS = {
     "concepts_tested": "tests",
     "concepts_used": "uses",
 }
+WIKILINK_KIND = "mention"
+
+# Every edge type that can appear in wiki_links
+LINK_KINDS = (*_FRONTMATTER_EDGE_FIELDS.values(), WIKILINK_KIND)
 
 CONTENT_DIRS = ("concepts", "problems", "projects", "insights")
 
@@ -148,9 +152,9 @@ def extract_typed_edges(content: str) -> list[tuple[str, str]]:
 
     body = content[m.end() :] if (m := _FRONTMATTER_RE.match(content)) else content
     for target in _extract_wikilinks(body):
-        if (target, "mention") not in seen:
-            seen.add((target, "mention"))
-            edges.append((target, "mention"))
+        if (target, WIKILINK_KIND) not in seen:
+            seen.add((target, WIKILINK_KIND))
+            edges.append((target, WIKILINK_KIND))
     return edges
 
 

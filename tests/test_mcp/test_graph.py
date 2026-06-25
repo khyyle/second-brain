@@ -1,9 +1,7 @@
-"""Tests for the MCP link-graph cache and find_related traversal."""
+"""Tests for DB-backed find_related traversal over the wiki_links graph."""
 
 from __future__ import annotations
 
-import os
-import time
 from pathlib import Path
 
 from second_brain.config import SearchConfig
@@ -29,9 +27,9 @@ def _write_page(wiki: Path, stem: str, links: list[str], content_dir: str = "con
     return path
 
 
-def _force_cache_refresh(tools: WikiTools) -> None:
-    """Defeat the once-per-second stat rate-limit so the next get() re-checks."""
-    tools._cache._last_check = 0.0
+def _sync(tools: WikiTools) -> None:
+    """Index the on-disk pages so the link graph reflects them."""
+    tools._search.sync_from_wiki(tools._wiki)
 
 
 def test_find_related_traverses_both_directions(tmp_path: Path) -> None:
@@ -39,6 +37,7 @@ def test_find_related_traverses_both_directions(tmp_path: Path) -> None:
     _write_page(tools._wiki, "a", ["b"])
     _write_page(tools._wiki, "b", [])
     _write_page(tools._wiki, "c", ["a"])
+    _sync(tools)
 
     out = tools.find_related("a", depth=1)
 
@@ -54,6 +53,7 @@ def test_find_related_caps_fan_out(tmp_path: Path) -> None:
     _write_page(tools._wiki, "hub", targets)
     for stem in targets:
         _write_page(tools._wiki, stem, [])
+    _sync(tools)
 
     out = tools.find_related("hub", depth=1, limit=10)
 
@@ -62,21 +62,17 @@ def test_find_related_caps_fan_out(tmp_path: Path) -> None:
     assert "raise limit" in out  # capped, not paged
 
 
-def test_graph_cache_detects_deletion(tmp_path: Path) -> None:
+def test_find_related_drops_deleted_page(tmp_path: Path) -> None:
     tools = _make_tools(tmp_path)
     _write_page(tools._wiki, "a", ["b"])
     page_b = _write_page(tools._wiki, "b", [])
-    # An older page so the deleted file is not the newest (the case the bare
-    # max-file-mtime check would miss).
-    old = time.time() - 100
-    os.utime(page_b, (old, old))
+    _sync(tools)
 
-    assert "[[b" in tools.find_related("a", depth=1)
+    assert "[[b|" in tools.find_related("a", depth=1)  # resolved page link
 
     page_b.unlink()
-    _force_cache_refresh(tools)
+    _sync(tools)
 
-    # The directory mtime moved when the file was removed, so the cache rebuilds
-    # and b is gone from the graph (now only an unresolved gap target, if shown).
+    # b is no longer a page, so the surviving a->b edge shows it only as a gap.
     out = tools.find_related("a", depth=1)
     assert "b|" not in out  # no resolved page link to b

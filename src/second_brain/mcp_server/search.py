@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from second_brain.config import SearchConfig
-from second_brain.wiki.structure import extract_typed_edges
+from second_brain.wiki.structure import LINK_KINDS, extract_typed_edges
 
 logger = logging.getLogger(__name__)
 
@@ -465,6 +465,86 @@ class SearchIndex:
                     )
                 )
         return hits
+
+    def neighbors(self, stems: set[str], kinds: tuple[str, ...] | None = None) -> set[str]:
+        """
+        Find stems directly linked to or from any of ``stems`` — one level of
+        incoming and outgoing links. The result may include members of ``stems``
+        (e.g. a mutual link).
+
+        Parameters:
+        -----------
+        stems: set[str]
+            Page stems to find the neighbors of.
+        kinds: tuple[str, ...] | None, default=None
+            Edge kinds to traverse; each must be one of
+            `second_brain.wiki.structure.LINK_KINDS`. ``None`` traverses
+            every kind.
+
+        Returns
+        -------
+        set[str]
+            Neighboring stems, which may include gaps (no page of that stem).
+
+        Raises
+        ------
+        ValueError
+            If ``kinds`` contains a value that is not a known edge kind.
+        """
+        if not stems:
+            return set()
+        if kinds:
+            unknown = set(kinds) - set(LINK_KINDS)
+            if unknown:
+                raise ValueError(
+                    f"Unknown edge kind(s): {sorted(unknown)}. Valid kinds: {list(LINK_KINDS)}"
+                )
+
+        placeholders = ",".join("?" * len(stems))
+        kind_sql = ""
+        kind_params: list[str] = []
+        if kinds:
+            kind_sql = f" AND kind IN ({','.join('?' * len(kinds))})"
+            kind_params = list(kinds)
+
+        neighbors: set[str] = set()
+        with self._conn() as conn:
+            outgoing = conn.execute(
+                f"SELECT target FROM wiki_links WHERE source IN ({placeholders}){kind_sql}",
+                [*stems, *kind_params],
+            ).fetchall()
+            neighbors.update(row["target"] for row in outgoing)
+
+            incoming = conn.execute(
+                f"SELECT source FROM wiki_links WHERE target IN ({placeholders}){kind_sql}",
+                [*stems, *kind_params],
+            ).fetchall()
+            neighbors.update(row["source"] for row in incoming)
+        return neighbors
+
+    def page_titles(self, stems: set[str]) -> dict[str, str]:
+        """
+        Find the title of each stem that is a real page.
+
+        Parameters:
+        -----------
+        stems: set[str]
+            Page stems to look up.
+
+        Returns
+        -------
+        dict[str, str]
+            ``{stem: title}`` for the stems that resolve to a page.
+        """
+        if not stems:
+            return {}
+        placeholders = ",".join("?" * len(stems))
+
+        with self._conn() as conn:
+            titles = conn.execute(
+                f"SELECT stem, title FROM wiki_meta WHERE stem IN ({placeholders})", list(stems)
+            ).fetchall()
+        return {row["stem"]: row["title"] for row in titles}
 
     def list_pages(
         self,
