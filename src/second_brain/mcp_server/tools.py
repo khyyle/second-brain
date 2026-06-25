@@ -27,7 +27,7 @@ DEFAULT_RELATED_DEPTH = 2
 DEFAULT_SOURCES_LIMIT = 10
 DEFAULT_GAPS_LIMIT = 50
 DEFAULT_PREREQUISITE_DEPTH = 6
-MAX_INDEX_CHARS = 8000
+INDEX_PAGES_PER_DOMAIN = 10
 MAX_SOURCE_LENGTH_CHARS = 2000
 
 
@@ -372,30 +372,48 @@ class WikiTools:
         lines = [f"- {p['title']} ({p['content_type']}) — {p['path']}" for p in window]
         return "\n".join(lines) + _more_note(len(window), total, offset=offset)
 
-    def read_index(self) -> str:
+    def read_index(self, pages_per_domain: int = INDEX_PAGES_PER_DOMAIN) -> str:
         """
-        Read the master index: every page as a wikilink, grouped by domain.
+        Summarize the whole wiki as pages grouped under each domain.
+
+        Built live from the search index as opposed to the direct `_meta/index.md`,
+        so it reflects the current wiki rather than the last compile snapshot.
+
+        Parameters
+        ----------
+        pages_per_domain: int
+            Maximum pages to list under each domain before linking onward.
 
         Returns
         -------
         str
-            The index markdown, truncated with a pointer to ``list_pages`` past
-            the budget, or a prompt to run compilation when it does not exist yet.
+            A header with the page and domain totals, then one section per domain
+            (alphabetical) listing its pages as wikilinks and a ``+N more`` pointer
+            to ``list_pages`` when a domain has more, or an empty-wiki notice.
         """
-        index_path = self._wiki / "_views" / "index.md"
-        if not index_path.exists():
-            return "Index not yet generated. Run compilation first."
+        pages = self._search.list_pages()
+        if not pages:
+            return "No pages yet. Run compilation first."
 
-        text = index_path.read_text(encoding="utf-8")
-        # the index grows unbounded with wiki size so truncate past character budget
-        # and recommend browsing by domains.
-        if len(text) <= MAX_INDEX_CHARS:
-            return text
-        return (
-            text[:MAX_INDEX_CHARS]
-            + f"\n\n[index truncated at {MAX_INDEX_CHARS} of {len(text)} chars — "
-            "use list_pages(domain=...) or search to browse specific pages]"
-        )
+        # a page counts under every domain it declares, or "uncategorized" if it declares none
+        by_domain: dict[str, list[dict]] = defaultdict(list)
+        for page in pages:
+            domains = [d.strip() for d in (page["domains"] or "").split(",") if d.strip()]
+            for domain in domains or ["uncategorized"]:
+                by_domain[domain].append(page)
+
+        #
+        lines = [f"# Wiki index — {len(pages)} pages across {len(by_domain)} domains", ""]
+        for domain in sorted(by_domain):
+            domain_pages = by_domain[domain]
+            lines.append(f"## {domain} ({len(domain_pages)})")
+            shown = domain_pages[: max(pages_per_domain, 1)]
+            lines += [f"- [[{p['stem']}|{p['title']}]] ({p['content_type']})" for p in shown]
+            if len(domain_pages) > len(shown):
+                extra = len(domain_pages) - len(shown)
+                lines.append(f'  (+{extra} more — list_pages(domain="{domain}"))')
+            lines.append("")
+        return "\n".join(lines).rstrip()
 
     def capture_note(
         self,

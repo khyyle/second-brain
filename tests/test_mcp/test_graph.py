@@ -253,3 +253,27 @@ def test_list_domains_counts_pages(tmp_path: Path) -> None:
     # mathematics has two pages, economics one, so it ranks first.
     assert out.index("mathematics") < out.index("economics")
     assert "mathematics (2 pages)" in out
+
+
+def test_read_index_groups_by_domain_with_cap(tmp_path: Path) -> None:
+    tools = _make_tools(tmp_path)
+    _write_concept(tools._wiki, "alpha", domains=["mathematics"])
+    _write_concept(tools._wiki, "beta", domains=["mathematics"])
+    _write_concept(tools._wiki, "gamma", domains=["economics"])
+    _write_concept(tools._wiki, "loose")  # declares no domains
+    _sync(tools)
+
+    out = tools.read_index(pages_per_domain=1)
+
+    assert "4 pages across 3 domains" in out
+    assert "## mathematics (2)" in out
+    # the per-domain cap leaves a drill-down pointer for the bigger domain
+    assert '+1 more — list_pages(domain="mathematics")' in out
+    # a page with no domains is grouped under uncategorized
+    assert "## uncategorized (1)" in out
+
+
+def test_read_index_empty_wiki(tmp_path: Path) -> None:
+    tools = _make_tools(tmp_path)
+
+    assert "No pages yet" in tools.read_index()
