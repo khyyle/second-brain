@@ -296,22 +296,30 @@ private struct QueueRow: View {
                 Button("Retry", action: onRetry)
                     .buttonStyle(PillButton(tint: Theme.Colors.accentAmber))
             }
-            if hovering {
+            // Hold the status meta and the hover remove icon in one slot so the
+            // title's width — and its middle truncation — stays put on hover.
+            ZStack(alignment: .trailing) {
+                Group {
+                    if item.state == .processing {
+                        TimelineView(.periodic(from: .now, by: 1)) { context in
+                            Text(formatElapsed(max(0, context.date.timeIntervalSince(item.since))))
+                                .font(Theme.Font.meta(10))
+                                .foregroundStyle(Theme.Colors.textTertiary)
+                                .monospacedDigit()
+                        }
+                    } else if item.state == .waiting {
+                        Text(item.state.label)
+                            .font(Theme.Font.meta(10))
+                            .foregroundStyle(Theme.Colors.textTertiary)
+                            .monospacedDigit()
+                    }
+                }
+                .opacity(hovering ? 0 : 1)
                 HoverIcon(systemName: "xmark.circle.fill",
                           help: "Remove (moves the file to Trash)",
                           action: onRemove)
-            } else if item.state == .processing {
-                TimelineView(.periodic(from: .now, by: 1)) { context in
-                    Text(formatElapsed(max(0, context.date.timeIntervalSince(item.since))))
-                        .font(Theme.Font.meta(10))
-                        .foregroundStyle(Theme.Colors.textTertiary)
-                        .monospacedDigit()
-                }
-            } else if item.state == .waiting {
-                Text(item.state.label)
-                    .font(Theme.Font.meta(10))
-                    .foregroundStyle(Theme.Colors.textTertiary)
-                    .monospacedDigit()
+                    .opacity(hovering ? 1 : 0)
+                    .allowsHitTesting(hovering)
             }
         }
         .modifier(RowBackground(hovering: hovering))
@@ -1031,14 +1039,19 @@ private struct StagedRow: View {
                 .lineLimit(1).truncationMode(.middle)
                 .openableTitle(cleanName(name))
             Spacer(minLength: 6)
-            if hovering {
-                HoverIcon(systemName: "xmark.circle.fill",
-                          help: "Remove source (moves the raw file to Trash)",
-                          action: onRemove)
-            } else {
+            // Keep the size label and the hover remove icon in one trailing
+            // slot so swapping them never changes the title's available width
+            // and re-truncates a middle-clipped name (a visible shift).
+            ZStack(alignment: .trailing) {
                 Text(sizeText)
                     .font(Theme.Font.meta(9.5))
                     .foregroundStyle(Theme.Colors.textTertiary)
+                    .opacity(hovering ? 0 : 1)
+                HoverIcon(systemName: "xmark.circle.fill",
+                          help: "Remove source (moves the raw file to Trash)",
+                          action: onRemove)
+                    .opacity(hovering ? 1 : 0)
+                    .allowsHitTesting(hovering)
             }
         }
         .modifier(RowBackground(hovering: hovering))
