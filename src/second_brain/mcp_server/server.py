@@ -170,7 +170,15 @@ def read_index(
 
 @mcp.tool()
 def capture_note(
-    content: Annotated[str, Field(description="The raw text of the note or insight to capture.")],
+    content: Annotated[
+        str,
+        Field(
+            description=(
+                "Freeform insight text to capture. Write all relevant detail and "
+                "context. Do not format it as a finished page or add frontmatter."
+            )
+        ),
+    ],
     title: Annotated[
         str | None,
         Field(description="Optional short title, else the first line of content is used."),
@@ -180,14 +188,14 @@ def capture_note(
         Field(description="Optional topic hint recorded in frontmatter to guide compilation."),
     ] = None,
 ) -> str:
-    """Capture a note or insight from this conversation into the knowledge base.
+    """Capture a freeform insight from this conversation into the knowledge base.
 
-    Saves the content as a source document in the intake queue so it flows
-    through the normal ingest -> triage -> compile pipeline, gaining source
-    traceability and quality gating. It does NOT author a finished wiki
-    page directly; the page is written by the next compile run. Use this to
-    save something worth keeping for later. Optionally pass a short `title`
-    and a `topic` hint to guide compilation.
+    Use this to save something worth keeping. Dump the insight as detailed,
+    freeform notes--capture relevant substance and context, keeping it detailed. Do
+    NOT write a finished wiki page or YAML frontmatter. The note is saved as a
+    source document. Compilation will later title/place/link/synthesize this into the graph.
+    It does NOT author a page directly, so don't pre-summarize or structure it. Richer
+    raw detail compiles into a better page. Optionally pass a short `title` and a `topic` hint.
     """
     return _get_tools().capture_note(content, title=title, topic=topic)
 

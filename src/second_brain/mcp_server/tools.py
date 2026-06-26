@@ -4,14 +4,17 @@ from __future__ import annotations
 
 import heapq
 import logging
+import subprocess
+import sys
 import threading
 import time
 from collections import defaultdict
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
 from second_brain.mcp_server.search import SearchIndex
-from second_brain.wiki.structure import CONTENT_DIRS, _parse_frontmatter
+from second_brain.wiki.structure import CONTENT_DIRS, _parse_frontmatter, strip_frontmatter
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +32,30 @@ DEFAULT_GAPS_LIMIT = 50
 DEFAULT_PREREQUISITE_DEPTH = 6
 INDEX_PAGES_PER_DOMAIN = 10
 MAX_SOURCE_LENGTH_CHARS = 2000
+
+
+def _spawn_ingest(path: Path) -> None:
+    """Start a detached single-file ingest of a just-captured note.
+
+    Uses ``ingest --path`` so only this file moves from the drop queue into
+    ``raw/``. Unlike a drops scan it does not trigger the global triage backlog.
+    Best-effort, so a failed spawn never undoes the capture that already wrote
+    the file to disk.
+
+    Parameters
+    ----------
+    path: Path
+        The captured note file to ingest.
+    """
+    try:
+        subprocess.Popen(
+            [sys.executable, "-m", "second_brain.cli", "ingest", "--path", str(path)],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+    except OSError as exc:
+        logger.warning("Could not start ingest for captured note %s: %s", path, exc)
 
 
 def _more_note(shown: int, total: int, *, offset: int = 0, pageable: bool = True) -> str:
@@ -146,7 +173,13 @@ class WikiTools:
     underlying search index, filesystem, and link graph.
     """
 
-    def __init__(self, wiki_dir: Path, raw_dir: Path, search_index: SearchIndex) -> None:
+    def __init__(
+        self,
+        wiki_dir: Path,
+        raw_dir: Path,
+        search_index: SearchIndex,
+        ingest_trigger: Callable[[Path], None] | None = None,
+    ) -> None:
         """
         Initialize WikiTools with directory paths and a search index.
 
@@ -158,10 +191,14 @@ class WikiTools:
             Root directory of raw ingested source documents.
         search_index: SearchIndex
             Shared search index instance for FTS queries.
+        ingest_trigger: Callable[[Path], None] | None
+            Invoked with a freshly captured note's path to start its ingest.
+            defaults to spawning a detached ``ingest --path`` process.
         """
         self._wiki = wiki_dir
         self._raw = raw_dir
         self._search = search_index
+        self._ingest_trigger = ingest_trigger or _spawn_ingest
         self._last_sync_check = 0.0
         self._last_sync_mtime = -1.0
         self._embed_lock = threading.Lock()
@@ -422,7 +459,7 @@ class WikiTools:
         topic: str | None = None,
     ) -> str:
         """
-        Capture chat content as a source document for the pipeline.
+        Capture freeform chat content as a source document for the pipeline.
 
         Writes a markdown file into the ``drops/documents`` intake queue so
         the content flows through the normal ingest -> triage -> compile
@@ -433,7 +470,7 @@ class WikiTools:
         Parameters
         ----------
         content: str
-            The raw text to capture.
+            The raw, freeform insight text to capture.
         title: str | None
             Short title; the first line of *content* is used if omitted.
         topic: str | None
@@ -444,7 +481,7 @@ class WikiTools:
         str
             Confirmation with the relative path of the captured note.
         """
-        text = content.strip()
+        text = strip_frontmatter(content.lstrip()).strip()
         if not text:
             return "Nothing to capture: content is empty."
 
@@ -468,8 +505,9 @@ class WikiTools:
         frontmatter.append("---")
 
         path.write_text("\n".join(frontmatter) + "\n\n" + text + "\n", encoding="utf-8")
+        self._ingest_trigger(path)
         return (
-            f"Captured to {path.relative_to(self._raw.parent)}. "
+            f"Captured to {path.relative_to(self._raw.parent)} and queued for ingest. "
             "It will be triaged and compiled into the wiki on the next build."
         )
 

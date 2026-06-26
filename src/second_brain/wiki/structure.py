@@ -67,6 +67,24 @@ def _parse_frontmatter(content: str) -> dict:
         return {}
 
 
+def strip_frontmatter(content: str) -> str:
+    """Return markdown content with a leading YAML frontmatter block removed.
+
+    Parameters
+    ----------
+    content: str
+        Full markdown text, optionally beginning with a ``---`` block.
+
+    Returns
+    -------
+    str
+        The body after the frontmatter, or ``content`` unchanged when it has no
+        leading frontmatter block.
+    """
+    match = _FRONTMATTER_RE.match(content)
+    return content[match.end() :] if match else content
+
+
 def _normalize_link_target(target: str) -> str:
     """Reduce a wikilink target to a bare page stem.
 
@@ -115,9 +133,7 @@ def _extract_wikilinks(content: str) -> list[str]:
 
 def _count_words(content: str) -> int:
     """Count words in the body only, excluding YAML frontmatter."""
-    fm = _FRONTMATTER_RE.match(content)
-    body = content[fm.end() :] if fm else content
-    return len(body.split())
+    return len(strip_frontmatter(content).split())
 
 
 def extract_typed_edges(content: str) -> list[tuple[str, str]]:
@@ -150,7 +166,7 @@ def extract_typed_edges(content: str) -> list[tuple[str, str]]:
                 seen.add((target, kind))
                 edges.append((target, kind))
 
-    body = content[m.end() :] if (m := _FRONTMATTER_RE.match(content)) else content
+    body = strip_frontmatter(content)
     for target in _extract_wikilinks(body):
         if (target, WIKILINK_KIND) not in seen:
             seen.add((target, WIKILINK_KIND))
