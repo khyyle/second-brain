@@ -10,15 +10,19 @@ Two kinds of material go in, and they go in differently on purpose.
 
 2. Chat history can be added by clicking the "Import ChatGPT export" button just under the drop zone. The app supports entering individual `conversation-*.json` files or a full data export folder--should you provide the full folder, the app will parse it and extract only the relevant `conversation-*.json` files.
 
-## The three tabs
+## The tabs
 
-The tabs follow your material through the pipeline.
+The first three tabs follow your material through the pipeline; the last two are about the wiki it produces.
 
 **Ingest** is where parsing happens. A file appears here while it is being turned into Markdown, with a spinner and a running clock; once parsed, it leaves this tab. Anything that fails to parse stays behind with a Retry. This stage is mechanical and free.
 
 **Chats** is the review desk for imported conversations. Chat history is noisy, so a small local model sorts each conversation into worthwhile, review, or skip as it comes in (see [architecture doc](architecture.md) for more details). A "Needs review" list shows the conversations the model was unsure about, each with Keep and Skip. Below it, "Recent" shows what was already decided. You can flip any of these decisions, skip something that slipped through, or restore something you set aside. It is highly recommended that you prune chats for redundancy whether through this review, manually, or through an agent of your choice (just tell Cursor, Claude Code, Codex, to prune ~/second-brain/drops/chatgpt/). Only ingested *chats* show up here.
 
 **Build** is where the wiki gets made, and the only tab tied to spending money. It lists what is staged — everything ingested and kept, ready to compile--with a rough cost estimate, and below that a log of pages already built.
+
+**Domains** manages the wiki's vocabulary of subject areas. Each domain is a broad area tagged in page frontmatter; the tab lists them with a page count, and you can rename, merge, or delete one — the change rewrites every affected page. Domains are grown by the build, so this tab fills in as the wiki does.
+
+**Health** is a read-only check on the compiled wiki: orphan pages, broken links, oversized or stub pages, missing frontmatter, and pages whose sources changed since the last build. Each check expands to the pages it flagged, which open on click. There is nothing to act on here directly — the fixes land on the next build.
 
 ## Building the wiki
 

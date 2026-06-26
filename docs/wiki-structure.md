@@ -36,7 +36,7 @@ A new wiki is initialized with **no domains**. Over time, the compilation agent 
 | ----------------------------------- | -------------------------------------------------- |
 | The page files (frontmatter + body) | `search.db` (keyword + embedding index)            |
 | `_meta/topic_schema.yaml`           | `_views/` (index, gaps, recently-updated, domains) |
-| `raw/` parsed sources               | the in-memory link graph the MCP traverses         |
+| `raw/` parsed sources               | the link graph the MCP traverses         |
 | `manifest.db` (ingestion state)     | —                                                  |
 
 
@@ -60,3 +60,4 @@ Everything in the right column can be regenerated from the left. Deleting it cos
 | `wiki_fts` | full-text keyword search |
 | `wiki_meta` | page metadata: title, type, domains, tags, path, hashes |
 | `wiki_vec` | embeddings for semantic search |
+| `wiki_links` | typed page-to-page link graph (prerequisite, related, tests, uses, mention) |

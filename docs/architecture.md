@@ -43,7 +43,7 @@ Planning is optional and exists to fight redundancy. Five years of chats circle 
 
 Synthesis is the agent. A Claude agent works through the plan one group at a time, reading that group's sources with sandboxed file tools and writing or updating wiki pages with YAML front matter, `[[wikilinks]]`, LaTeX math, and source citations. A chat that did not cluster with anything is simply a group of one. Cross-linking across groups still works because the agent reads the growing wiki through those same tools. Two guards bound spend: a per-run token budget caps how much the agent can do on one group, and an optional per-build dollar ceiling stops the run once cumulative cost crosses it; a group too large for a single run is split into smaller batches first.
 
-After the agent pass, a deterministic step — no model — rebuilds the index, backlink catalog, and domain views from the file graph.
+After the agent pass, a deterministic step — no model — rebuilds the index, gap list, domain views, and recently-updated list from the file graph.
 
 ### Access
 
@@ -59,7 +59,6 @@ The compiled wiki is plain Markdown under `~/second-brain/wiki/`, so it opens di
 | Semantic-search and clustering embeddings | Local, via Ollama |
 | Grouping chats into clusters | Local (threshold or HDBSCAN over embeddings) |
 | Wiki synthesis (the build step) | Claude API |
-| Handwriting OCR, if set to a Claude model | Claude API |
 
 Only the build step is required to leave the machine. Everything needed to capture, parse, and filter your material is local and free.
 

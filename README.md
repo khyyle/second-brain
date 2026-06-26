@@ -72,8 +72,8 @@ Open Second Brain from the menu bar, then:
 
 Drop any of these on the app, or copy them into `~/second-brain/drops/`:
 
-- **PDFs** (`.pdf`) — typed, handwritten, scanned, or a mix. Pages are handled one at a time, so a handout with handwritten notes comes through intact.
-- **Text** (`.md`, `.txt`, `.tex`) — passed through with light front matter added.
+- **PDFs** (`.pdf`) — typed, handwritten, scanned, or a mix. Pages are handled one at a time, so handwritten notes on a typed page come through intact.
+- **Text** (`.md`, `.txt`, `.tex`) — Markdown, plain text, or LaTeX.
 - **ChatGPT exports** — the `conversations.json` (or split `conversations-*.json`) from a ChatGPT data export. Drop the file or the unzipped folder; only the conversation data is kept.
 
 > Only ChatGPT's own export format is supported. Exports from other assistants will not work.
