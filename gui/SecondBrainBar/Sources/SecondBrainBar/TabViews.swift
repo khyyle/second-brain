@@ -157,6 +157,28 @@ private struct RowBackground: ViewModifier {
     }
 }
 
+/// Marks a row's clickable title: shows the full text as a tooltip (titles are
+/// truncated) and underlines while the pointer is over the text itself, so the
+/// open target stays legible and obvious — separate from the row-background
+/// highlight that tracks hovering anywhere in the row.
+private struct OpenableTitle: ViewModifier {
+    let full: String
+    @State private var hovering = false
+
+    func body(content: Content) -> some View {
+        content
+            .underline(hovering)
+            .help(full)
+            .onHover { hovering = $0 }
+    }
+}
+
+private extension View {
+    func openableTitle(_ full: String) -> some View {
+        modifier(OpenableTitle(full: full))
+    }
+}
+
 private func relativeTime(_ date: Date) -> String {
     let interval = Date().timeIntervalSince(date)
     if interval < 60      { return "now" }
@@ -258,6 +280,7 @@ private struct QueueRow: View {
                 .font(Theme.Font.body(11.5))
                 .foregroundStyle(Theme.Colors.textPrimary)
                 .lineLimit(1).truncationMode(.middle)
+                .openableTitle(cleanName(item.displayName))
             Spacer(minLength: 6)
             if item.state == .failed, let onRetry {
                 Button("Retry", action: onRetry)
@@ -396,6 +419,7 @@ private struct ReviewRow: View {
                 .font(Theme.Font.body(11.5))
                 .foregroundStyle(Theme.Colors.textPrimary)
                 .lineLimit(1).truncationMode(.middle)
+                .openableTitle(cleanName(row.displayName))
             Spacer(minLength: 6)
             Button("Keep", action: onKeep)
                 .buttonStyle(PillButton(tint: Theme.Colors.success))
@@ -422,6 +446,7 @@ private struct TriageDecidedRow: View {
                 .font(Theme.Font.body(11.5))
                 .foregroundStyle(Theme.Colors.textPrimary)
                 .lineLimit(1).truncationMode(.middle)
+                .openableTitle(cleanName(row.displayName))
             Spacer(minLength: 6)
             // The action fades in beside the badge (kept always present so the
             // status never appears to flip and the row doesn't reflow).
@@ -765,18 +790,10 @@ private struct StagedHeader: View {
     }
 
     private var costLine: some View {
-        HStack(spacing: 6) {
-            Text("~$\(String(format: "%.2f", estimatedCost))")
-                .font(Theme.Font.meta(10))
-                .foregroundStyle(Theme.Colors.textTertiary)
-                .monospacedDigit()
-            if stale {
-                Text("out of date")
-                    .font(Theme.Font.meta(10))
-                    .foregroundStyle(Theme.Colors.accentAmber)
-                    .help("The staged set changed since the last grouping — Regroup to refresh it.")
-            }
-        }
+        Text("~$\(String(format: "%.2f", estimatedCost))")
+            .font(Theme.Font.meta(10))
+            .foregroundStyle(Theme.Colors.textTertiary)
+            .monospacedDigit()
     }
 
     private var actions: some View {
@@ -929,7 +946,7 @@ private struct ClusterMemberRow: View {
                 .font(Theme.Font.body(11))
                 .foregroundStyle(excluded ? Theme.Colors.textTertiary : Theme.Colors.textSecondary)
                 .lineLimit(1).truncationMode(.middle)
-                .help(cleanName(member.rel))
+                .openableTitle(cleanName(member.rel))
             Spacer(minLength: 6)
             if hovering {
                 HoverIcon(
@@ -974,7 +991,7 @@ private struct StagedRow: View {
                 .font(Theme.Font.body(11.5))
                 .foregroundStyle(Theme.Colors.textPrimary)
                 .lineLimit(1).truncationMode(.middle)
-                .help(cleanName(name))
+                .openableTitle(cleanName(name))
             Spacer(minLength: 6)
             if hovering {
                 HoverIcon(systemName: "xmark.circle.fill",
@@ -1011,6 +1028,7 @@ private struct BuildRow: View {
                 .font(Theme.Font.body(11.5))
                 .foregroundStyle(Theme.Colors.textPrimary)
                 .lineLimit(1).truncationMode(.middle)
+                .openableTitle(cleanName(entry.pageName))
             Spacer(minLength: 6)
             Text(relativeTime(entry.at))
                 .font(Theme.Font.meta(10.5))
