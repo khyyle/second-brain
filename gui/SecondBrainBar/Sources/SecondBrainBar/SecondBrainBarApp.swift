@@ -2,13 +2,7 @@ import SwiftUI
 import AppKit
 
 /// Menu bar entry point.
-///
-/// The window is a floating `NSPanel` rather than an anchored `NSPopover`.
-/// A popover is ephemeral and tied to the status item: it can't be moved,
-/// is awkward to screenshot cleanly, and mis-anchors across displays with
-/// separate Spaces. The pipeline is something you sit with while a build
-/// runs, so a movable panel fits the usage better. `hidesOnDeactivate` is
-/// off so switching to Finder to drag in files keeps the panel visible.
+
 @main
 struct SecondBrainBarApp: App {
     @NSApplicationDelegateAdaptor(StatusBarController.self) private var controller
@@ -159,8 +153,7 @@ final class StatusBarController: NSObject, NSApplicationDelegate {
         panel.titleVisibility = .hidden
         panel.titlebarAppearsTransparent = true
         panel.isMovableByWindowBackground = true
-        panel.isFloatingPanel = true
-        panel.level = .floating
+        panel.level = .normal
         panel.hidesOnDeactivate = false
         panel.isReleasedWhenClosed = false
         panel.appearance = NSAppearance(named: .darkAqua)
