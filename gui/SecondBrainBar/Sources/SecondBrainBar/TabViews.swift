@@ -75,27 +75,30 @@ struct HelpButton: View {
     }
 }
 
-/// Trailing "+N more" row for a capped list. The panel only shows the most
-/// recent items, so clicking opens the rest in Finder rather than paging
-/// through them in here.
-private struct MoreRow: View {
-    let count: Int
-    let revealURL: URL
-    var noun: String = "more"
-    @State private var hovering = false
+/// A capped list that expands inline in pages — with a collapse — instead of
+/// overflowing into Finder. A small overflow fills in with one tap; a large
+/// queue pages through, so the popover stays bounded either way.
+private struct PaginatedList<Item: Identifiable, RowContent: View>: View {
+    let items: [Item]
+    var initial: Int = ListCap.max
+    var step: Int = 200
+    @ViewBuilder let row: (Item) -> RowContent
+    @State private var expandedTo = 0  // 0 means the initial window
+
+    private var limit: Int { min(expandedTo == 0 ? initial : expandedTo, items.count) }
 
     var body: some View {
-        Button { NSWorkspace.shared.open(revealURL) } label: {
-            Text("+ \(count) \(noun)")
-                .font(Theme.Font.meta(10))
-                .foregroundStyle(hovering ? Theme.Colors.textSecondary : Theme.Colors.textTertiary)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
-                .contentShape(Rectangle())
+        LazyVStack(spacing: 1) {
+            ForEach(items.prefix(limit)) { row($0) }
         }
-        .buttonStyle(.plain)
-        .onHover { hovering = $0 }
+        if items.count > limit {
+            InlineActionRow(label: "+ \(items.count - limit) more") {
+                expandedTo = min(limit + step, items.count)
+            }
+        }
+        if limit > initial {
+            InlineActionRow(label: "Show fewer") { expandedTo = 0 }
+        }
     }
 }
 
@@ -107,11 +110,21 @@ private struct InlineToggleRow: View {
     let collapsedLabel: String
     let isExpanded: Bool
     let onToggle: () -> Void
+
+    var body: some View {
+        InlineActionRow(label: isExpanded ? "Show fewer" : collapsedLabel, action: onToggle)
+    }
+}
+
+/// A left-aligned, low-emphasis action row: meta text that brightens on hover
+private struct InlineActionRow: View {
+    let label: String
+    let action: () -> Void
     @State private var hovering = false
 
     var body: some View {
-        Button(action: onToggle) {
-            Text(isExpanded ? "Show fewer" : collapsedLabel)
+        Button(action: action) {
+            Text(label)
                 .font(Theme.Font.meta(10))
                 .foregroundStyle(hovering ? Theme.Colors.textSecondary : Theme.Colors.textTertiary)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -157,17 +170,20 @@ private struct RowBackground: ViewModifier {
     }
 }
 
-/// Marks a row's clickable title: shows the full text as a tooltip (titles are
-/// truncated) and underlines while the pointer is over the text itself, so the
-/// open target stays legible and obvious — separate from the row-background
-/// highlight that tracks hovering anywhere in the row.
+/// shows the full text as a tooltip and underlines while the pointer is over the text
 private struct OpenableTitle: ViewModifier {
     let full: String
     @State private var hovering = false
 
     func body(content: Content) -> some View {
         content
-            .underline(hovering)
+            .overlay(alignment: .bottom) {
+                if hovering {
+                    Rectangle()
+                        .frame(height: 1)
+                        .foregroundStyle(Theme.Colors.textSecondary)
+                }
+            }
             .help(full)
             .onHover { hovering = $0 }
     }
@@ -206,11 +222,8 @@ struct IngestTab: View {
             if active.isEmpty {
                 EmptyListMessage(text: loaded ? "Nothing ingesting. Drop a file above." : nil)
             } else {
-                ForEach(active.prefix(ListCap.max)) { item in
+                PaginatedList(items: active) { item in
                     QueueRow(item: item, onOpen: { open(item.id) }, onRemove: { remove(item.id) })
-                }
-                if active.count > ListCap.max {
-                    MoreRow(count: active.count - ListCap.max, revealURL: config.dropsRoot)
                 }
             }
 
@@ -220,16 +233,13 @@ struct IngestTab: View {
                     help: "These couldn't be parsed. Retry re-runs the local "
                         + "parser; the X removes the file."
                 )
-                ForEach(failed.prefix(ListCap.max)) { item in
+                PaginatedList(items: failed) { item in
                     QueueRow(
                         item: item,
                         onOpen: { open(item.id) },
                         onRemove: { remove(item.id) },
                         onRetry: { retry(item.id) }
                     )
-                }
-                if failed.count > ListCap.max {
-                    MoreRow(count: failed.count - ListCap.max, revealURL: config.dropsRoot)
                 }
             }
         }
@@ -335,7 +345,7 @@ struct ChatsTab: View {
             if review.isEmpty {
                 EmptyListMessage(text: loaded ? "Nothing needs review." : nil)
             } else {
-                ForEach(review.prefix(ListCap.max)) { row in
+                PaginatedList(items: review) { row in
                     ReviewRow(
                         row: row,
                         onOpen: { open(row) },
@@ -343,25 +353,19 @@ struct ChatsTab: View {
                         onSkip: { skip(row) }
                     )
                 }
-                if review.count > ListCap.max {
-                    MoreRow(count: review.count - ListCap.max, revealURL: config.inboxRoot)
-                }
             }
 
             SectionHeader(title: "Recent")
             if decided.isEmpty {
                 EmptyListMessage(text: loaded ? "No triage decisions yet." : nil)
             } else {
-                ForEach(decided.prefix(ListCap.max)) { row in
+                PaginatedList(items: decided) { row in
                     TriageDecidedRow(
                         row: row,
                         onOpen: { open(row) },
                         onSkip: { skip(row) },
                         onUnskip: { unskip(row) }
                     )
-                }
-                if decided.count > ListCap.max {
-                    MoreRow(count: decided.count - ListCap.max, revealURL: config.rawRoot)
                 }
             }
         }
@@ -394,10 +398,17 @@ struct ChatsTab: View {
     }
 
     private func open(_ row: TriageRow) {
-        // A skipped source lives in the hidden holding folder until a build.
-        let base = row.decision == .skip
-            ? ManifestMutator.skippedURL(config, row.id)
-            : config.rawRoot.appending(path: row.id)
+        // A skip can come from the app (file moved to the hidden .skipped/
+        // holding folder) or from the triage pipeline (file left in raw/), so
+        // open whichever location actually has it.
+        let raw = config.rawRoot.appending(path: row.id)
+        let base: URL
+        if row.decision == .skip {
+            let skipped = ManifestMutator.skippedURL(config, row.id)
+            base = FileManager.default.fileExists(atPath: skipped.path) ? skipped : raw
+        } else {
+            base = raw
+        }
         openInDefaultApp(base)
     }
 }
@@ -669,16 +680,13 @@ struct BuildTab: View {
                 }
             }
         } else {
-            ForEach(staged.prefix(ListCap.max)) { source in
+            PaginatedList(items: staged) { source in
                 StagedRow(
                     name: source.displayName,
                     sizeText: source.sizeText,
                     onOpen: { openRaw(source.id) },
                     onRemove: { remove(source.id) }
                 )
-            }
-            if staged.count > ListCap.max {
-                MoreRow(count: staged.count - ListCap.max, revealURL: config.rawRoot)
             }
         }
     }
@@ -688,11 +696,8 @@ struct BuildTab: View {
         if entries.isEmpty {
             EmptyListMessage(text: loaded ? "Nothing built yet." : nil)
         } else {
-            ForEach(entries.prefix(ListCap.max)) { entry in
+            PaginatedList(items: entries) { entry in
                 BuildRow(entry: entry, onOpen: { open(entry) })
-            }
-            if entries.count > ListCap.max {
-                MoreRow(count: entries.count - ListCap.max, revealURL: config.wikiRoot)
             }
         }
     }
