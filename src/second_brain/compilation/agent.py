@@ -61,9 +61,11 @@ write_page assembles the frontmatter from the fields you pass. On every page:
 - domains: list of broad subject areas (bare kebab strings)
 - tags: list of narrow topics (bare kebab strings)
 
-Plus the fields for its type — concept: prerequisites, related · problem:
-difficulty, concepts_tested · project: status, concepts_used · insight:
-key_takeaways.
+Plus the fields specific to its type:
+- concept: prerequisites, related
+- problem: difficulty, concepts_tested
+- project: status, concepts_used
+- insight: key_takeaways
 
 prerequisites / related / concepts_tested / concepts_used are lists of bare-stem
 [[wikilinks]]; include one even if its page does not exist yet, so it records a
