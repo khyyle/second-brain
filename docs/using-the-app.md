@@ -30,7 +30,7 @@ A build reads your staged sources and writes wiki pages with a Claude agent. The
 
 Before building a large pile of chats, it is worth grouping them first. Many conversations cover the same ground, and compiling each alone pays to write near-duplicate pages. "Group" (it appears on the Build tab once chats are staged) bundles related conversations so a topic compiles into one page instead of many. Grouping is local and free, and it shows its progress as it runs.
 
-Once a grouping exists, the Build tab shows it. Each cluster is an expandable row: open it to see the conversations inside, split it back apart if the grouping reached too far, or pop a single conversation out to compile on its own. Conversations that didn't cluster with anything sit behind a collapsible "ungrouped" count, since each just becomes its own page. Stage or remove sources after grouping and the plan goes "out of date"--a "Regroup" recomputes it against what is staged now.
+Once a grouping exists, the Build tab shows it. Each cluster is an expandable row: open it to see the conversations inside, split it back apart if the grouping reached too far, or pop a single conversation out to compile on its own. Conversations that didn't cluster with anything sit behind a collapsible "ungrouped" count, since each just becomes its own page. Stage or remove sources after grouping and the grouping no longer matches what is staged. The tab will show just the plain staged list--"Regroup" to cluster with the updated set.
 
 When the plan looks right, "Build wiki" compiles it. You can "Stop" mid-build: pages finished so far are kept, and the conversation in progress is rolled back cleanly so the next build redoes it from scratch.
 
