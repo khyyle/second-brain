@@ -3,21 +3,18 @@
 from __future__ import annotations
 
 import logging
-import re
 from pathlib import Path
 
 from second_brain.parsing.output import write_parse_output
 from second_brain.parsing.provider import ParseBlock, ParseLane, ParseResult
+from second_brain.wiki.structure import _FRONTMATTER_RE
 
 logger = logging.getLogger(__name__)
-
-# DOTALL so the lazy .*? matches multi-line YAML frontmatter blocks
-_FRONTMATTER_RE = re.compile(r"^---\s*\n.*?\n---\s*\n", re.DOTALL)
 
 
 def _has_frontmatter(content: str) -> bool:
     """Check if the file already starts with a YAML frontmatter block."""
-    return bool(_FRONTMATTER_RE.match(content))
+    return _FRONTMATTER_RE.match(content) is not None
 
 
 def _add_frontmatter(content: str, source_path: Path) -> str:
