@@ -1249,7 +1249,7 @@ private struct DomainRow: View {
                 .font(Theme.Font.body(11.5))
                 .foregroundStyle(Theme.Colors.textPrimary)
                 .lineLimit(1).truncationMode(.middle)
-                .help(domain.name)
+                .openableTitle(domain.name)
             Spacer(minLength: 6)
             menu
                 .opacity(hovering && !busy ? 1 : 0)
@@ -1442,12 +1442,7 @@ private struct HealthItemRow: View {
     var body: some View {
         HStack(spacing: 9) {
             Spacer().frame(width: 12)
-            Text(item.text)
-                .font(Theme.Font.body(11))
-                .foregroundStyle(openable ? Theme.Colors.textSecondary : Theme.Colors.textTertiary)
-                .lineLimit(1)
-                .truncationMode(.middle)
-                .help(item.text)
+            title
             Spacer(minLength: 6)
         }
         .modifier(RowBackground(hovering: hovering && openable))
@@ -1455,5 +1450,21 @@ private struct HealthItemRow: View {
         .onTapGesture { if let page = item.page { onOpen(page) } }
         .onHover { hovering = $0 }
         .animation(.easeInOut(duration: 0.12), value: hovering)
+    }
+
+    // Page-backed items open on click, so they carry the openable underline;
+    // an item with no page (a broken link's missing target) stays inert text.
+    @ViewBuilder
+    private var title: some View {
+        let base = Text(item.text)
+            .font(Theme.Font.body(11))
+            .foregroundStyle(openable ? Theme.Colors.textSecondary : Theme.Colors.textTertiary)
+            .lineLimit(1)
+            .truncationMode(.middle)
+        if openable {
+            base.openableTitle(item.text)
+        } else {
+            base.help(item.text)
+        }
     }
 }
