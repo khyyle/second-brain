@@ -804,13 +804,32 @@ private struct StagedHeader: View {
     private var actions: some View {
         HStack(spacing: 8) {
             if canPreview {
-                Button((plan == nil && !stale) ? "Group" : "Regroup", action: onPreview)
-                    .buttonStyle(PillButton(tint: Theme.Colors.textSecondary))
+                regroupButton
             }
             if canBuild {
                 Button("Build wiki", action: onBuild)
                     .buttonStyle(PillButton(tint: Theme.Colors.textPrimary))
             }
+        }
+    }
+
+    // A stale plan no longer matches the staged set, so its grouping — and the
+    // cost saving that comes with it — is dropped on the next build unless it is
+    // recomputed first. Mark that case amber with a refresh glyph; an absent or
+    // current plan stays neutral.
+    @ViewBuilder
+    private var regroupButton: some View {
+        if stale {
+            Button(action: onPreview) {
+                HStack(spacing: 3) {
+                    Image(systemName: "arrow.triangle.2.circlepath")
+                    Text("Regroup")
+                }
+            }
+            .buttonStyle(PillButton(tint: Theme.Colors.accentAmber))
+        } else {
+            Button(plan == nil ? "Group" : "Regroup", action: onPreview)
+                .buttonStyle(PillButton(tint: Theme.Colors.textSecondary))
         }
     }
 }
@@ -877,11 +896,7 @@ private struct ClusterGroupRow: View {
                 .font(.system(size: 10, weight: .semibold))
                 .foregroundStyle(Theme.Colors.textSecondary)
                 .frame(width: 12)
-            Text(cleanName(group.title))
-                .font(Theme.Font.body(11.5))
-                .foregroundStyle(Theme.Colors.textPrimary)
-                .lineLimit(1).truncationMode(.middle)
-                .help(cleanName(group.title))
+            title
             if isMulti {
                 Text("\(group.members.count) chats" + (isSplit ? " · split" : ""))
                     .font(Theme.Font.meta(9.5))
@@ -896,6 +911,24 @@ private struct ClusterGroupRow: View {
             if isMulti { expanded.toggle() } else { onOpen(group.members.first?.rel ?? "") }
         }
         .onHover { hovering = $0 }
+    }
+
+    // A single-source unit opens its file on click, so its title carries the
+    // openable underline affordance; a multi-chat group's title toggles the
+    // group open instead, so it only gets a tooltip.
+    @ViewBuilder
+    private var title: some View {
+        let name = cleanName(group.title)
+        let base = Text(name)
+            .font(Theme.Font.body(11.5))
+            .foregroundStyle(Theme.Colors.textPrimary)
+            .lineLimit(1)
+            .truncationMode(.middle)
+        if isMulti {
+            base.help(name)
+        } else {
+            base.openableTitle(name)
+        }
     }
 
     // A multi-chat group swaps its cost for a Split/Merge pill on hover. The
