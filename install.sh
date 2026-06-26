@@ -35,17 +35,17 @@ if ! command -v ollama >/dev/null 2>&1; then
     exit 1
 fi
 
-echo "[1/5] Installing Python dependencies..."
+echo "[1/6] Installing Python dependencies..."
 uv sync
 
-echo "[2/5] Creating data directories..."
+echo "[2/6] Creating data directories..."
 uv run python -c "from second_brain.config import load_config; load_config().ensure_directories()"
 
-echo "[3/5] Recording pipeline path for the app..."
+echo "[3/6] Recording pipeline path for the app..."
 mkdir -p "$VAULT"
 printf '%s\n' "$REPO_DIR/run.sh" > "$VAULT/.pipeline-script"
 
-echo "[4/6] Pulling required local models (Ollama)..."
+echo "[4/6] Pulling triage (gemma4:12b) and embedding models (nomic-embed-text) from Ollama..."
 # Pulling needs the daemon running; surface that distinctly from "not installed".
 if ! curl -s --max-time 5 http://localhost:11434/api/tags >/dev/null 2>&1; then
     echo "Ollama is installed but not running. Start it (open the Ollama app or" >&2
@@ -55,8 +55,8 @@ fi
 ollama pull gemma4:12b
 ollama pull nomic-embed-text
 
-echo "[5/6] Preparing local OCR model (Chandra 4-bit MLX)..."
-# Converts the Chandra weights to a ~2.9 GB 4-bit MLX model. First run on a
+echo "[5/6] Preparing local OCR model (Chandra 2, 4-bit MLX)..."
+# Converts Chandra 2 weights to a ~2.9 GB 4-bit MLX model. First run on a
 # fresh machine downloads the source weights; otherwise it reuses the cache.
 # Falls back to converting lazily on the first handwritten ingest.
 uv run python -c "from second_brain.parsing.chandra_parser import ensure_mlx_model; ensure_mlx_model('4bit')" \
