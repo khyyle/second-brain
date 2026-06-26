@@ -587,6 +587,7 @@ struct BuildTab: View {
     @State private var entries: [BuildLogEntry] = []
     @State private var status: PipelineStatus?
     @State private var loaded = false
+    @State private var stopping = false
     @State private var compilationModel = "claude-sonnet-4-6"
 
     // A fresh plan drives the view (and the build honors it) as long as it
@@ -607,6 +608,10 @@ struct BuildTab: View {
         status?.isActive == true && status?.phase == "cluster"
     }
 
+    private var compiling: Bool {
+        status?.isActive == true && status?.phase == "compile"
+    }
+
     var body: some View {
         VStack(spacing: 1) {
             StagedHeader(
@@ -621,7 +626,9 @@ struct BuildTab: View {
                     && staged.contains { $0.id.hasPrefix("chatgpt/") },
                 onPreview: previewGrouping,
                 onBuild: onBuild,
-                canBuild: canBuild
+                canBuild: canBuild,
+                stopping: stopping,
+                onStop: requestStop
             )
             if !deferred.isEmpty {
                 DeferredNote(count: deferred.count, model: compilationModel)
@@ -725,9 +732,16 @@ struct BuildTab: View {
         plan = loadedPlan
         entries = BuildLog.recent(at: config.buildLog)
         status = PipelineStatus.read(from: config.statusFile)
+        // Clear the local "Stopping" state once the compile actually ends.
+        if !compiling { stopping = false }
         compilationModel = ConfigStore.locate(config)
             .map { ConfigStore.load(from: $0).model } ?? "claude-sonnet-4-6"
         loaded = true
+    }
+
+    private func requestStop() {
+        stopping = true
+        PipelineRunner.requestStop(vaultRoot: config.vaultRoot)
     }
 
     private func previewGrouping() {
@@ -768,9 +782,15 @@ private struct StagedHeader: View {
     let onPreview: () -> Void
     let onBuild: () -> Void
     let canBuild: Bool
+    let stopping: Bool
+    let onStop: () -> Void
+
+    private var compiling: Bool {
+        status?.isActive == true && status?.phase == "compile"
+    }
 
     private var running: Bool {
-        grouping || (status?.isActive == true && status?.phase == "compile")
+        grouping || compiling
     }
 
     // A stale plan's cost is for the old staged set, so fall back to the
@@ -795,11 +815,21 @@ private struct StagedHeader: View {
                 }
             }
             Spacer(minLength: 8)
-            if !running, sourceCount > 0 {
+            if compiling || stopping {
+                stopButton
+            } else if !running, sourceCount > 0 {
                 actions
             }
         }
         .padding(.horizontal, 8).padding(.top, 4).padding(.bottom, 1)
+    }
+
+    /// While a compile runs, the primary action becomes Stop in the same slot
+    /// the Build button occupied — then a disabled Stopping until it winds down.
+    private var stopButton: some View {
+        Button(stopping ? "Stopping" : "Stop", action: onStop)
+            .buttonStyle(PillButton(tint: Theme.Colors.danger))
+            .disabled(stopping)
     }
 
     private var costLine: some View {

@@ -30,12 +30,7 @@ struct ContentView: View {
     @State private var showingOllamaAlert = false
     @State private var ollamaHealth: PipelineRunner.OllamaHealth?
     @State private var status: PipelineStatus?
-    @State private var stopping = false
     @Namespace private var tabNamespace
-
-    private var isCompiling: Bool {
-        status?.isActive == true && status?.phase == "compile"
-    }
 
     var body: some View {
         Group {
@@ -80,8 +75,6 @@ struct ContentView: View {
         }
         .onReceive(poll) { _ in
             status = PipelineStatus.read(from: config.statusFile)
-            // Clear the local "Stopping" state once the run actually ends.
-            if !isCompiling { stopping = false }
         }
         .onChange(of: feedback.event) { newValue in
             // A successful drop schedules a debounced (free) ingest run.
@@ -185,29 +178,11 @@ struct ContentView: View {
             FooterStatus(config: config, status: status)
                 .layoutPriority(1)
             Spacer(minLength: 6)
-            buildButton
             TextAction(title: "Reveal", help: "Reveal vault in Finder") {
                 PipelineRunner.revealInFinder(config.vaultRoot)
             }
             IconAction(systemName: "gearshape", help: "Settings") {
                 withAnimation(.easeInOut(duration: 0.2)) { showingSettings = true }
-            }
-        }
-    }
-
-    /// Footer build control: Stop (then Stopping) only while a compile runs.
-    /// Starting a build lives on the Build tab, beside what it will compile;
-    /// stopping stays in the footer so it's reachable from any tab.
-    @ViewBuilder
-    private var buildButton: some View {
-        if isCompiling || stopping {
-            TextAction(
-                title: stopping ? "Stopping" : "Stop",
-                help: "Stop the current build after the active step",
-                enabled: !stopping
-            ) {
-                PipelineRunner.requestStop(vaultRoot: config.vaultRoot)
-                stopping = true
             }
         }
     }
