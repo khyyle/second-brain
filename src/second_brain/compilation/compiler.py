@@ -496,7 +496,9 @@ def _run_agent(
         read_tools = WikiTools(wiki_dir, raw_dir, search_index)
         explore_schemas = explore_tool_schemas()
 
-    executor = WikiToolExecutor(wiki_dir, raw_dir, data_dir=config.data_dir, read_tools=read_tools)
+    executor = WikiToolExecutor(
+        wiki_dir, raw_dir, data_dir=config.data_dir, read_tools=read_tools, sources=sources
+    )
 
     # Present the source content inline so it can be cached as a stable prefix;
     # the agent then synthesizes rather than spending turns re-reading it.
@@ -624,6 +626,10 @@ def _run_agent(
             break
 
         messages.append({"role": "user", "content": tool_results})
+
+    # Stamp the build unit's sources onto every page the agent touched, so a page
+    # updated from a new source accumulates it instead of losing earlier ones.
+    executor.finalize_provenance()
 
     cost = profile.estimate_cost(
         total_input_tokens,

@@ -22,6 +22,7 @@ from second_brain.wiki.structure import (
     CONTENT_DIRS,
     discover_all_pages,
     rebuild_structure,
+    update_frontmatter,
 )
 
 logger = logging.getLogger(__name__)
@@ -175,12 +176,7 @@ def _rewrite_page(content: str, mapping: dict[str, str | None]) -> str | None:
     if remapped == original:
         return None
 
-    frontmatter["domains"] = remapped
-    new_frontmatter = yaml.safe_dump(
-        frontmatter, default_flow_style=False, sort_keys=False, allow_unicode=True
-    )
-    body = content[match.end() :]
-    return f"---\n{new_frontmatter}---\n{body}"
+    return update_frontmatter(content, {"domains": remapped})
 
 
 def _prune_domain_views(wiki_dir: Path, mapping: dict[str, str | None]) -> None:

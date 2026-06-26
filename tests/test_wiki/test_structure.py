@@ -7,9 +7,13 @@ from pathlib import Path
 from second_brain.wiki.structure import (
     _extract_wikilinks,
     _normalize_link_target,
+    _parse_frontmatter,
     build_link_graph,
     detect_gaps,
     discover_all_pages,
+    serialize_page,
+    strip_frontmatter,
+    update_frontmatter,
 )
 
 
@@ -44,3 +48,40 @@ def test_path_prefixed_links_resolve_in_graph(tmp_path: Path) -> None:
     assert "exchange-traded-funds" in graph.forward["equity-swaps"]
     assert "equity-swaps" in graph.backward["exchange-traded-funds"]
     assert detect_gaps(pages, graph) == []
+
+
+def test_serialize_page_round_trips_through_parse() -> None:
+    frontmatter = {
+        "title": "Point Estimation",
+        "type": "concept",
+        "domains": ["mathematics"],
+        "prerequisites": ["[[statistical-models]]"],
+        "sources": ["raw/documents/inference-modeling.md"],
+    }
+    page = serialize_page(frontmatter, "# Point Estimation\n\nBody text.")
+    assert _parse_frontmatter(page) == frontmatter
+    assert page.startswith("---\n")
+    # exactly one blank line between the closing fence and the body
+    assert "---\n\n# Point Estimation" in page
+
+
+def test_serialize_page_quotes_values_that_would_break_handwritten_yaml() -> None:
+    # A bare colon in a title is invalid YAML when typed by hand; serializing
+    # through yaml.safe_dump quotes it so the block always parses.
+    page = serialize_page({"title": "Estimation: A Primer", "type": "concept"}, "body")
+    assert _parse_frontmatter(page)["title"] == "Estimation: A Primer"
+
+
+def test_update_frontmatter_merges_fields_and_keeps_body_verbatim() -> None:
+    original = "---\ntitle: T\ntype: concept\ndomains:\n- a\n---\n\n# Heading\n\nBody.\n"
+    updated = update_frontmatter(original, {"domains": ["b", "c"], "tags": ["x"]})
+    assert updated is not None
+    parsed = _parse_frontmatter(updated)
+    assert parsed["domains"] == ["b", "c"]  # list replaced wholesale
+    assert parsed["tags"] == ["x"]  # new field added
+    assert parsed["title"] == "T"  # untouched field kept
+    assert strip_frontmatter(updated) == strip_frontmatter(original)  # body byte-identical
+
+
+def test_update_frontmatter_returns_none_without_a_block() -> None:
+    assert update_frontmatter("just a body, no frontmatter", {"title": "x"}) is None

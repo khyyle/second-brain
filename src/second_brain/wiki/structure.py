@@ -85,6 +85,71 @@ def strip_frontmatter(content: str) -> str:
     return content[match.end() :] if match else content
 
 
+def _dump_frontmatter(frontmatter: dict) -> str:
+    """Serialize a frontmatter mapping to a YAML block, preserving key order."""
+    return yaml.safe_dump(
+        frontmatter, default_flow_style=False, sort_keys=False, allow_unicode=True
+    )
+
+
+def serialize_page(frontmatter: dict, body: str) -> str:
+    """
+    Assemble a page file from a frontmatter mapping and a body.
+
+    The frontmatter is emitted as a guaranteed-valid YAML block, then a blank
+    line, then the body, so a page written this way can never carry a malformed
+    ``---`` block.
+
+    Parameters
+    ----------
+    frontmatter: dict
+        Field mapping to serialize, in insertion order.
+    body: str
+        Markdown body; leading newlines are dropped so exactly one blank line
+        separates the frontmatter from the body.
+
+    Returns
+    -------
+    str
+        The complete page text.
+    """
+    return f"---\n{_dump_frontmatter(frontmatter)}---\n\n{body.lstrip(chr(10))}"
+
+
+def update_frontmatter(content: str, changes: dict) -> str | None:
+    """
+    Merge ``changes`` into a page's existing frontmatter, leaving the body
+    byte-identical.
+
+    The block is parsed and re-serialized, so the result is valid YAML
+    regardless of the original formatting. Passed keys overwrite existing ones;
+    list values are replaced wholesale, not merged element-wise.
+
+    Parameters
+    ----------
+    content: str
+        Full page text that already opens with a ``---`` frontmatter block. This
+        updates an existing block. It does not add one to content without it.
+    changes: dict
+        Fields to set or overwrite.
+
+    Returns
+    -------
+    str | None
+        The rewritten page, or ``None`` when ``content`` has no parseable
+        frontmatter block.
+    """
+    match = _FRONTMATTER_RE.match(content)
+    if not match:
+        return None
+    try:
+        frontmatter = yaml.safe_load(match.group(1)) or {}
+    except yaml.YAMLError:
+        return None
+    frontmatter.update(changes)
+    return f"---\n{_dump_frontmatter(frontmatter)}---\n{content[match.end() :]}"
+
+
 def _normalize_link_target(target: str) -> str:
     """Reduce a wikilink target to a bare page stem.
 

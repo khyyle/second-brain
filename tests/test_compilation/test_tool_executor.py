@@ -11,6 +11,7 @@ from second_brain.compilation.agent import (
     build_source_block,
     compact_history,
 )
+from second_brain.wiki.structure import _parse_frontmatter
 
 
 def _executor(tmp_path: Path) -> tuple[WikiToolExecutor, Path, Path]:
@@ -21,32 +22,154 @@ def _executor(tmp_path: Path) -> tuple[WikiToolExecutor, Path, Path]:
     return WikiToolExecutor(wiki, raw), wiki, raw
 
 
-def test_write_rejects_nested_content_page(tmp_path: Path) -> None:
-    executor, wiki, _raw = _executor(tmp_path)
-
-    out = executor.execute("write_file", {"path": "concepts/mathematics/foo.md", "content": "x"})
-
-    assert out.startswith("Error:")
-    assert not (wiki / "concepts" / "mathematics" / "foo.md").exists()
-
-
-def test_write_allows_flat_content_page(tmp_path: Path) -> None:
+def test_write_file_tool_is_removed(tmp_path: Path) -> None:
     executor, wiki, _raw = _executor(tmp_path)
 
     out = executor.execute("write_file", {"path": "concepts/foo.md", "content": "x"})
 
-    assert out.startswith("Wrote")
-    assert (wiki / "concepts" / "foo.md").exists()
+    assert out.startswith("Unknown tool")
+    assert not (wiki / "concepts" / "foo.md").exists()
 
 
-def test_write_allows_nested_meta_path(tmp_path: Path) -> None:
-    # _meta is not a content bucket, so the flat-page rule does not apply.
+def test_write_page_path_stays_flat(tmp_path: Path) -> None:
+    # A slash in the title is dropped by slugification, so a page can never land
+    # in a nested folder.
+    wiki = tmp_path / "wiki"
+    raw = tmp_path / "raw"
+    wiki.mkdir()
+    raw.mkdir()
+    executor = WikiToolExecutor(wiki, raw, sources=["s.md"])
+
+    executor.execute("write_page", {"type": "concept", "title": "Sub/Folder Attempt", "body": "b"})
+
+    assert (wiki / "concepts" / "subfolder-attempt.md").exists()
+    assert not (wiki / "concepts" / "sub").exists()
+
+
+def test_write_page_creates_valid_page_and_stamps_sources(tmp_path: Path) -> None:
+    wiki = tmp_path / "wiki"
+    raw = tmp_path / "raw"
+    wiki.mkdir()
+    raw.mkdir()
+    executor = WikiToolExecutor(wiki, raw, sources=["documents/inference-modeling.md"])
+
+    out = executor.execute(
+        "write_page",
+        {
+            "type": "concept",
+            "title": "Point Estimation",
+            "domains": ["mathematics"],
+            "prerequisites": ["[[statistical-models]]"],
+            "body": "# Point Estimation\n\nBody.",
+        },
+    )
+
+    assert "concepts/point-estimation.md" in out
+    fm = _parse_frontmatter(
+        (wiki / "concepts" / "point-estimation.md").read_text(encoding="utf-8")
+    )
+    assert fm["title"] == "Point Estimation"
+    assert fm["type"] == "concept"
+    assert fm["domains"] == ["mathematics"]
+    assert fm["prerequisites"] == ["[[statistical-models]]"]
+    # provenance is stamped by the executor, not the agent
+    assert fm["sources"] == ["raw/documents/inference-modeling.md"]
+
+
+def test_write_page_rejects_unknown_type(tmp_path: Path) -> None:
+    executor, _wiki, _raw = _executor(tmp_path)
+    out = executor.execute("write_page", {"type": "essay", "title": "X", "body": "y"})
+    assert out.startswith("Error")
+
+
+def test_write_page_refuses_to_overwrite_existing(tmp_path: Path) -> None:
     executor, wiki, _raw = _executor(tmp_path)
+    (wiki / "concepts" / "foo.md").write_text(
+        "---\ntitle: Foo\ntype: concept\n---\n", encoding="utf-8"
+    )
 
-    out = executor.execute("write_file", {"path": "_meta/topic_schema.yaml", "content": "x"})
+    out = executor.execute("write_page", {"type": "concept", "title": "Foo", "body": "y"})
 
-    assert out.startswith("Wrote")
-    assert (wiki / "_meta" / "topic_schema.yaml").exists()
+    assert out.startswith("Error")
+    assert "exists" in out
+
+
+def test_set_page_meta_merges_frontmatter_and_keeps_body(tmp_path: Path) -> None:
+    executor, wiki, _raw = _executor(tmp_path)
+    page = wiki / "concepts" / "foo.md"
+    page.write_text(
+        "---\ntitle: Foo\ntype: concept\ndomains:\n- a\n---\n\n# Foo\n\nBody.\n", encoding="utf-8"
+    )
+
+    out = executor.execute(
+        "set_page_meta", {"slug": "foo", "domains": ["b"], "related": ["[[bar]]"]}
+    )
+
+    assert "foo" in out
+    text = page.read_text(encoding="utf-8")
+    fm = _parse_frontmatter(text)
+    assert fm["domains"] == ["b"]  # replaced wholesale
+    assert fm["related"] == ["[[bar]]"]  # added
+    assert fm["title"] == "Foo"  # untouched
+    assert "# Foo\n\nBody." in text  # body untouched
+
+
+def test_set_page_meta_ignores_system_managed_fields(tmp_path: Path) -> None:
+    executor, wiki, _raw = _executor(tmp_path)
+    page = wiki / "concepts" / "foo.md"
+    page.write_text(
+        "---\ntitle: Foo\ntype: concept\nsources:\n- raw/documents/old.md\n---\n\nBody.\n",
+        encoding="utf-8",
+    )
+
+    executor.execute(
+        "set_page_meta",
+        {"slug": "foo", "sources": ["raw/evil.md"], "title": "Hacked", "tags": ["x"]},
+    )
+
+    fm = _parse_frontmatter(page.read_text(encoding="utf-8"))
+    assert fm["sources"] == ["raw/documents/old.md"]  # provenance is not agent-settable
+    assert fm["title"] == "Foo"  # nor the title
+    assert fm["tags"] == ["x"]  # ordinary fields still apply
+
+
+def test_finalize_unions_sources_into_updated_pages(tmp_path: Path) -> None:
+    wiki = tmp_path / "wiki"
+    raw = tmp_path / "raw"
+    (wiki / "concepts").mkdir(parents=True)
+    raw.mkdir()
+    executor = WikiToolExecutor(wiki, raw, sources=["chatgpt/new.md"])
+    page = wiki / "concepts" / "foo.md"
+    page.write_text(
+        "---\ntitle: Foo\ntype: concept\nsources:\n- raw/documents/old.md\n---\n\nBody.\n",
+        encoding="utf-8",
+    )
+
+    executor.execute(
+        "edit_file",
+        {"path": "concepts/foo.md", "old_string": "Body.", "new_string": "Body. More."},
+    )
+    executor.finalize_provenance()
+
+    fm = _parse_frontmatter(page.read_text(encoding="utf-8"))
+    assert fm["sources"] == [
+        "raw/documents/old.md",
+        "raw/chatgpt/new.md",
+    ]  # additive, no regression
+
+
+def test_finalize_is_idempotent_for_created_pages(tmp_path: Path) -> None:
+    wiki = tmp_path / "wiki"
+    raw = tmp_path / "raw"
+    wiki.mkdir()
+    raw.mkdir()
+    executor = WikiToolExecutor(wiki, raw, sources=["chatgpt/new.md"])
+
+    executor.execute("write_page", {"type": "concept", "title": "Bar", "body": "b"})
+    executor.finalize_provenance()
+
+    fm = _parse_frontmatter((wiki / "concepts" / "bar.md").read_text(encoding="utf-8"))
+    assert fm["sources"] == ["raw/chatgpt/new.md"]  # unchanged: write_page already stamped it
 
 
 def test_read_file_pages_long_source(tmp_path: Path) -> None:

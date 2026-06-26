@@ -11,7 +11,12 @@ import re
 from pathlib import Path
 
 from second_brain.mcp_server.tools import WikiTools
-from second_brain.wiki.structure import CONTENT_DIRS
+from second_brain.wiki.structure import (
+    CONTENT_DIRS,
+    _parse_frontmatter,
+    serialize_page,
+    update_frontmatter,
+)
 
 COMPILATION_SYSTEM_PROMPT = """\
 You are a knowledge-base compilation agent. Your job is to read raw parsed \
@@ -39,15 +44,22 @@ You operate inside a wiki directory with this structure:
    b. Does a related page exist? → update it
    c. Is this new? → create a new page in the right folder
    d. Is a page too long (>4000 words)? → split it
-5. Write or update each page per the Frontmatter and Rules below
+5. Write or update each page per the Fields and Rules below
 
-## Frontmatter
-Every page opens with YAML frontmatter. On every page:
+## Writing pages
+- write_page — create a NEW page. You supply the content fields below; the system
+  writes a valid frontmatter block, names and places the file, and records its
+  sources. Do not hand-write frontmatter or choose a path.
+- set_page_meta — change an existing page's frontmatter fields (domains, tags,
+  prerequisites, related, ...) in place, leaving the body untouched.
+- edit_file — change an existing page's body prose.
+
+## Fields you choose
+write_page assembles the frontmatter from the fields you pass. On every page:
 - title: human-readable string
 - type: concept | problem | project | insight
 - domains: list of broad subject areas (bare kebab strings)
 - tags: list of narrow topics (bare kebab strings)
-- sources: list of the raw/... paths the page was compiled from
 
 Plus the fields for its type — concept: prerequisites, related · problem:
 difficulty, concepts_tested · project: status, concepts_used · insight:
@@ -55,29 +67,9 @@ key_takeaways.
 
 prerequisites / related / concepts_tested / concepts_used are lists of bare-stem
 [[wikilinks]]; include one even if its page does not exist yet, so it records a
-real edge, not loose text. Example:
-
----
-title: Point Estimation
-type: concept
-domains:
-  - mathematics
-tags:
-  - statistics
-prerequisites:
-  - "[[statistical-models]]"
-  - "[[probability-distributions]]"
-related:
-  - "[[confidence-intervals]]"
-sources:
-  - raw/documents/inference-modeling.md
----
+real edge, not loose text.
 
 ## Rules
-- The wiki is flat: write each page directly in its content folder
-  (e.g. concepts/gradient-descent.md), never in a subfolder. Group by topic
-  with frontmatter `domains`, not directories.
-- File names use kebab-case (e.g., gradient-descent.md)
 - Use [[wikilinks]] for cross-references; link by bare page stem only
   (e.g. [[gradient-descent]]), never folder-prefixed ([[concepts/...]]) or
   with a .md suffix
@@ -93,7 +85,7 @@ sources:
 - Pages should be 500-3000 words
 - Synthesize across sources, don't just copy
 - Resolve contradictions between sources when possible
-- Preserve mathematical precision from source material
+- Preserve detail from the source material (e.g. mathematical precision)
 
 ## Termination
 Once you have processed every source document in the provided list and
@@ -165,6 +157,9 @@ def build_source_block(sources: list[str], raw_dir: Path) -> str:
     return "\n\n".join(parts)
 
 
+# Content types the agent may create, each mapping to its `<type>s/` directory.
+_PAGE_TYPES = ("concept", "problem", "project", "insight")
+
 # Tool definitions in Anthropic's tool-use schema format.
 # These are passed to the API as the `tools` parameter and define
 # what filesystem operations the agent can perform during compilation.
@@ -197,26 +192,6 @@ WIKI_TOOLS = [
         },
     },
     {
-        "name": "write_file",
-        "description": (
-            "Write content to a file in the wiki directory. Creates parent directories if needed."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "path": {
-                    "type": "string",
-                    "description": "Relative path from wiki root",
-                },
-                "content": {
-                    "type": "string",
-                    "description": "Full file content to write",
-                },
-            },
-            "required": ["path", "content"],
-        },
-    },
-    {
         "name": "edit_file",
         "description": (
             "Replace a specific string in a file. The old_string must appear exactly once."
@@ -238,6 +213,124 @@ WIKI_TOOLS = [
                 },
             },
             "required": ["path", "old_string", "new_string"],
+        },
+    },
+    {
+        "name": "write_page",
+        "description": (
+            "Create a NEW wiki page from structured fields. The system serializes a "
+            "guaranteed-valid frontmatter block, places the file by type and title, "
+            "and records its sources for you -- so do NOT write a frontmatter block "
+            "or choose a path. To change an existing page, use edit_file on its body."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "type": {
+                    "type": "string",
+                    "enum": list(_PAGE_TYPES),
+                    "description": "Content type; also selects the folder.",
+                },
+                "title": {"type": "string", "description": "Human-readable page title."},
+                "domains": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Broad subject areas, as bare kebab strings.",
+                },
+                "tags": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Narrow topic tags, as bare kebab strings.",
+                },
+                "prerequisites": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "concept: prerequisite [[wikilinks]].",
+                },
+                "related": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "concept: related [[wikilinks]].",
+                },
+                "concepts_tested": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "problem: tested-concept [[wikilinks]].",
+                },
+                "concepts_used": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "project: used-concept [[wikilinks]].",
+                },
+                "key_takeaways": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "insight: key takeaway lines.",
+                },
+                "difficulty": {"type": "string", "description": "problem: difficulty."},
+                "status": {"type": "string", "description": "project: status."},
+                "body": {
+                    "type": "string",
+                    "description": "Markdown body only (no frontmatter block).",
+                },
+            },
+            "required": ["type", "title", "body"],
+        },
+    },
+    {
+        "name": "set_page_meta",
+        "description": (
+            "Update an existing page's frontmatter fields in place (domains, tags, "
+            "prerequisites, related, ...), leaving the body untouched. Use this to "
+            "adjust a page's metadata or links; use edit_file for its body. A page's "
+            "type, title, and sources are system-managed and cannot be set here."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "slug": {
+                    "type": "string",
+                    "description": "Page stem to update (filename without folder or .md).",
+                },
+                "domains": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Broad subject areas (replaces the whole list).",
+                },
+                "tags": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Narrow topic tags (replaces the whole list).",
+                },
+                "prerequisites": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "concept: prerequisite [[wikilinks]].",
+                },
+                "related": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "concept: related [[wikilinks]].",
+                },
+                "concepts_tested": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "problem: tested-concept [[wikilinks]].",
+                },
+                "concepts_used": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "project: used-concept [[wikilinks]].",
+                },
+                "key_takeaways": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "insight: key takeaway lines.",
+                },
+                "difficulty": {"type": "string", "description": "problem: difficulty."},
+                "status": {"type": "string", "description": "project: status."},
+            },
+            "required": ["slug"],
         },
     },
     {
@@ -351,6 +444,12 @@ def _is_raw_path(path: str) -> bool:
     return path.startswith("raw/") or path.startswith("../raw/")
 
 
+def _slugify(title: str) -> str:
+    """Reduce a page title to a kebab-case filename stem."""
+    cleaned = "".join(c if c.isalnum() or c in " -" else "" for c in title.lower())
+    return "-".join(cleaned.split())
+
+
 class WikiToolExecutor:
     """Runs the agent's filesystem tools, sandboxed to the wiki and source trees.
 
@@ -365,6 +464,7 @@ class WikiToolExecutor:
         dry_run: bool = False,
         data_dir: Path | None = None,
         read_tools: WikiTools | None = None,
+        sources: list[str] | None = None,
     ) -> None:
         """
         Parameters
@@ -381,12 +481,16 @@ class WikiToolExecutor:
         read_tools: WikiTools | None
             When provided, the agent can also call the wiki-exploration tools in
             ``EXPLORE_TOOL_NAMES``, dispatched to this instance's methods.
+        sources: list[str] | None
+            Raw-relative paths of the build unit being compiled. ``write_page``
+            stamps these as a page's provenance, so the agent never supplies it.
         """
         self._wiki_dir = wiki_dir
         self._raw_dir = raw_dir
         self._dry_run = dry_run
         self._data_dir = data_dir
         self._read_tools = read_tools
+        self._sources = sources or []
         self._changes: list[dict] = []
 
     def execute(self, tool_name: str, tool_input: dict) -> str:
@@ -408,8 +512,10 @@ class WikiToolExecutor:
         try:
             if tool_name == "read_file":
                 return self._read(tool_input["path"], tool_input.get("offset", 0))
-            elif tool_name == "write_file":
-                return self._write(tool_input["path"], tool_input["content"])
+            elif tool_name == "write_page":
+                return self._write_page(tool_input)
+            elif tool_name == "set_page_meta":
+                return self._set_page_meta(tool_input)
             elif tool_name == "edit_file":
                 return self._edit(
                     tool_input["path"],
@@ -517,15 +623,6 @@ class WikiToolExecutor:
         str
             Confirmation message with character count.
         """
-        # error if nested file creation is attempted structure is already enforced
-        # via backlinks and nesting would muddle this structure
-        parts = Path(rel_path).parts
-        if len(parts) > 2 and parts[0] in CONTENT_DIRS:
-            return (
-                f"Error: write pages flat as {parts[0]}/<name>.md, not in subfolders. "
-                "Group topics with frontmatter 'domains' instead."
-            )
-
         if self._dry_run:
             self._record("created", rel_path)
             return f"[dry-run] Would write {len(content)} chars to {rel_path}"
@@ -536,6 +633,145 @@ class WikiToolExecutor:
         path.write_text(content, encoding="utf-8")
         self._record(action, rel_path)
         return f"Wrote {len(content)} chars to {rel_path}"
+
+    def _write_page(self, args: dict) -> str:
+        """
+        Create a new wiki page from structured fields.
+
+        Serializes a guaranteed-valid frontmatter block, derives the path from
+        the content type and title, and stamps the build unit's sources, so the
+        agent supplies only the content. Refuses to overwrite an existing page.
+
+        Parameters
+        ----------
+        args: dict
+            Tool arguments: ``type``, ``title``, ``body``, and the optional
+            judgment fields (``domains``, ``tags``, ``prerequisites``, ...).
+
+        Returns
+        -------
+        str
+            Confirmation with the written path, or an error message.
+        """
+        page_type = args.get("type", "")
+        title = (args.get("title") or "").strip()
+        if page_type not in _PAGE_TYPES:
+            return f"Error: type must be one of {', '.join(_PAGE_TYPES)}, got '{page_type}'"
+        if not title:
+            return "Error: a non-empty title is required"
+        slug = _slugify(title)
+        if not slug:
+            return f"Error: title {title!r} has no slug-able characters"
+
+        rel_path = f"{page_type}s/{slug}.md"
+        if self._resolve(rel_path).exists():
+            return (
+                f"Error: {rel_path} already exists. Edit its body with edit_file "
+                "rather than recreating it."
+            )
+
+        frontmatter: dict = {"title": title, "type": page_type}
+        for key in (
+            "domains",
+            "tags",
+            "prerequisites",
+            "related",
+            "concepts_tested",
+            "concepts_used",
+            "key_takeaways",
+            "difficulty",
+            "status",
+        ):
+            value = args.get(key)
+            if value:
+                frontmatter[key] = value
+        if self._sources:
+            frontmatter["sources"] = [f"raw/{source}" for source in self._sources]
+
+        return self._write(rel_path, serialize_page(frontmatter, args.get("body", "")))
+
+    def _content_page_path(self, slug: str) -> str | None:
+        """Return the relative path of the content page with this stem, if any."""
+        for content_dir in CONTENT_DIRS:
+            rel = f"{content_dir}/{slug}.md"
+            if self._resolve(rel).exists():
+                return rel
+        return None
+
+    def _set_page_meta(self, args: dict) -> str:
+        """
+        Update an existing page's frontmatter fields, leaving the body untouched.
+
+        Provenance, type, and title are system-managed, so they are ignored if
+        passed; the remaining fields are merged into the page's frontmatter.
+
+        Parameters
+        ----------
+        args: dict
+            Tool arguments: ``slug`` plus the frontmatter fields to set.
+
+        Returns
+        -------
+        str
+            Confirmation or an error message.
+        """
+        slug = (args.get("slug") or "").strip()
+        if not slug:
+            return "Error: a slug is required"
+        rel_path = self._content_page_path(slug)
+        if rel_path is None:
+            return f"Error: no page found with slug '{slug}'"
+
+        managed = {"slug", "sources", "type", "title"}
+        changes = {
+            key: value for key, value in args.items() if key not in managed and value is not None
+        }
+        if not changes:
+            return "Error: no frontmatter fields given to update"
+
+        path = self._resolve(rel_path)
+        updated = update_frontmatter(path.read_text(encoding="utf-8"), changes)
+        if updated is None:
+            return f"Error: {rel_path} has no frontmatter block to update"
+        if self._dry_run:
+            self._record("updated", rel_path)
+            return f"[dry-run] Would update frontmatter of {rel_path}"
+        path.write_text(updated, encoding="utf-8")
+        self._record("updated", rel_path)
+        return f"Updated frontmatter of {rel_path}"
+
+    def finalize_provenance(self) -> None:
+        """
+        Stamp the build unit's sources onto every page touched this run.
+
+        A page created via ``write_page`` already carries them; a page updated
+        via ``edit_file`` or ``set_page_meta`` gets them merged in (union,
+        order-preserving), so a page's sources accumulate every source it was
+        compiled from and never regress. No-op without a build unit or in
+        dry-run.
+        """
+        if self._dry_run or not self._sources:
+            return
+        unit_sources = [f"raw/{source}" for source in self._sources]
+        for rel_path in {change["path"] for change in self._changes}:
+            if Path(rel_path).parts[0] not in CONTENT_DIRS:
+                continue
+            path = self._resolve(rel_path)
+            if not path.exists():
+                continue
+            content = path.read_text(encoding="utf-8")
+            existing = _parse_frontmatter(content).get("sources") or []
+            if isinstance(existing, str):
+                existing = [existing]
+            merged = list(existing)
+            for source in unit_sources:
+                if source not in merged:
+                    merged.append(source)
+            if merged == existing:
+                continue
+            rewritten = update_frontmatter(content, {"sources": merged})
+            if rewritten is not None:
+                path.write_text(rewritten, encoding="utf-8")
 
     def _edit(self, rel_path: str, old: str, new: str) -> str:
         """
