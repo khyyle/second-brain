@@ -481,6 +481,14 @@ private struct PillButton: ButtonStyle {
         let tint: Color
         @State private var hovering = false
 
+        // Brighten the fill on hover so the cue works for every tint, including
+        // the primary pill whose text is already textPrimary (text-only
+        // brightening would be invisible there).
+        private var fillOpacity: Double {
+            if configuration.isPressed { return 0.34 }
+            return hovering ? 0.26 : 0.16
+        }
+
         var body: some View {
             configuration.label
                 .font(Theme.Font.meta(10).weight(.medium))
@@ -488,7 +496,7 @@ private struct PillButton: ButtonStyle {
                 .fixedSize()
                 .foregroundStyle(hovering ? Theme.Colors.textPrimary : tint)
                 .padding(.horizontal, 8).padding(.vertical, 3)
-                .background(Capsule().fill(tint.opacity(configuration.isPressed ? 0.30 : 0.16)))
+                .background(Capsule().fill(tint.opacity(fillOpacity)))
                 .onHover { hovering = $0 }
         }
     }
@@ -523,6 +531,8 @@ private struct HoverIcon: View {
 /// cluster preview is active — plus a log of pages already built.
 struct BuildTab: View {
     let config: AppConfig
+    let onBuild: () -> Void
+    let canBuild: Bool
     @State private var staged: [StagedSource] = []
     @State private var deferred: [StagedSource] = []
     @State private var plan: ClusterPlan?
@@ -565,7 +575,9 @@ struct BuildTab: View {
                 stale: planStale,
                 canPreview: config.repoDir != nil
                     && staged.contains { $0.id.hasPrefix("chatgpt/") },
-                onPreview: previewGrouping
+                onPreview: previewGrouping,
+                onBuild: onBuild,
+                canBuild: canBuild
             )
             if !deferred.isEmpty {
                 DeferredNote(count: deferred.count, model: compilationModel)
@@ -716,49 +728,66 @@ private struct StagedHeader: View {
     let stale: Bool
     let canPreview: Bool
     let onPreview: () -> Void
+    let onBuild: () -> Void
+    let canBuild: Bool
 
     private var running: Bool {
         grouping || (status?.isActive == true && status?.phase == "compile")
     }
 
+    // A stale plan's cost is for the old staged set, so fall back to the
+    // per-source estimate, which always reflects what is currently staged.
     private var estimatedCost: Double {
-        plan?.cost(for: model) ?? fallbackCost
+        stale ? fallbackCost : (plan?.cost(for: model) ?? fallbackCost)
     }
 
     var body: some View {
-        HStack(spacing: 5) {
-            Text("Staged for build")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(Theme.Colors.textTertiary)
-            HelpButton(text: "Ingested files that will be compiled when build is selected. 'Group' (chats only) "
-                + "bundles related conversation into one compilation to avoid duplicate calls/pages. "
-                + "Cost is a rough upper bound.")
-            Spacer()
+        HStack(alignment: .center, spacing: 8) {
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 5) {
+                    Text("Staged for build")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(Theme.Colors.textTertiary)
+                    HelpButton(text: "Ingested files that will be compiled when build is selected. 'Group' (chats only) "
+                        + "bundles related conversation into one compilation to avoid duplicate calls/pages. "
+                        + "Cost is a rough upper bound.")
+                }
+                if !running, sourceCount > 0 {
+                    costLine
+                }
+            }
+            Spacer(minLength: 8)
             if !running, sourceCount > 0 {
-                summary
+                actions
             }
         }
         .padding(.horizontal, 8).padding(.top, 4).padding(.bottom, 1)
     }
 
-    @ViewBuilder
-    private var summary: some View {
-        HStack(spacing: 8) {
+    private var costLine: some View {
+        HStack(spacing: 6) {
+            Text("~$\(String(format: "%.2f", estimatedCost))")
+                .font(Theme.Font.meta(10))
+                .foregroundStyle(Theme.Colors.textTertiary)
+                .monospacedDigit()
             if stale {
                 Text("out of date")
                     .font(Theme.Font.meta(10))
                     .foregroundStyle(Theme.Colors.accentAmber)
-                    .help("The staged set changed since the last grouping — "
-                        + "Regroup to refresh it.")
-            } else {
-                Text("~$\(String(format: "%.2f", estimatedCost))")
-                    .font(Theme.Font.meta(10))
-                    .foregroundStyle(Theme.Colors.textTertiary)
-                    .monospacedDigit()
+                    .help("The staged set changed since the last grouping — Regroup to refresh it.")
             }
+        }
+    }
+
+    private var actions: some View {
+        HStack(spacing: 8) {
             if canPreview {
                 Button((plan == nil && !stale) ? "Group" : "Regroup", action: onPreview)
-                    .buttonStyle(PillButton(tint: Theme.Colors.accentAmber))
+                    .buttonStyle(PillButton(tint: Theme.Colors.textSecondary))
+            }
+            if canBuild {
+                Button("Build wiki", action: onBuild)
+                    .buttonStyle(PillButton(tint: Theme.Colors.textPrimary))
             }
         }
     }
@@ -824,7 +853,7 @@ private struct ClusterGroupRow: View {
         HStack(spacing: 9) {
             Image(systemName: isMulti ? (expanded ? "chevron.down" : "chevron.right") : "circle.dashed")
                 .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(Theme.Colors.accentAmber)
+                .foregroundStyle(Theme.Colors.textSecondary)
                 .frame(width: 12)
             Text(cleanName(group.title))
                 .font(Theme.Font.body(11.5))
@@ -971,9 +1000,9 @@ private struct BuildRow: View {
 
     var body: some View {
         HStack(spacing: 9) {
-            Image(systemName: entry.action == .created ? "plus.circle" : "pencil.circle")
+            Image(systemName: entry.action == .created ? "plus.circle" : "pencil")
                 .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(entry.action == .created ? Theme.Colors.success : Theme.Colors.accentAmber)
+                .foregroundStyle(entry.action == .created ? Theme.Colors.success : Theme.Colors.textSecondary)
                 .frame(width: 12)
             Text(verb)
                 .font(Theme.Font.meta(10))

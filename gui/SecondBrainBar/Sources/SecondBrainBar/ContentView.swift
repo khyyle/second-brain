@@ -154,7 +154,11 @@ struct ContentView: View {
             VStack(spacing: 1) {
                 switch tab {
                 case .ingest:  IngestTab(config: config)
-                case .build:   BuildTab(config: config)
+                case .build:   BuildTab(
+                    config: config,
+                    onBuild: attemptBuild,
+                    canBuild: config.runScriptPath != nil
+                )
                 case .domains: DomainsTab(config: config)
                 case .chats:   ChatsTab(config: config)
                 }
@@ -192,7 +196,9 @@ struct ContentView: View {
         }
     }
 
-    /// Build wiki when idle; Stop (then Stopping) while a compile runs.
+    /// Footer build control: Stop (then Stopping) only while a compile runs.
+    /// Starting a build lives on the Build tab, beside what it will compile;
+    /// stopping stays in the footer so it's reachable from any tab.
     @ViewBuilder
     private var buildButton: some View {
         if isCompiling || stopping {
@@ -204,33 +210,31 @@ struct ContentView: View {
                 PipelineRunner.requestStop(vaultRoot: config.vaultRoot)
                 stopping = true
             }
-        } else {
-            TextAction(
-                title: "Build wiki",
-                help: "Compile ingested files into the wiki (uses the compilation provider's API)",
-                enabled: config.runScriptPath != nil
-            ) {
-                if status?.isActive == true {
-                    showingBusyAlert = true
-                    return
-                }
-                let keyName = ConfigStore.locate(config)
-                    .map { ConfigStore.load(from: $0).llmProvider.envKeyName }
-                    ?? LLMProvider.anthropic.envKeyName
-                guard !EnvStore.readKey(config, keyName: keyName).isEmpty else {
-                    showingNoKeyAlert = true
-                    return
-                }
-                // A detached build discards output, so a missing-Ollama failure
-                // would be invisible; gate on the last probe instead.
-                if ollamaHealth?.healthy == false {
-                    showingOllamaAlert = true
-                    return
-                }
-                if let url = config.runScriptPath {
-                    PipelineRunner.runDetached(scriptURL: url, stage: .compile)
-                }
-            }
+        }
+    }
+
+    /// Start a compile, after the busy / API-key / Ollama gates. Passed to the
+    /// Build tab, which surfaces it as that tab's primary action.
+    private func attemptBuild() {
+        if status?.isActive == true {
+            showingBusyAlert = true
+            return
+        }
+        let keyName = ConfigStore.locate(config)
+            .map { ConfigStore.load(from: $0).llmProvider.envKeyName }
+            ?? LLMProvider.anthropic.envKeyName
+        guard !EnvStore.readKey(config, keyName: keyName).isEmpty else {
+            showingNoKeyAlert = true
+            return
+        }
+        // A detached build discards output, so a missing-Ollama failure would
+        // be invisible; gate on the last probe instead.
+        if ollamaHealth?.healthy == false {
+            showingOllamaAlert = true
+            return
+        }
+        if let url = config.runScriptPath {
+            PipelineRunner.runDetached(scriptURL: url, stage: .compile)
         }
     }
 
