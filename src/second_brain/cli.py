@@ -735,14 +735,56 @@ def doctor(ctx: click.Context, as_json: bool) -> None:
 
 
 @main.command()
+@click.option("--json", "as_json", is_flag=True, help="Emit machine-readable JSON")
 @click.pass_context
-def health(ctx: click.Context) -> None:
+def health(ctx: click.Context, as_json: bool) -> None:
     """Run health checks on the wiki."""
     config: Config = ctx.obj["config"]
 
     from second_brain.wiki.health import run_health_check
 
     report = run_health_check(config.wiki_dir, config.raw_dir)
+
+    if as_json:
+        # Each item carries a display string and the page stem to open, or null
+        # when it is not page-backed (a gap points at a page that does not exist).
+        categories = [
+            (
+                "orphan_pages",
+                "Orphan pages",
+                [{"text": s, "page": s} for s in report.orphan_pages],
+            ),
+            ("gap_links", "Gaps", [{"text": g, "page": None} for g in report.gap_links]),
+            (
+                "oversized_pages",
+                "Oversized pages",
+                [{"text": f"{s} ({w:,} words)", "page": s} for s, w in report.oversized_pages],
+            ),
+            (
+                "undersized_pages",
+                "Stub pages",
+                [{"text": f"{s} ({w:,} words)", "page": s} for s, w in report.undersized_pages],
+            ),
+            (
+                "missing_frontmatter",
+                "Missing frontmatter",
+                [{"text": m, "page": m.split(":", 1)[0]} for m in report.missing_frontmatter],
+            ),
+            ("stale_pages", "Stale pages", [{"text": s, "page": s} for s in report.stale_pages]),
+        ]
+        click.echo(
+            json.dumps(
+                {
+                    "healthy": report.is_healthy,
+                    "categories": [
+                        {"key": key, "label": label, "items": items}
+                        for key, label, items in categories
+                    ],
+                }
+            )
+        )
+        return
+
     click.echo(report.summary())
 
     if report.orphan_pages:

@@ -1,13 +1,15 @@
 import SwiftUI
 
-/// Which pipeline stage the shared scroll area is showing. Order is the
-/// display order: Chats is rightmost since it's only relevant for the
-/// occasional ChatGPT import.
+/// Which pipeline stage the shared scroll area is showing, left to right: the
+/// daily pipeline actions (ingest, build) lead, the occasional ChatGPT import
+/// follows, and the two wiki-state views (domains, health) close it out —
+/// health last, as the overall status of the compiled wiki.
 private enum Tab: String, CaseIterable, Identifiable {
     case ingest = "Ingest"
     case build = "Build"
-    case domains = "Domains"
     case chats = "Chats"
+    case domains = "Domains"
+    case health = "Health"
     var id: String { rawValue }
 }
 
@@ -160,6 +162,7 @@ struct ContentView: View {
                     canBuild: config.runScriptPath != nil
                 )
                 case .domains: DomainsTab(config: config)
+                case .health:  HealthTab(config: config)
                 case .chats:   ChatsTab(config: config)
                 }
             }

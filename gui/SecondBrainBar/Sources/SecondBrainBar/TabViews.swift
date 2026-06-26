@@ -1260,3 +1260,167 @@ private struct DomainRow: View {
         .frame(width: 16)
     }
 }
+
+/// Read-only structural health of the compiled wiki: the checks from
+/// `second-brain health`, shown as a compact table. A check with issues
+/// expands inline to the pages it flagged, which open on click. There are no
+/// action buttons — every fix lands on the next build, which is the Build tab.
+struct HealthTab: View {
+    let config: AppConfig
+    @State private var health: WikiHealth?
+    @State private var loaded = false
+    @State private var unavailable = false
+
+    var body: some View {
+        VStack(spacing: 1) {
+            SectionHeader(
+                title: "Health",
+                help: """
+                Orphan pages — nothing links to them.
+                Gaps — links to pages not written yet.
+                Oversized pages — over 4000 words; split candidates.
+                Stub pages — under 150 words.
+                Missing frontmatter — no title, type, or domains.
+                Stale pages — source changed since the last build.
+                """
+            )
+            content
+        }
+        .onAppear(perform: refresh)
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        if !loaded {
+            EmptyListMessage(text: nil)
+        } else if unavailable {
+            EmptyListMessage(text: "Health needs the installed pipeline. Reinstall to view it.")
+        } else if let health {
+            ForEach(health.categories) { category in
+                HealthCategoryRow(category: category, onOpen: open)
+            }
+        }
+    }
+
+    /// Open a flagged page by stem; the flat wiki keeps stems unique, so the
+    /// first content folder that has it wins.
+    private func open(_ stem: String) {
+        for dir in ["concepts", "problems", "projects", "insights", "syntheses"] {
+            let url = config.wikiRoot.appending(path: "\(dir)/\(stem).md")
+            if FileManager.default.fileExists(atPath: url.path) {
+                openInDefaultApp(url)
+                return
+            }
+        }
+    }
+
+    private func refresh() {
+        guard config.repoDir != nil else {
+            unavailable = true
+            loaded = true
+            return
+        }
+        DispatchQueue.global(qos: .userInitiated).async {
+            let result = HealthData.load(config: config)
+            DispatchQueue.main.async {
+                if let result {
+                    health = result
+                    unavailable = false
+                } else {
+                    unavailable = true
+                }
+                loaded = true
+            }
+        }
+    }
+}
+
+/// One health check as a table row: its label and flagged count. A passing
+/// check reads as a quiet check mark; a check with issues expands inline.
+private struct HealthCategoryRow: View {
+    let category: HealthCategory
+    let onOpen: (String) -> Void
+    @State private var expanded = false
+    @State private var hovering = false
+
+    private var hasIssues: Bool { category.count > 0 }
+
+    /// What this check means, surfaced as a hover tooltip in place of a header
+    /// help button — the labels carry the rest.
+    private var explanation: String {
+        switch category.key {
+        case "orphan_pages": return "Pages nothing links to."
+        case "gap_links": return "Links to pages not written yet."
+        case "oversized_pages": return "Pages over 4000 words — candidates to split."
+        case "undersized_pages": return "Pages under 150 words."
+        case "missing_frontmatter": return "Pages missing a title, type, or domains."
+        case "stale_pages": return "Pages whose source changed since the last build."
+        default: return category.label
+        }
+    }
+
+    var body: some View {
+        VStack(spacing: 1) {
+            row
+            if expanded {
+                PaginatedList(items: category.items) { item in
+                    HealthItemRow(item: item, onOpen: onOpen)
+                }
+            }
+        }
+    }
+
+    private var row: some View {
+        HStack(spacing: 9) {
+            Image(systemName: hasIssues ? "chevron.right" : "checkmark")
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundStyle(hasIssues ? Theme.Colors.textTertiary : Theme.Colors.success)
+                .rotationEffect(.degrees(expanded ? 90 : 0))
+                .frame(width: 12)
+            Text(category.label)
+                .font(Theme.Font.body(11.5))
+                .foregroundStyle(hasIssues ? Theme.Colors.textPrimary : Theme.Colors.textSecondary)
+            Spacer(minLength: 6)
+            Text("\(category.count)")
+                .font(Theme.Font.meta(9.5))
+                .foregroundStyle(hasIssues ? Theme.Colors.textSecondary : Theme.Colors.textTertiary)
+        }
+        .modifier(RowBackground(hovering: hovering && hasIssues))
+        .contentShape(Rectangle())
+        .onTapGesture {
+            guard hasIssues else { return }
+            withAnimation(.easeInOut(duration: 0.15)) { expanded.toggle() }
+        }
+        .onHover { hovering = $0 }
+        .help(explanation)
+        .animation(.easeInOut(duration: 0.12), value: hovering)
+    }
+}
+
+/// One flagged item under an expanded check. Page-backed items open on click;
+/// a broken link points at a missing page, so it stays inert text.
+private struct HealthItemRow: View {
+    let item: HealthItem
+    let onOpen: (String) -> Void
+    @State private var hovering = false
+
+    private var openable: Bool { item.page != nil }
+
+    var body: some View {
+        HStack(spacing: 9) {
+            Spacer().frame(width: 12)
+            Text(item.text)
+                .font(Theme.Font.body(11))
+                .foregroundStyle(openable ? Theme.Colors.textSecondary : Theme.Colors.textTertiary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .help(item.text)
+            Spacer(minLength: 6)
+        }
+        .modifier(RowBackground(hovering: hovering && openable))
+        .contentShape(Rectangle())
+        .onTapGesture { if let page = item.page { onOpen(page) } }
+        .onHover { hovering = $0 }
+        .animation(.easeInOut(duration: 0.12), value: hovering)
+    }
+}
