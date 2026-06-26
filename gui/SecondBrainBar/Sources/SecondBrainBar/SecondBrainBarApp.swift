@@ -24,6 +24,8 @@ final class StatusBarController: NSObject, NSApplicationDelegate {
     private let config = AppConfig.default
     private var statusItem: NSStatusItem!
     private var popover: NSPopover!
+    private let autoRunner = AutoRunner(config: AppConfig.default)
+    private var dropWatcher: DropWatcher?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         statusItem = NSStatusBar.system.statusItem(
@@ -43,6 +45,14 @@ final class StatusBarController: NSObject, NSApplicationDelegate {
         popover.contentViewController = NSHostingController(
             rootView: ContentView(config: config)
         )
+
+        // Ingest anything that lands in drops/ by any means, not just the
+        // app's own drop zone, for as long as the app is running.
+        let watcher = DropWatcher(directory: config.dropsRoot) { [weak self] in
+            self?.autoRunner.schedule()
+        }
+        watcher.start()
+        dropWatcher = watcher
     }
 
     @objc private func togglePopover(_ sender: AnyObject?) {

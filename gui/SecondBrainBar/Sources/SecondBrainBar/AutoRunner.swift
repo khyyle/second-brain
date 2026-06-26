@@ -5,7 +5,9 @@ import Foundation
 /// A bulk drop arrives as many separate copies; debouncing collapses
 /// them into a single pipeline run that fires a few seconds after the
 /// last file lands. Does nothing if the pipeline script is unavailable.
-@MainActor
+///
+/// `schedule()` is expected to be called on the main queue (from the UI or a
+/// main-dispatched watcher callback). It owns no cross-thread state of its own.
 final class AutoRunner {
     private let config: AppConfig
     private var work: DispatchWorkItem?
