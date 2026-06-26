@@ -192,10 +192,6 @@ struct ContentView: View {
             IconAction(systemName: "gearshape", help: "Settings") {
                 withAnimation(.easeInOut(duration: 0.2)) { showingSettings = true }
             }
-            IconAction(systemName: "power", help: "Quit Second Brain",
-                       hoverTint: Theme.Colors.danger) {
-                NSApplication.shared.terminate(nil)
-            }
         }
     }
 
