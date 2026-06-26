@@ -1,10 +1,12 @@
 # Second Brain
 
-A local-first macOS app that turns your notes, PDFs, and exported ChatGPT history into one linked Markdown wiki you can read in Obsidian and search from Claude or Cursor.
+A local-first macOS app that turns your notes, PDFs, and exported ChatGPT history into one linked Markdown wiki you can read in Obsidian and explore from Claude or Cursor.
 
 > Supported on macOS only.
 
-![The Second Brain menu bar app](docs/images/second-brain-app.png)
+<p align="center">
+  <img src="docs/images/second-brain-app.png" width="340" alt="The Second Brain menu bar app">
+</p>
 
 ## Highlights
 
@@ -13,7 +15,7 @@ A local-first macOS app that turns your notes, PDFs, and exported ChatGPT histor
 - Runs on your Mac. Parsing, filtering, and search are local; only the wiki build uses a cloud model.
 - Keeps cost down: it filters low-value chats and groups related ones before building, and you can cap spend per build.
 - Reads as an Obsidian vault, with graph view, backlinks, and rendered math.
-- Answers questions from Claude Desktop or Cursor: a built-in MCP server gives agents keyword and semantic search across your wiki.
+- Answers questions from Claude Desktop or Cursor: a built-in MCP server lets agents search your wiki, walk the links between pages--what a topic builds on, what relates to it, what's still missing--and trace any page back to its sources.
 - Can run unattended on a schedule, ingesting new material from watched folders.
 
 ## How it works
@@ -89,15 +91,22 @@ The wiki is plain Markdown under `~/second-brain/wiki/`:
 - Backlinks on every page, so you can see what refers to what.
 - YAML front matter and rendered LaTeX where the content calls for it.
 
-Because it is plain Markdown, it opens directly as an Obsidian vault, with graph view and backlinks. You can also connect it to Claude Desktop or Cursor over MCP to search and ask questions across your pages.
+It opens directly as an Obsidian vault, with graph view and backlinks.
 
 ![The compiled wiki in Obsidian's graph view](docs/images/wiki-graph.png)
+
+For asking questions instead of browsing, Second Brain ships an MCP server that hands the wiki to an assistant like Claude Desktop or Cursor. Beyond keyword and semantic search, it can traverse the links between your pages, finding things like what a topic builds on, what relates to it, what you haven't written down yet, and trace any page back to its sources, so the assistant answers from how your notes connect, not one page at a time. 
+
+
+>See [Querying over MCP](docs/mcp.md) for the full set of tools.
+
 
 ## Documentation
 For deeper dives:
 
 - [Using the app](docs/using-the-app.md) — the menu bar app, day to day.
 - [Command line](docs/cli.md) — running the pipeline from the terminal.
+- [Querying over MCP](docs/mcp.md) — connecting an assistant and the questions it can answer.
 - [Architecture](docs/architecture.md) — how the pipeline works and where data lives on disk.
 - [Wiki structure](docs/wiki-structure.md) — the vault layout, the page graph, and what is source vs. derived.
 - [Data lifecycle and deletion](docs/lifecycle.md) — hashing, caching, and what each kind of delete removes.

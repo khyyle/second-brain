@@ -38,7 +38,7 @@ When the plan looks right, "Build wiki" compiles it. You can "Stop" mid-build: p
 
 The wiki is plain Markdown under `~/second-brain/wiki/`, so the natural way to read it is to open that folder as an Obsidian vault. "Reveal" in the status line opens the vault in Finder.
 
-For asking questions instead of browsing, Second Brain ships an MCP server that hands the wiki to an assistant like Claude Desktop or Cursor, with keyword and semantic search over your pages. Settings has one-click buttons to connect each.
+For asking questions instead of browsing, you can hand the wiki to an assistant like Claude Desktop or Cursor over MCP. See [Querying over MCP](mcp.md) for what it does and how to set it up.
 
 ## Settings
 
