@@ -277,34 +277,34 @@ struct SettingsView: View {
                 if !health.reachable { return ("Not running", Theme.Colors.danger) }
                 return ("Models missing", Theme.Colors.accentAmber)
             }()
-            Text(text)
-                .font(Theme.Font.meta(10))
-                .foregroundStyle(color)
+            HStack(spacing: 8) {
+                Button(action: probeOllama) {
+                    Text("Re-check")
+                        .font(Theme.Font.body(10.5))
+                        .foregroundStyle(Theme.Colors.textPrimary)
+                        .padding(.horizontal, 9).padding(.vertical, 4)
+                        .background(
+                            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                .fill(Theme.Colors.background)
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                .strokeBorder(Theme.Colors.stroke, lineWidth: 1)
+                        )
+                }
+                .buttonStyle(.plain)
+                .disabled(checkingOllama || config.repoDir == nil)
+
+                Text(text)
+                    .font(Theme.Font.meta(10))
+                    .foregroundStyle(color)
+            }
         }
         if let health = ollamaHealth, !health.healthy {
             Text(health.message)
                 .font(Theme.Font.meta(10))
                 .foregroundStyle(Theme.Colors.textTertiary)
                 .fixedSize(horizontal: false, vertical: true)
-        }
-        HStack {
-            Spacer()
-            Button(action: probeOllama) {
-                Text(checkingOllama ? "Checking…" : "Re-check")
-                    .font(Theme.Font.body(10.5))
-                    .foregroundStyle(Theme.Colors.textPrimary)
-                    .padding(.horizontal, 9).padding(.vertical, 4)
-                    .background(
-                        RoundedRectangle(cornerRadius: 6, style: .continuous)
-                            .fill(Theme.Colors.background)
-                    )
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 6, style: .continuous)
-                            .strokeBorder(Theme.Colors.stroke, lineWidth: 1)
-                    )
-            }
-            .buttonStyle(.plain)
-            .disabled(checkingOllama || config.repoDir == nil)
         }
     }
 
