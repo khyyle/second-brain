@@ -16,7 +16,7 @@ def _domains(wiki: Path) -> dict:
 
 def test_default_schema_ships_no_domains() -> None:
     assert DEFAULT_SCHEMA["domains"] == {}
-    assert DEFAULT_SCHEMA["agent_permissions"]["can_create_domains"] is True
+    assert "agent_permissions" not in DEFAULT_SCHEMA
 
 
 def test_register_adds_new_domains(tmp_path: Path) -> None:
@@ -45,4 +45,4 @@ def test_register_preserves_other_schema_sections(tmp_path: Path) -> None:
 
     raw = yaml.safe_load((tmp_path / "_meta" / "topic_schema.yaml").read_text())
     assert "content_types" in raw
-    assert raw["agent_permissions"]["can_create_domains"] is True
+    assert "page_rules" in raw

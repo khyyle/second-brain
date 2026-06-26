@@ -79,14 +79,6 @@ DEFAULT_SCHEMA: dict = {
         "naming": "kebab-case",
         "multi_domain": True,
     },
-    "agent_permissions": {
-        "can_create_tags": True,
-        "can_create_domains": True,
-        "can_split_pages": True,
-        "can_merge_pages": True,
-        "can_retag": True,
-        "can_change_content_type": True,
-    },
 }
 
 
@@ -102,7 +94,6 @@ class TopicSchema:
     content_types: dict[str, dict] = field(default_factory=dict)
     domains: dict[str, dict] = field(default_factory=dict)
     page_rules: dict = field(default_factory=dict)
-    agent_permissions: dict = field(default_factory=dict)
 
     @property
     def valid_types(self) -> set[str]:
@@ -167,7 +158,6 @@ def load_schema(wiki_dir: Path) -> TopicSchema:
         content_types=raw.get("content_types", {}),
         domains=raw.get("domains", {}),
         page_rules=raw.get("page_rules", {}),
-        agent_permissions=raw.get("agent_permissions", {}),
     )
 
 
@@ -224,7 +214,7 @@ def register_domains(wiki_dir: Path, domains: set[str]) -> list[str]:
     if not new:
         return []
     for name in new:
-        existing[name] = {"description": "", "common_tags": []}
+        existing[name] = {"description": ""}
     raw["domains"] = existing
     schema_path.write_text(
         _SCHEMA_HEADER + yaml.dump(raw, default_flow_style=False, sort_keys=False),
@@ -263,7 +253,7 @@ def remap_schema_domains(wiki_dir: Path, mapping: dict[str, str | None]) -> None
         result[name] = meta
     for source, target in mapping.items():
         if target is not None and target not in result:
-            result[target] = domains.get(source) or {"description": "", "common_tags": []}
+            result[target] = domains.get(source) or {"description": ""}
 
     if result == domains:
         return
