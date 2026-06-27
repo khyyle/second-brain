@@ -320,6 +320,44 @@ def preview_members(preview: dict) -> set[str]:
     return {member["rel"] for group in preview["groups"] for member in group["members"]}
 
 
+def reconcile_work_units(data_dir: Path, staged: list[str]) -> list[list[str]] | None:
+    """Map the reviewed preview onto the sources currently staged.
+
+    Each reviewed group is narrowed to the members still staged, and any staged
+    source the preview never covered is returned as its own unit. The result
+    covers exactly ``staged``, so a drifted staged set keeps the user's grouping
+    rather than discarding it.
+
+    Parameters
+    ----------
+    data_dir: Path
+        Vault root holding the preview artifact and overrides.
+    staged: list[str]
+        Source paths currently staged for the build.
+
+    Returns
+    -------
+    list[list[str]] | None
+        Work units covering exactly ``staged``, or None when no preview exists.
+    """
+    units = work_units_from_preview(data_dir)
+    if units is None:
+        return None
+
+    staged_set = set(staged)
+    covered: set[str] = set()
+    reconciled: list[list[str]] = []
+
+    for unit in units:
+        covered.update(unit)
+        kept = [rel for rel in unit if rel in staged_set]
+        if kept:
+            reconciled.append(kept)
+
+    reconciled.extend([rel] for rel in staged if rel not in covered)
+    return reconciled
+
+
 def clear_preview(data_dir: Path) -> None:
     """Remove the preview artifact and overrides once a build consumes them."""
     (data_dir / CLUSTERS_FILENAME).unlink(missing_ok=True)

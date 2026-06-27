@@ -16,11 +16,6 @@ logger = logging.getLogger(__name__)
 # 64 KB read buffer to match typical OS page size for efficient disk I/O
 BUF_SIZE = 65536
 
-# Triage-table decision for a source too large for the current model's context
-# window. Distinct from the triage verdicts (worthwhile/review/skip) and
-# re-evaluated each build, so it self-heals once a larger-window model is chosen.
-DEFERRED_DECISION = "deferred"
-
 
 def _raw_output_exists(raw_dir: Path, raw_output: str | None) -> bool:
     """Whether a manifest row's raw output file is still present on disk."""
@@ -665,15 +660,6 @@ class Manifest:
         with self._conn() as conn:
             rows = conn.execute("SELECT raw_path, decision FROM triage").fetchall()
         return {r["raw_path"]: r["decision"] for r in rows}
-
-    def count_triage_decision(self, decision: str) -> int:
-        """Count triage rows carrying a given decision (e.g. deferred)."""
-        with self._conn() as conn:
-            row = conn.execute(
-                "SELECT COUNT(*) AS cnt FROM triage WHERE decision = ?",
-                (decision,),
-            ).fetchone()
-        return int(row["cnt"]) if row else 0
 
 
 def _row_to_entry(row: sqlite3.Row) -> ManifestEntry:

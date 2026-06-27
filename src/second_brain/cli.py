@@ -360,11 +360,6 @@ def compile(ctx: click.Context, full: bool, dry_run: bool) -> None:
         raise click.ClickException(str(exc)) from exc
 
     click.echo(f"Sources compiled: {stats['sources_compiled']}")
-    if stats.get("sources_deferred"):
-        click.echo(
-            f"Sources deferred (too large for {config.compilation.model}): "
-            f"{stats['sources_deferred']}"
-        )
     click.echo(f"Wiki pages: {stats['total_pages']}")
     click.echo(f"Total links: {stats['total_links']}")
     click.echo(f"Orphans: {stats['orphans']}")
@@ -466,14 +461,11 @@ def status(ctx: click.Context, sources: bool) -> None:
     click.echo(f"  Wiki dir: {config.wiki_dir}")
 
     if config.manifest_db_path.parent.exists():
-        from second_brain.ingestion.manifest import DEFERRED_DECISION, Manifest
+        from second_brain.ingestion.manifest import Manifest
 
         manifest = Manifest(config.manifest_db_path)
         counts = manifest.count_by_status()
         click.echo(f"  Manifest: {dict(counts)}")
-        deferred = manifest.count_triage_decision(DEFERRED_DECISION)
-        if deferred:
-            click.echo(f"  Deferred (too large for {config.compilation.model}): {deferred}")
     else:
         click.echo("  Manifest: not initialized (run 'ingest' first)")
 

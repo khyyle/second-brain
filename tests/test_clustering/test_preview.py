@@ -16,6 +16,7 @@ from second_brain.clustering.preview import (
     clear_preview,
     load_preview,
     preview_members,
+    reconcile_work_units,
     work_units_from_preview,
 )
 
@@ -65,6 +66,34 @@ def test_work_units_from_preview_applies_overrides(tmp_path: Path) -> None:
 
 def test_work_units_from_preview_missing_artifact_returns_none(tmp_path: Path) -> None:
     assert work_units_from_preview(tmp_path) is None
+
+
+def test_reconcile_work_units_missing_artifact_returns_none(tmp_path: Path) -> None:
+    assert reconcile_work_units(tmp_path, ["a.md"]) is None
+
+
+def test_reconcile_work_units_narrows_groups_to_staged(tmp_path: Path) -> None:
+    artifact = {"groups": [_group("g1", "a.md", "b.md"), _group("g2", "c.md")]}
+    (tmp_path / CLUSTERS_FILENAME).write_text(json.dumps(artifact))
+    # b.md is no longer staged; its group keeps the rest.
+    units = reconcile_work_units(tmp_path, ["a.md", "c.md"])
+    assert sorted(map(sorted, units)) == [["a.md"], ["c.md"]]
+
+
+def test_reconcile_work_units_adds_unplanned_sources_as_singletons(tmp_path: Path) -> None:
+    artifact = {"groups": [_group("g1", "a.md", "b.md")]}
+    (tmp_path / CLUSTERS_FILENAME).write_text(json.dumps(artifact))
+    # d.md was staged after the preview, so it compiles on its own.
+    units = reconcile_work_units(tmp_path, ["a.md", "b.md", "d.md"])
+    assert sorted(map(sorted, units)) == [["a.md", "b.md"], ["d.md"]]
+
+
+def test_reconcile_work_units_covers_exactly_the_staged_set(tmp_path: Path) -> None:
+    artifact = {"groups": [_group("g1", "a.md", "b.md"), _group("g2", "c.md")]}
+    (tmp_path / CLUSTERS_FILENAME).write_text(json.dumps(artifact))
+    staged = ["a.md", "c.md", "e.md"]
+    units = reconcile_work_units(tmp_path, staged)
+    assert sorted(source for unit in units for source in unit) == sorted(staged)
 
 
 def test_clear_preview_removes_both_files(tmp_path: Path) -> None:

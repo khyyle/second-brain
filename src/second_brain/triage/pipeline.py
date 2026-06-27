@@ -13,7 +13,7 @@ import shutil
 from pathlib import Path
 
 from second_brain.config import Config
-from second_brain.ingestion.manifest import DEFERRED_DECISION, Manifest
+from second_brain.ingestion.manifest import Manifest
 from second_brain.status import clear_status, now_iso, write_status
 from second_brain.triage.gemma import TriageDecision, triage_file
 
@@ -143,13 +143,10 @@ def _route_review_to_inbox(config: Config, review: list[str]) -> None:
 
 
 def worthwhile_sources(manifest: Manifest, sources: list[str]) -> list[str]:
-    """Filter sources to those triaged worthwhile (or untriaged, fail-open).
+    """Filter sources to those to compile: all but those triaged skip or review.
 
-    Sources with no recorded decision are treated as worthwhile so nothing
-    is silently dropped when triage was skipped or unavailable. The
-    ``"deferred"`` verdict is a transient capacity state (a source too large
-    for the current model), not a curation drop, so it passes through here to
-    be re-evaluated by the compile-stage window guard.
+    Untriaged sources pass through (fail-open), so nothing is silently dropped
+    when triage was skipped or unavailable.
 
     Parameters
     ----------
@@ -164,10 +161,5 @@ def worthwhile_sources(manifest: Manifest, sources: list[str]) -> list[str]:
         The subset to compile.
     """
     decisions = manifest.get_triage_decisions()
-    passthrough = {TriageDecision.WORTHWHILE.value, DEFERRED_DECISION}
-    out: list[str] = []
-    for rel in sources:
-        decision = decisions.get(rel)
-        if decision is None or decision in passthrough:
-            out.append(rel)
-    return out
+    held = {TriageDecision.REVIEW.value, TriageDecision.SKIP.value}
+    return [rel for rel in sources if decisions.get(rel) not in held]

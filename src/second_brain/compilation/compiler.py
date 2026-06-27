@@ -22,8 +22,8 @@ from second_brain.compilation.agent import (
     explore_tool_schemas,
 )
 from second_brain.config import Config
-from second_brain.ingestion.manifest import DEFERRED_DECISION, Manifest
-from second_brain.llm_providers import ProviderProfile, resolve_profile
+from second_brain.ingestion.manifest import Manifest
+from second_brain.llm_providers import resolve_profile
 from second_brain.wiki.structure import rebuild_structure
 
 logger = logging.getLogger(__name__)
@@ -97,13 +97,11 @@ def _split_oversized(clusters: list[list[str]], max_size: int) -> list[list[str]
 def _build_work_units(config: Config, raw_dir: Path, new_sources: list[str]) -> list[list[str]]:
     """Group staged sources into the per-run work units for this build.
 
-    A reviewed cluster preview that still covers exactly the staged set is
-    honored as-is, so the build matches what the user saw and tuned —
-    regardless of the ``clustering.enabled`` flag, since producing a preview
-    is itself the intent to cluster. With no matching preview, sources are
-    clustered fresh only when clustering is enabled (the unattended path);
-    otherwise each source compiles on its own. Oversized groups are split to
-    stay within the per-run token budget.
+    A reviewed cluster preview drives the build where each group is narrowed to the
+    sources still staged, and any staged source the preview did not cover is
+    compiled on its own. With no preview, sources are clustered fresh when
+    clustering is enabled, otherwise each compiles alone. Groups beyond the
+    per-run source budget are split.
 
     Parameters
     ----------
@@ -120,16 +118,12 @@ def _build_work_units(config: Config, raw_dir: Path, new_sources: list[str]) -> 
         Source groups, one per agent run.
     """
     from second_brain.clustering import cluster_scoped_sources, get_clusterer
-    from second_brain.clustering.preview import (
-        load_preview,
-        preview_members,
-        work_units_from_preview,
-    )
+    from second_brain.clustering.preview import reconcile_work_units
 
-    preview = load_preview(config.data_dir)
-    if preview is not None and preview_members(preview) == set(new_sources):
-        clusters = work_units_from_preview(config.data_dir) or [[s] for s in new_sources]
-        logger.info("Using reviewed cluster preview (%d groups)", len(clusters))
+    reconciled = reconcile_work_units(config.data_dir, new_sources)
+    if reconciled is not None:
+        clusters = reconciled
+        logger.info("Using reviewed cluster preview (%d work units)", len(clusters))
     elif config.clustering.enabled:
         clusters = cluster_scoped_sources(
             new_sources,
@@ -144,60 +138,6 @@ def _build_work_units(config: Config, raw_dir: Path, new_sources: list[str]) -> 
         clusters = [[source] for source in new_sources]
 
     return _split_oversized(clusters, config.clustering.max_sources_per_run)
-
-
-def _source_tokens(rel_path: str, raw_dir: Path) -> int:
-    """Estimate a source's token count from its byte size (~4 chars/token)."""
-    path = raw_dir / rel_path
-    return (path.stat().st_size // 4) if path.exists() else 0
-
-
-def _defer_oversized(
-    config: Config,
-    manifest: Manifest,
-    profile: ProviderProfile,
-    sources: list[str],
-    raw_dir: Path,
-    dry_run: bool,
-) -> tuple[list[str], int]:
-    """Split sources into those that fit the model's window and those too large.
-
-    A source larger than ``context_window_tokens * window_reserve`` cannot be
-    compiled faithfully by the current model, so it is recorded as deferred and
-    held out of the build (rather than half-compiled or lossily summarized).
-    A source previously deferred that now fits — e.g. after switching to a
-    larger-window model — is restored, so the verdict self-heals. The verdict
-    is recomputed every run; in a dry run the partition is returned without
-    recording anything.
-
-    Returns
-    -------
-    tuple[list[str], int]
-        The sources that fit, and the count deferred as too large.
-    """
-    window_cap = int(profile.context_window_tokens * config.compilation.window_reserve)
-    decisions = manifest.get_triage_decisions()
-    fitting: list[str] = []
-    deferred = 0
-    for rel in sources:
-        tokens = _source_tokens(rel, raw_dir)
-        if tokens > window_cap:
-            deferred += 1
-            logger.warning(
-                "Deferring %s: ~%d tokens exceeds the usable window for %s (%d). "
-                "Switch to a larger-window model to compile it.",
-                rel,
-                tokens,
-                profile.model,
-                window_cap,
-            )
-            if not dry_run:
-                manifest.record_triage(rel, DEFERRED_DECISION, 1.0, f"oversized:{window_cap}")
-        else:
-            fitting.append(rel)
-            if not dry_run and decisions.get(rel) == DEFERRED_DECISION:
-                manifest.record_triage(rel, "worthwhile", 1.0, "fits-window")
-    return fitting, deferred
 
 
 def _find_new_sources(config: Config, manifest: Manifest) -> list[str]:
@@ -280,7 +220,7 @@ def run_compilation(
     if not new_sources:
         logger.info("No new sources to compile")
         stats = rebuild_structure(wiki_dir)
-        return {**stats, "sources_compiled": 0, "sources_deferred": 0}
+        return {**stats, "sources_compiled": 0}
 
     # Triage already ran during ingestion (free, local). Here we just
     # filter to the worthwhile set from the recorded decisions; any
@@ -292,22 +232,13 @@ def run_compilation(
         triage_pending(config, manifest)
         new_sources = worthwhile_sources(manifest, new_sources)
 
-    # Hold out sources too large for the current model (and restore any that
-    # now fit). Recomputed every run, so the verdict self-heals on model change.
-    profile = resolve_profile(config.compilation.provider, config.compilation.model)
-    new_sources, deferred_count = _defer_oversized(
-        config, manifest, profile, new_sources, raw_dir, dry_run=dry_run
-    )
-
     if not new_sources:
-        if deferred_count:
-            logger.info("Nothing to compile — %d source(s) deferred as too large", deferred_count)
-        else:
-            logger.info("Nothing worthwhile to compile")
+        logger.info("Nothing worthwhile to compile")
         stats = rebuild_structure(wiki_dir)
-        return {**stats, "sources_compiled": 0, "sources_deferred": deferred_count}
+        return {**stats, "sources_compiled": 0}
 
-    logger.info("Compiling %d worthwhile sources (%d deferred)", len(new_sources), deferred_count)
+    profile = resolve_profile(config.compilation.provider, config.compilation.model)
+    logger.info("Compiling %d worthwhile sources", len(new_sources))
 
     compiled_count = 0
     if not dry_run:
@@ -434,7 +365,7 @@ def run_compilation(
         register_domains(wiki_dir, set(stats.get("domains", {})))
         _git_commit(wiki_dir)
 
-    return {**stats, "sources_compiled": compiled_count, "sources_deferred": deferred_count}
+    return {**stats, "sources_compiled": compiled_count}
 
 
 def _run_agent(
