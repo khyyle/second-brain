@@ -49,11 +49,11 @@ Triage and clustering are forgiving in the same spirit. A source that disappears
 
 ## What is safe to edit by hand
 
-- **`wiki/*.md`** — yours to read and edit in Obsidian. The wiki is a git repository, so a later build that updates a page is recoverable from history.
+- **`wiki/*.md`** — yours (or an agent's) to read, edit, and reorganize. The wiki is its own git repository, separate from `raw/` and the manifest, so edits and rollbacks are safe and scoped to the compiled pages. A rollback restores the pages, but `manifest.db` still treats their sources as compiled, so a normal build won't redo them--run `second-brain compile --full` to recompile every staged source from scratch.
 - **`config/config.yaml`** — the pipeline settings. The Settings panel edits a subset of these in place, leaving comments and ordering intact.
 - **`sources.json`** — the list of watched folders, also managed by the Watched folders control in Settings.
 
 Avoid hand-editing these:
 
-- **`manifest.db` and `search.db`** — use the CLI deletes or the menu bar app instead of editing rows directly; the index rebuilds itself.
+- **`manifest.db` and `search.db`** — use the CLI deletes or the menu bar app instead of editing rows directly as the index rebuilds itself.
 - **`wiki/_meta/` and `wiki/_views/`** — these are regenerated on every build, so manual changes are overwritten.
