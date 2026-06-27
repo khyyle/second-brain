@@ -219,27 +219,6 @@ struct ContentView: View {
     }
 }
 
-/// Compact icon button whose glyph brightens (to white, or a given tint) on
-/// hover.
-private struct IconAction: View {
-    let systemName: String
-    let help: String
-    var hoverTint: Color = Theme.Colors.textPrimary
-    let action: () -> Void
-    @State private var hovering = false
-
-    var body: some View {
-        Button(action: action) {
-            Image(systemName: systemName)
-                .font(.system(size: 12))
-                .foregroundStyle(hovering ? hoverTint : Theme.Colors.textSecondary)
-        }
-        .buttonStyle(.plain)
-        .help(help)
-        .onHover { hovering = $0 }
-    }
-}
-
 /// Footer left slot: live pipeline status when a run is active, otherwise
 /// the vault metrics.
 private struct FooterStatus: View {
@@ -307,29 +286,3 @@ private struct FooterStatus: View {
 /// are ticked separately by a TimelineView, so this only needs to be quick
 /// enough to notice a run starting or finishing.
 private let poll = Timer.publish(every: 2, on: .main, in: .common).autoconnect()
-
-/// Compact text button whose label brightens to white on hover.
-private struct TextAction: View {
-    let title: String
-    let help: String
-    var enabled: Bool = true
-    let action: () -> Void
-    @State private var hovering = false
-
-    var body: some View {
-        Button(action: action) {
-            Text(title)
-                .font(Theme.Font.body(11))
-                .foregroundStyle(color)
-        }
-        .buttonStyle(.plain)
-        .disabled(!enabled)
-        .help(help)
-        .onHover { hovering = $0 && enabled }
-    }
-
-    private var color: Color {
-        if !enabled { return Theme.Colors.textTertiary }
-        return hovering ? Theme.Colors.textPrimary : Theme.Colors.textSecondary
-    }
-}

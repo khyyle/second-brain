@@ -5,7 +5,10 @@ import SwiftUI
 /// the native system font throughout, so it reads as a proper macOS
 /// utility rather than a styled novelty.
 enum Theme {
+    /// Authoritative color palette. Hex values live here only; everything else
+    /// in the app refers to these names, never a raw `Color(red:...)`.
     enum Colors {
+        static let panelChrome   = Color(red: 0.106, green: 0.094, blue: 0.086) // #1b1816
         static let background    = Color(red: 0.086, green: 0.078, blue: 0.071) // #161412
         static let surface       = Color(red: 0.118, green: 0.106, blue: 0.094) // #1e1b18
         static let surfaceHover   = Color(red: 0.153, green: 0.137, blue: 0.125) // #272320
@@ -51,10 +54,7 @@ enum Theme {
     /// resorting to a flat fill.
     static var backgroundGradient: LinearGradient {
         LinearGradient(
-            colors: [
-                Color(red: 0.106, green: 0.094, blue: 0.086),
-                Colors.background,
-            ],
+            colors: [Colors.panelChrome, Colors.background],
             startPoint: .top,
             endPoint: .bottom
         )

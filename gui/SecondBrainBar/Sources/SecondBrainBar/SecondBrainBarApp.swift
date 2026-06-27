@@ -164,7 +164,7 @@ final class StatusBarController: NSObject, NSApplicationDelegate {
         panel.appearance = NSAppearance(named: .darkAqua)
         // Matches the top stop of the content's background gradient so the
         // title strip and the content read as one continuous surface.
-        panel.backgroundColor = NSColor(red: 0.106, green: 0.094, blue: 0.086, alpha: 1)
+        panel.backgroundColor = NSColor(Theme.Colors.panelChrome)
         panel.standardWindowButton(.miniaturizeButton)?.isHidden = true
         panel.standardWindowButton(.zoomButton)?.isHidden = true
         self.panel = panel

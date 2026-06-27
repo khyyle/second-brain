@@ -49,32 +49,6 @@ struct SectionHeader: View {
     }
 }
 
-/// A small "?" that reveals an explanation in a popover on click. Used
-/// beside specific non-obvious fields
-struct HelpButton: View {
-    let text: String
-    var size: CGFloat = 10
-    @State private var show = false
-    @State private var hovering = false
-
-    var body: some View {
-        Button { show.toggle() } label: {
-            Image(systemName: "questionmark.circle")
-                .font(.system(size: size))
-                .foregroundStyle(hovering ? Theme.Colors.textPrimary : Theme.Colors.textTertiary)
-        }
-        .buttonStyle(.plain)
-        .onHover { hovering = $0 }
-        .popover(isPresented: $show, arrowEdge: .bottom) {
-            Text(text)
-                .font(Theme.Font.body(12))
-                .foregroundStyle(Theme.Colors.textPrimary)
-                .frame(width: 260, alignment: .leading)
-                .padding(12)
-        }
-    }
-}
-
 /// A capped list that expands inline in pages — with a collapse — instead of
 /// overflowing into Finder. A small overflow fills in with one tap; a large
 /// queue pages through, so the popover stays bounded either way.
@@ -153,45 +127,6 @@ struct EmptyListMessage: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 8)
         .padding(.vertical, 6)
-    }
-}
-
-/// Standard hoverable row background.
-private struct RowBackground: ViewModifier {
-    let hovering: Bool
-    func body(content: Content) -> some View {
-        content
-            .padding(.horizontal, 8)
-            .padding(.vertical, 5)
-            .background(
-                RoundedRectangle(cornerRadius: Theme.Metric.cornerSmall, style: .continuous)
-                    .fill(hovering ? Theme.Colors.surfaceHover : Color.clear)
-            )
-    }
-}
-
-/// shows the full text as a tooltip and underlines while the pointer is over the text
-private struct OpenableTitle: ViewModifier {
-    let full: String
-    @State private var hovering = false
-
-    func body(content: Content) -> some View {
-        content
-            .overlay(alignment: .bottom) {
-                if hovering {
-                    Rectangle()
-                        .frame(height: 1)
-                        .foregroundStyle(Theme.Colors.textSecondary)
-                }
-            }
-            .help(full)
-            .onHover { hovering = $0 }
-    }
-}
-
-private extension View {
-    func openableTitle(_ full: String) -> some View {
-        modifier(OpenableTitle(full: full))
     }
 }
 
@@ -295,33 +230,27 @@ private struct QueueRow: View {
             Spacer(minLength: 6)
             if item.state == .failed, let onRetry {
                 Button("Retry", action: onRetry)
-                    .buttonStyle(PillButton(tint: Theme.Colors.accentAmber))
+                    .buttonStyle(PillButton(.warning))
                     .disabled(store.locked)
             }
-            // Hold the status meta and the hover remove icon in one slot so the
-            // title's width — and its middle truncation — stays put on hover.
-            ZStack(alignment: .trailing) {
-                Group {
-                    if item.state == .processing {
-                        TimelineView(.periodic(from: .now, by: 1)) { context in
-                            Text(formatElapsed(max(0, context.date.timeIntervalSince(item.since))))
-                                .font(Theme.Font.meta(10))
-                                .foregroundStyle(Theme.Colors.textTertiary)
-                                .monospacedDigit()
-                        }
-                    } else if item.state == .waiting {
-                        Text(item.state.label)
+            TrailingReserve(hovering: hovering) {
+                if item.state == .processing {
+                    TimelineView(.periodic(from: .now, by: 1)) { context in
+                        Text(formatElapsed(max(0, context.date.timeIntervalSince(item.since))))
                             .font(Theme.Font.meta(10))
                             .foregroundStyle(Theme.Colors.textTertiary)
                             .monospacedDigit()
                     }
+                } else if item.state == .waiting {
+                    Text(item.state.label)
+                        .font(Theme.Font.meta(10))
+                        .foregroundStyle(Theme.Colors.textTertiary)
+                        .monospacedDigit()
                 }
-                .opacity(hovering ? 0 : 1)
+            } hover: {
                 HoverIcon(systemName: "xmark.circle.fill",
                           help: "Remove (moves the file to Trash)",
                           action: onRemove)
-                    .opacity(hovering ? 1 : 0)
-                    .allowsHitTesting(hovering)
                     .disabled(store.locked)
             }
         }
@@ -445,10 +374,10 @@ private struct ReviewRow: View {
                 .openableTitle(cleanName(row.displayName))
             Spacer(minLength: 6)
             Button("Keep", action: onKeep)
-                .buttonStyle(PillButton(tint: Theme.Colors.success))
+                .buttonStyle(PillButton(.confirm))
                 .disabled(store.locked)
             Button("Skip", action: onSkip)
-                .buttonStyle(PillButton(tint: Theme.Colors.textTertiary))
+                .buttonStyle(PillButton(.quiet))
                 .disabled(store.locked)
         }
         .modifier(RowBackground(hovering: hovering))
@@ -517,63 +446,6 @@ private struct TriageDecidedRow: View {
         case .review:     return Theme.Colors.accentAmber
         case .skip:       return Theme.Colors.textTertiary
         }
-    }
-}
-
-/// Compact capsule button (Keep / Skip / Split …) whose label brightens to
-/// white on hover; the capsule fill only deepens on press.
-private struct PillButton: ButtonStyle {
-    let tint: Color
-    func makeBody(configuration: Configuration) -> some View {
-        PillBody(configuration: configuration, tint: tint)
-    }
-
-    private struct PillBody: View {
-        let configuration: ButtonStyleConfiguration
-        let tint: Color
-        @State private var hovering = false
-
-        // Brighten the fill on hover so the cue works for every tint, including
-        // the primary pill whose text is already textPrimary (text-only
-        // brightening would be invisible there).
-        private var fillOpacity: Double {
-            if configuration.isPressed { return 0.34 }
-            return hovering ? 0.26 : 0.16
-        }
-
-        var body: some View {
-            configuration.label
-                .font(Theme.Font.meta(10).weight(.medium))
-                .lineLimit(1)
-                .fixedSize()
-                .foregroundStyle(hovering ? Theme.Colors.textPrimary : tint)
-                .padding(.horizontal, 8).padding(.vertical, 3)
-                .background(Capsule().fill(tint.opacity(fillOpacity)))
-                .onHover { hovering = $0 }
-        }
-    }
-}
-
-/// A borderless icon button whose glyph brightens to white on hover. Row
-/// actions use this so hovering a control is clearly highlighted, with no
-/// background.
-private struct HoverIcon: View {
-    let systemName: String
-    let help: String
-    var size: CGFloat = 11
-    var restTint: Color = Theme.Colors.textTertiary
-    let action: () -> Void
-    @State private var hovering = false
-
-    var body: some View {
-        Button(action: action) {
-            Image(systemName: systemName)
-                .font(.system(size: size))
-                .foregroundStyle(hovering ? Theme.Colors.textPrimary : restTint)
-        }
-        .buttonStyle(.plain)
-        .help(help)
-        .onHover { hovering = $0 }
     }
 }
 
@@ -809,7 +681,7 @@ private struct StagedHeader: View {
     /// the Build button occupied — then a disabled Stopping until it winds down.
     private var stopButton: some View {
         Button(store.stopping ? "Stopping" : "Stop", action: store.requestStop)
-            .buttonStyle(PillButton(tint: Theme.Colors.danger))
+            .buttonStyle(PillButton(.destructive))
             .disabled(store.stopping)
     }
 
@@ -827,7 +699,7 @@ private struct StagedHeader: View {
             }
             if canBuild {
                 Button("Build wiki", action: onBuild)
-                    .buttonStyle(PillButton(tint: Theme.Colors.textPrimary))
+                    .buttonStyle(PillButton(.primary))
             }
         }
     }
@@ -848,7 +720,7 @@ private struct StagedHeader: View {
             .buttonStyle(PillButton(tint: Theme.Colors.accentAmber))
         } else {
             Button(plan == nil ? "Group" : "Regroup", action: onPreview)
-                .buttonStyle(PillButton(tint: Theme.Colors.textSecondary))
+                .buttonStyle(PillButton(.neutral))
         }
     }
 }
@@ -937,25 +809,26 @@ private struct ClusterGroupRow: View {
     @ViewBuilder
     private var trailing: some View {
         if isMulti {
-            ZStack(alignment: .trailing) {
-                cost.opacity(hovering ? 0 : 1)
+            TrailingReserve(hovering: hovering) {
+                cost
+            } hover: {
                 Button(isSplit ? "Merge" : "Split") {
                     overrides.toggleSplit(group.id)
                     onCommit()
                 }
-                .buttonStyle(PillButton(tint: isSplit ? Theme.Colors.success : Theme.Colors.textTertiary))
-                .opacity(hovering ? 1 : 0)
-                .allowsHitTesting(hovering)
+                .buttonStyle(PillButton(isSplit ? .confirm : .quiet))
                 .disabled(store.locked)
             }
-        } else if hovering {
-            HoverIcon(systemName: "xmark.circle.fill",
-                      help: "Remove from staging (moves the file to Trash)") {
-                onRemove(group.members.first?.rel ?? "")
-            }
-            .disabled(store.locked)
         } else {
-            cost
+            TrailingReserve(hovering: hovering) {
+                cost
+            } hover: {
+                HoverIcon(systemName: "xmark.circle.fill",
+                          help: "Remove from staging (moves the file to Trash)") {
+                    onRemove(group.members.first?.rel ?? "")
+                }
+                .disabled(store.locked)
+            }
         }
     }
 
@@ -1036,19 +909,14 @@ private struct StagedRow: View {
                 .lineLimit(1).truncationMode(.middle)
                 .openableTitle(cleanName(name))
             Spacer(minLength: 6)
-            // Keep the size label and the hover remove icon in one trailing
-            // slot so swapping them never changes the title's available width
-            // and re-truncates a middle-clipped name (a visible shift).
-            ZStack(alignment: .trailing) {
+            TrailingReserve(hovering: hovering) {
                 Text(sizeText)
                     .font(Theme.Font.meta(9.5))
                     .foregroundStyle(Theme.Colors.textTertiary)
-                    .opacity(hovering ? 0 : 1)
+            } hover: {
                 HoverIcon(systemName: "xmark.circle.fill",
                           help: "Remove source (moves the raw file to Trash)",
                           action: onRemove)
-                    .opacity(hovering ? 1 : 0)
-                    .allowsHitTesting(hovering)
                     .disabled(store.locked)
             }
         }
