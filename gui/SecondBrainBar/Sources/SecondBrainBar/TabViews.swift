@@ -273,6 +273,7 @@ private struct QueueRow: View {
     let onRemove: () -> Void
     var onRetry: (() -> Void)? = nil
     @State private var hovering = false
+    @EnvironmentObject private var store: PipelineStore
 
     var body: some View {
         HStack(spacing: 9) {
@@ -295,6 +296,7 @@ private struct QueueRow: View {
             if item.state == .failed, let onRetry {
                 Button("Retry", action: onRetry)
                     .buttonStyle(PillButton(tint: Theme.Colors.accentAmber))
+                    .disabled(store.locked)
             }
             // Hold the status meta and the hover remove icon in one slot so the
             // title's width — and its middle truncation — stays put on hover.
@@ -320,6 +322,7 @@ private struct QueueRow: View {
                           action: onRemove)
                     .opacity(hovering ? 1 : 0)
                     .allowsHitTesting(hovering)
+                    .disabled(store.locked)
             }
         }
         .modifier(RowBackground(hovering: hovering))
@@ -427,6 +430,7 @@ private struct ReviewRow: View {
     let onKeep: () -> Void
     let onSkip: () -> Void
     @State private var hovering = false
+    @EnvironmentObject private var store: PipelineStore
 
     var body: some View {
         HStack(spacing: 9) {
@@ -442,8 +446,10 @@ private struct ReviewRow: View {
             Spacer(minLength: 6)
             Button("Keep", action: onKeep)
                 .buttonStyle(PillButton(tint: Theme.Colors.success))
+                .disabled(store.locked)
             Button("Skip", action: onSkip)
                 .buttonStyle(PillButton(tint: Theme.Colors.textTertiary))
+                .disabled(store.locked)
         }
         .modifier(RowBackground(hovering: hovering))
         .contentShape(Rectangle())
@@ -458,6 +464,7 @@ private struct TriageDecidedRow: View {
     let onSkip: () -> Void
     let onUnskip: () -> Void
     @State private var hovering = false
+    @EnvironmentObject private var store: PipelineStore
 
     var body: some View {
         HStack(spacing: 7) {
@@ -472,6 +479,7 @@ private struct TriageDecidedRow: View {
             hoverAction
                 .opacity(hovering ? 1 : 0)
                 .allowsHitTesting(hovering)
+                .disabled(store.locked)
             badge
         }
         .modifier(RowBackground(hovering: hovering))
@@ -578,17 +586,15 @@ struct BuildTab: View {
     let onBuild: () -> Void
     let canBuild: Bool
     @State private var staged: [StagedSource] = []
-    @State private var deferred: [StagedSource] = []
     @State private var plan: ClusterPlan?
     @State private var planStamp = ""
     @State private var overrides = ClusterOverrides.empty
     @State private var showAllClusters = false
     @State private var showSingletons = false
     @State private var entries: [BuildLogEntry] = []
-    @State private var status: PipelineStatus?
     @State private var loaded = false
-    @State private var stopping = false
     @State private var compilationModel = "claude-sonnet-4-6"
+    @EnvironmentObject private var store: PipelineStore
 
     // A fresh plan drives the view (and the build honors it) as long as it
     // still covers exactly the staged set. Producing a plan is itself the
@@ -604,12 +610,10 @@ struct BuildTab: View {
         plan != nil && activePlan == nil
     }
 
-    private var grouping: Bool {
-        status?.isActive == true && status?.phase == "cluster"
-    }
-
-    private var compiling: Bool {
-        status?.isActive == true && status?.phase == "compile"
+    // The grouped view stays visible (read-only) while a compile runs, when the
+    // staged set is shrinking and would otherwise drop the matched plan.
+    private var displayPlan: ClusterPlan? {
+        store.isCompiling ? plan : activePlan
     }
 
     var body: some View {
@@ -619,20 +623,13 @@ struct BuildTab: View {
                 fallbackCost: VaultData.estimatedBuildCost(staged, model: compilationModel),
                 model: compilationModel,
                 sourceCount: staged.count,
-                status: status,
-                grouping: grouping,
                 stale: planStale,
                 canPreview: config.repoDir != nil
                     && staged.contains { $0.id.hasPrefix("chatgpt/") },
                 onPreview: previewGrouping,
                 onBuild: onBuild,
-                canBuild: canBuild,
-                stopping: stopping,
-                onStop: requestStop
+                canBuild: canBuild
             )
-            if !deferred.isEmpty {
-                DeferredNote(count: deferred.count, model: compilationModel)
-            }
             stagedSection
             SectionHeader(title: "Recent")
             recentSection
@@ -643,13 +640,7 @@ struct BuildTab: View {
 
     @ViewBuilder
     private var stagedSection: some View {
-        if staged.isEmpty {
-            EmptyListMessage(
-                text: loaded
-                    ? "Nothing staged. Drop and ingest files, then click Build wiki."
-                    : nil
-            )
-        } else if let plan = activePlan {
+        if let plan = displayPlan {
             // Only multi-source clusters carry a grouping decision worth
             // reviewing; single-source units sit behind a collapsible count
             // so they don't crowd the clusters but stay reachable.
@@ -694,6 +685,12 @@ struct BuildTab: View {
                     }
                 }
             }
+        } else if staged.isEmpty {
+            EmptyListMessage(
+                text: loaded
+                    ? "Nothing staged. Drop and ingest files, then click Build wiki."
+                    : nil
+            )
         } else {
             PaginatedList(items: staged) { source in
                 StagedRow(
@@ -719,7 +716,6 @@ struct BuildTab: View {
 
     private func refresh() {
         staged = VaultData.stagedSources(config: config)
-        deferred = VaultData.deferredSources(config: config)
         let loadedPlan = ClusterPlan.load(config.clusterPlanFile)
         // Reload overrides only when the plan itself changes (a new preview
         // clears them server-side), so in-flight tuning isn't clobbered.
@@ -731,17 +727,9 @@ struct BuildTab: View {
         }
         plan = loadedPlan
         entries = BuildLog.recent(at: config.buildLog)
-        status = PipelineStatus.read(from: config.statusFile)
-        // Clear the local "Stopping" state once the compile actually ends.
-        if !compiling { stopping = false }
         compilationModel = ConfigStore.locate(config)
             .map { ConfigStore.load(from: $0).model } ?? "claude-sonnet-4-6"
         loaded = true
-    }
-
-    private func requestStop() {
-        stopping = true
-        PipelineRunner.requestStop(vaultRoot: config.vaultRoot)
     }
 
     private func previewGrouping() {
@@ -775,22 +763,15 @@ private struct StagedHeader: View {
     let fallbackCost: Double
     let model: String
     let sourceCount: Int
-    let status: PipelineStatus?
-    let grouping: Bool
     let stale: Bool
     let canPreview: Bool
     let onPreview: () -> Void
     let onBuild: () -> Void
     let canBuild: Bool
-    let stopping: Bool
-    let onStop: () -> Void
-
-    private var compiling: Bool {
-        status?.isActive == true && status?.phase == "compile"
-    }
+    @EnvironmentObject private var store: PipelineStore
 
     private var running: Bool {
-        grouping || compiling
+        store.isGrouping || store.isCompiling
     }
 
     // A stale plan's cost is for the old staged set, so fall back to the
@@ -815,7 +796,7 @@ private struct StagedHeader: View {
                 }
             }
             Spacer(minLength: 8)
-            if compiling || stopping {
+            if store.isCompiling || store.stopping {
                 stopButton
             } else if !running, sourceCount > 0 {
                 actions
@@ -827,9 +808,9 @@ private struct StagedHeader: View {
     /// While a compile runs, the primary action becomes Stop in the same slot
     /// the Build button occupied — then a disabled Stopping until it winds down.
     private var stopButton: some View {
-        Button(stopping ? "Stopping" : "Stop", action: onStop)
+        Button(store.stopping ? "Stopping" : "Stop", action: store.requestStop)
             .buttonStyle(PillButton(tint: Theme.Colors.danger))
-            .disabled(stopping)
+            .disabled(store.stopping)
     }
 
     private var costLine: some View {
@@ -872,27 +853,6 @@ private struct StagedHeader: View {
     }
 }
 
-/// A line noting sources held out of the build because they exceed the
-/// current model's context window. They re-admit automatically on a build with
-/// a larger-window model.
-private struct DeferredNote: View {
-    let count: Int
-    let model: String
-
-    var body: some View {
-        HStack(spacing: 5) {
-            Text("\(count) deferred (too large for \(model))")
-                .font(Theme.Font.meta(10))
-                .foregroundStyle(Theme.Colors.accentAmber)
-            HelpButton(text: "These sources exceed the selected model's context window, so "
-                + "they are held out of the build rather than compiled from a lossy summary. "
-                + "Switch to a larger-window model and build again to include them.")
-            Spacer()
-        }
-        .padding(.horizontal, 8).padding(.vertical, 1)
-    }
-}
-
 /// A build plan unit: one expandable group of related chats (with split and
 /// per-source pop-out tuning), or a plain row for a single-source unit.
 private struct ClusterGroupRow: View {
@@ -904,6 +864,7 @@ private struct ClusterGroupRow: View {
     let onOpen: (String) -> Void
     @State private var expanded = false
     @State private var hovering = false
+    @EnvironmentObject private var store: PipelineStore
 
     private var isMulti: Bool { group.members.count > 1 }
     private var isSplit: Bool { overrides.isSplit(group.id) }
@@ -985,12 +946,14 @@ private struct ClusterGroupRow: View {
                 .buttonStyle(PillButton(tint: isSplit ? Theme.Colors.success : Theme.Colors.textTertiary))
                 .opacity(hovering ? 1 : 0)
                 .allowsHitTesting(hovering)
+                .disabled(store.locked)
             }
         } else if hovering {
             HoverIcon(systemName: "xmark.circle.fill",
                       help: "Remove from staging (moves the file to Trash)") {
                 onRemove(group.members.first?.rel ?? "")
             }
+            .disabled(store.locked)
         } else {
             cost
         }
@@ -1014,6 +977,7 @@ private struct ClusterMemberRow: View {
     let onRemove: () -> Void
     let onOpen: () -> Void
     @State private var hovering = false
+    @EnvironmentObject private var store: PipelineStore
 
     var body: some View {
         HStack(spacing: 9) {
@@ -1031,11 +995,13 @@ private struct ClusterMemberRow: View {
                                    : "Compile on its own page instead of in this group",
                     action: onToggleExclude
                 )
+                .disabled(store.locked)
                 HoverIcon(
                     systemName: "xmark.circle.fill",
                     help: "Remove from staging (moves the file to Trash)",
                     action: onRemove
                 )
+                .disabled(store.locked)
             } else if excluded {
                 Text("own page")
                     .font(Theme.Font.meta(9))
@@ -1056,6 +1022,7 @@ private struct StagedRow: View {
     let onOpen: () -> Void
     let onRemove: () -> Void
     @State private var hovering = false
+    @EnvironmentObject private var store: PipelineStore
 
     var body: some View {
         HStack(spacing: 9) {
@@ -1082,6 +1049,7 @@ private struct StagedRow: View {
                           action: onRemove)
                     .opacity(hovering ? 1 : 0)
                     .allowsHitTesting(hovering)
+                    .disabled(store.locked)
             }
         }
         .modifier(RowBackground(hovering: hovering))
@@ -1281,6 +1249,7 @@ private struct DomainRow: View {
     let onMerge: (String) -> Void
     let onDelete: () -> Void
     @State private var hovering = false
+    @EnvironmentObject private var store: PipelineStore
 
     var body: some View {
         HStack(spacing: 9) {
@@ -1297,6 +1266,7 @@ private struct DomainRow: View {
             menu
                 .opacity(hovering && !busy ? 1 : 0)
                 .allowsHitTesting(hovering && !busy)
+                .disabled(store.locked)
             count
         }
         .modifier(RowBackground(hovering: hovering))

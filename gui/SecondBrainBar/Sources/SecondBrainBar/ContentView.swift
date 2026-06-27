@@ -29,7 +29,7 @@ struct ContentView: View {
     @State private var showingBusyAlert = false
     @State private var showingOllamaAlert = false
     @State private var ollamaHealth: PipelineRunner.OllamaHealth?
-    @State private var status: PipelineStatus?
+    @EnvironmentObject private var store: PipelineStore
     @Namespace private var tabNamespace
 
     var body: some View {
@@ -70,11 +70,7 @@ struct ContentView: View {
         }
         .onAppear {
             if autoRunner == nil { autoRunner = AutoRunner(config: config) }
-            status = PipelineStatus.read(from: config.statusFile)
             probeOllama()
-        }
-        .onReceive(poll) { _ in
-            status = PipelineStatus.read(from: config.statusFile)
         }
         .onChange(of: feedback.event) { newValue in
             // A successful drop schedules a debounced (free) ingest run.
@@ -175,7 +171,7 @@ struct ContentView: View {
 
     private var footer: some View {
         HStack(spacing: 9) {
-            FooterStatus(config: config, status: status)
+            FooterStatus(config: config)
                 .layoutPriority(1)
             Spacer(minLength: 6)
             TextAction(title: "Reveal", help: "Reveal vault in Finder") {
@@ -190,7 +186,7 @@ struct ContentView: View {
     /// Start a compile, after the busy / API-key / Ollama gates. Passed to the
     /// Build tab, which surfaces it as that tab's primary action.
     private func attemptBuild() {
-        if status?.isActive == true {
+        if store.isActive {
             showingBusyAlert = true
             return
         }
@@ -248,12 +244,12 @@ private struct IconAction: View {
 /// the vault metrics.
 private struct FooterStatus: View {
     let config: AppConfig
-    let status: PipelineStatus?
+    @EnvironmentObject private var store: PipelineStore
     @State private var stats = VaultStats.empty
 
     var body: some View {
         Group {
-            if let status, status.isActive {
+            if let status = store.status, status.isActive {
                 TimelineView(.periodic(from: .now, by: 1)) { context in
                     HStack(spacing: 6) {
                         ProgressView().controlSize(.small).scaleEffect(0.7)

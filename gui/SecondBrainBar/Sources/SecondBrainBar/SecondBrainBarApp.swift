@@ -16,6 +16,7 @@ final class StatusBarController: NSObject, NSApplicationDelegate {
     private let config = AppConfig.default
     private var statusItem: NSStatusItem!
     private var panel: NSPanel?
+    private var store: PipelineStore?
     private let autoRunner = AutoRunner(config: AppConfig.default)
     private var dropWatcher: DropWatcher?
 
@@ -138,7 +139,11 @@ final class StatusBarController: NSObject, NSApplicationDelegate {
     }
 
     private func makePanel() -> NSPanel {
-        let hosting = NSHostingController(rootView: ContentView(config: config))
+        let store = PipelineStore(config: config)
+        self.store = store
+        let hosting = NSHostingController(
+            rootView: ContentView(config: config).environmentObject(store)
+        )
         hosting.sizingOptions = []
 
         let panel = NSPanel(
