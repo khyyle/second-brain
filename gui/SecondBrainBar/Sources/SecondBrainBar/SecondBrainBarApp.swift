@@ -152,7 +152,7 @@ final class StatusBarController: NSObject, NSApplicationDelegate {
         panel.title = ""
         panel.titleVisibility = .hidden
         panel.titlebarAppearsTransparent = true
-        panel.isMovableByWindowBackground = true
+        panel.isMovableByWindowBackground = false
         panel.level = .normal
         panel.hidesOnDeactivate = false
         panel.isReleasedWhenClosed = false
