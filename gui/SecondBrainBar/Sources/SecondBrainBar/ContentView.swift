@@ -171,7 +171,7 @@ struct ContentView: View {
 
     private var footer: some View {
         HStack(spacing: 9) {
-            FooterStatus(config: config)
+            FooterStatus()
                 .layoutPriority(1)
             Spacer(minLength: 6)
             TextAction(title: "Reveal", help: "Reveal vault in Finder") {
@@ -222,9 +222,7 @@ struct ContentView: View {
 /// Footer left slot: live pipeline status when a run is active, otherwise
 /// the vault metrics.
 private struct FooterStatus: View {
-    let config: AppConfig
     @EnvironmentObject private var store: PipelineStore
-    @State private var stats = VaultStats.empty
 
     var body: some View {
         Group {
@@ -239,7 +237,7 @@ private struct FooterStatus: View {
                     }
                 }
             } else {
-                Text("\(stats.staged) staged · \(stats.wikiPages) built")
+                Text("\(store.staged.count) staged · \(store.builtCount) built")
                     .font(Theme.Font.meta(10.5))
                     .foregroundStyle(Theme.Colors.textTertiary)
                     .monospacedDigit()
@@ -247,8 +245,6 @@ private struct FooterStatus: View {
                     .lineLimit(1)
             }
         }
-        .onAppear(perform: refreshStats)
-        .onReceive(poll) { _ in refreshStats() }
     }
 
     // The single live-progress readout: phase + i/n for every stage, with
@@ -273,16 +269,4 @@ private struct FooterStatus: View {
         }
         return parts.joined(separator: " · ")
     }
-
-    private func refreshStats() {
-        DispatchQueue.global(qos: .utility).async {
-            let latest = VaultData.stats(config: config)
-            DispatchQueue.main.async { stats = latest }
-        }
-    }
 }
-
-/// Polls the heartbeat file for phase/progress/cost. The elapsed seconds
-/// are ticked separately by a TimelineView, so this only needs to be quick
-/// enough to notice a run starting or finishing.
-private let poll = Timer.publish(every: 2, on: .main, in: .common).autoconnect()

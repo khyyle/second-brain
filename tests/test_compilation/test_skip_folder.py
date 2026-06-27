@@ -25,7 +25,7 @@ def test_find_new_sources_ignores_skipped(tmp_path: Path) -> None:
     skipped.mkdir(parents=True, exist_ok=True)
     (skipped / "junk.md").write_text("y", encoding="utf-8")
 
-    sources = compiler._find_new_sources(config, manifest)
+    sources = compiler.find_new_sources(config, manifest)
 
     assert "documents/keep.md" in sources
     assert all(".skipped" not in source for source in sources)

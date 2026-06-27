@@ -7,6 +7,7 @@ import Combine
 /// these reads are defined once rather than recomputed per view.
 final class PipelineStore: ObservableObject {
     @Published private(set) var status: PipelineStatus?
+    @Published private(set) var state: AppState?
     @Published private(set) var stopping = false
 
     private let config: AppConfig
@@ -15,6 +16,11 @@ final class PipelineStore: ObservableObject {
     init(config: AppConfig) {
         self.config = config
         refresh()
+        // Generate the derived-state file if a run hasn't written one yet, so a
+        // fresh launch renders the staged set without waiting for the next run.
+        if state == nil, let repo = config.repoDir {
+            PipelineRunner.runManaged(repoDir: repo, command: "state")
+        }
         cancellable = Timer.publish(every: 1, on: .main, in: .common)
             .autoconnect()
             .sink { [weak self] _ in self?.refresh() }
@@ -27,6 +33,13 @@ final class PipelineStore: ObservableObject {
     /// Editing the plan, staging, or wiki is blocked while a compile runs.
     var locked: Bool { isCompiling }
 
+    var staged: [StagedSource] { state?.staged ?? [] }
+    var builtCount: Int { state?.builtCount ?? 0 }
+    var stale: Bool { state?.stale ?? false }
+    var hasState: Bool { state != nil }
+
+    func cost(for model: String) -> Double { state?.costs[model] ?? 0 }
+
     /// Ask the running compile to stop, shown as a disabled "Stopping" until
     /// the heartbeat reports the run has ended.
     func requestStop() {
@@ -36,6 +49,7 @@ final class PipelineStore: ObservableObject {
 
     private func refresh() {
         status = PipelineStatus.read(from: config.statusFile)
+        state = AppState.load(from: config.stateFile)
         if !isCompiling { stopping = false }
     }
 }

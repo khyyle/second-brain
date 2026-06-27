@@ -44,6 +44,7 @@ struct AppConfig {
     var inboxRoot: URL { vaultRoot.appending(path: "inbox") }
     var manifestDB: URL { vaultRoot.appending(path: "manifest.db") }
     var statusFile: URL { vaultRoot.appending(path: ".status.json") }
+    var stateFile: URL { vaultRoot.appending(path: ".state.json") }
     var buildLog: URL { vaultRoot.appending(path: ".build-log.jsonl") }
     var clusterPlanFile: URL { vaultRoot.appending(path: ".clusters.json") }
     var clusterOverridesFile: URL { vaultRoot.appending(path: ".cluster-overrides.json") }

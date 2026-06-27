@@ -140,7 +140,7 @@ def _build_work_units(config: Config, raw_dir: Path, new_sources: list[str]) -> 
     return _split_oversized(clusters, config.clustering.max_sources_per_run)
 
 
-def _find_new_sources(config: Config, manifest: Manifest) -> list[str]:
+def find_new_sources(config: Config, manifest: Manifest) -> list[str]:
     """
     Find raw source files that haven't been compiled yet.
 
@@ -215,7 +215,7 @@ def run_compilation(
     if force_full:
         new_sources = sorted(str(f.relative_to(raw_dir)) for f in raw_dir.rglob("*.md"))
     else:
-        new_sources = _find_new_sources(config, manifest)
+        new_sources = find_new_sources(config, manifest)
 
     if not new_sources:
         logger.info("No new sources to compile")

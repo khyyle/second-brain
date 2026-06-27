@@ -6,14 +6,11 @@ import json
 import logging
 import sys
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 import click
 
 from second_brain.config import Config, load_config
-
-if TYPE_CHECKING:
-    from second_brain.ingestion.manifest import Manifest
+from second_brain.ingestion.manifest import Manifest
 
 logger = logging.getLogger(__name__)
 
@@ -143,6 +140,7 @@ def ingest(
     _require_ollama(config)
 
     from second_brain.ingestion.manifest import Manifest
+    from second_brain.state import emit_state
 
     manifest = Manifest(config.manifest_db_path)
 
@@ -156,10 +154,12 @@ def ingest(
         for p in paths:
             manifest.mark_processing(p, "chatgpt")
             manifest.mark_complete(p, parse_lane="passthrough", raw_output=str(p))
+        emit_state(config)
         return
 
     if file_path:
         _ingest_single(Path(file_path).expanduser().resolve(), config, manifest)
+        emit_state(config)
         return
 
     if watch:
@@ -192,6 +192,7 @@ def ingest(
             f"Triaged: {counts['worthwhile']} worthwhile, "
             f"{counts['review']} review, {counts['skip']} skip"
         )
+    emit_state(config)
 
 
 def _ingest_single(
@@ -369,6 +370,10 @@ def compile(ctx: click.Context, full: bool, dry_run: bool) -> None:
         summary = ", ".join(f"{name} ({count})" for name, count in sorted(domains.items()))
         click.echo(f"Domains: {summary}")
 
+    from second_brain.state import emit_state
+
+    emit_state(config)
+
 
 @main.command(name="preview-clusters")
 @click.pass_context
@@ -415,6 +420,10 @@ def preview_clusters(ctx: click.Context) -> None:
         f"{artifact['source_count']} sources -> {artifact['group_count']} groups "
         f"(~${artifact['estimated_cost_usd']:.2f})"
     )
+
+    from second_brain.state import emit_state
+
+    emit_state(config)
 
 
 @main.command()
@@ -488,6 +497,9 @@ def forget(ctx: click.Context, raw_path: str) -> None:
 
     Manifest(config.manifest_db_path).forget_source(raw_path)
     click.echo(f"Forgot {raw_path}")
+    from second_brain.state import emit_state
+
+    emit_state(config)
 
 
 @main.command(name="forget-drop")
@@ -500,6 +512,19 @@ def forget_drop(ctx: click.Context, path: str) -> None:
 
     removed = Manifest(config.manifest_db_path).remove_entries([Path(path)])
     click.echo(f"Removed {removed} manifest row(s)")
+    from second_brain.state import emit_state
+
+    emit_state(config)
+
+
+@main.command(name="state")
+@click.pass_context
+def state(ctx: click.Context) -> None:
+    """Recompute the derived state file the menu bar app reads."""
+    config: Config = ctx.obj["config"]
+    from second_brain.state import emit_state
+
+    emit_state(config)
 
 
 @main.group()
@@ -521,6 +546,9 @@ def triage_set(ctx: click.Context, raw_path: str, decision: str) -> None:
         raw_path, decision, confidence=1.0, reason="manual override"
     )
     click.echo(f"Set {raw_path} -> {decision}")
+    from second_brain.state import emit_state
+
+    emit_state(config)
 
 
 @main.group()

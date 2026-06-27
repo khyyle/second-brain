@@ -131,7 +131,7 @@ def test_build_stops_when_cost_cap_reached(
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
 
     sources = ["a.md", "b.md", "c.md"]
-    monkeypatch.setattr(compiler, "_find_new_sources", lambda *_: list(sources))
+    monkeypatch.setattr(compiler, "find_new_sources", lambda *_: list(sources))
     monkeypatch.setattr(compiler, "rebuild_structure", lambda *_: {})
     monkeypatch.setattr(compiler, "_git_commit", lambda *_: None)
 

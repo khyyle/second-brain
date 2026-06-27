@@ -457,7 +457,6 @@ struct BuildTab: View {
     let config: AppConfig
     let onBuild: () -> Void
     let canBuild: Bool
-    @State private var staged: [StagedSource] = []
     @State private var plan: ClusterPlan?
     @State private var planStamp = ""
     @State private var overrides = ClusterOverrides.empty
@@ -468,22 +467,14 @@ struct BuildTab: View {
     @State private var compilationModel = "claude-sonnet-4-6"
     @EnvironmentObject private var store: PipelineStore
 
-    // A fresh plan drives the view (and the build honors it) as long as it
-    // still covers exactly the staged set. Producing a plan is itself the
-    // intent to cluster, so it isn't gated on the config flag.
+    // The reviewed plan drives the view while it still matches staging; the
+    // pipeline's stale flag (via the store) is the authority on that match.
     private var activePlan: ClusterPlan? {
-        guard let plan, plan.memberPaths == Set(staged.map(\.id)) else { return nil }
+        guard let plan, !store.stale else { return nil }
         return plan
     }
 
-    // A plan exists but no longer matches the staged set, so its grouping
-    // and cost are out of date until regrouped.
-    private var planStale: Bool {
-        plan != nil && activePlan == nil
-    }
-
-    // The grouped view stays visible (read-only) while a compile runs, when the
-    // staged set is shrinking and would otherwise drop the matched plan.
+    // The grouped view stays visible (read-only) while a compile runs.
     private var displayPlan: ClusterPlan? {
         store.isCompiling ? plan : activePlan
     }
@@ -491,13 +482,12 @@ struct BuildTab: View {
     var body: some View {
         VStack(spacing: 1) {
             StagedHeader(
-                plan: activePlan,
-                fallbackCost: VaultData.estimatedBuildCost(staged, model: compilationModel),
-                model: compilationModel,
-                sourceCount: staged.count,
-                stale: planStale,
+                cost: store.cost(for: compilationModel),
+                sourceCount: store.staged.count,
+                stale: store.stale,
+                hasPlan: plan != nil,
                 canPreview: config.repoDir != nil
-                    && staged.contains { $0.id.hasPrefix("chatgpt/") },
+                    && store.staged.contains { $0.id.hasPrefix("chatgpt/") },
                 onPreview: previewGrouping,
                 onBuild: onBuild,
                 canBuild: canBuild
@@ -557,14 +547,14 @@ struct BuildTab: View {
                     }
                 }
             }
-        } else if staged.isEmpty {
+        } else if store.staged.isEmpty {
             EmptyListMessage(
-                text: loaded
+                text: store.hasState
                     ? "Nothing staged. Drop and ingest files, then click Build wiki."
                     : nil
             )
         } else {
-            PaginatedList(items: staged) { source in
+            PaginatedList(items: store.staged) { source in
                 StagedRow(
                     name: source.displayName,
                     sizeText: source.sizeText,
@@ -587,7 +577,6 @@ struct BuildTab: View {
     }
 
     private func refresh() {
-        staged = VaultData.stagedSources(config: config)
         let loadedPlan = ClusterPlan.load(config.clusterPlanFile)
         // Reload overrides only when the plan itself changes (a new preview
         // clears them server-side), so in-flight tuning isn't clobbered.
@@ -631,11 +620,10 @@ struct BuildTab: View {
 /// cluster preview is active, else a per-source estimate), a Preview/Refresh
 /// action, and live progress while grouping or compiling.
 private struct StagedHeader: View {
-    let plan: ClusterPlan?
-    let fallbackCost: Double
-    let model: String
+    let cost: Double
     let sourceCount: Int
     let stale: Bool
+    let hasPlan: Bool
     let canPreview: Bool
     let onPreview: () -> Void
     let onBuild: () -> Void
@@ -644,12 +632,6 @@ private struct StagedHeader: View {
 
     private var running: Bool {
         store.isGrouping || store.isCompiling
-    }
-
-    // A stale plan's cost is for the old staged set, so fall back to the
-    // per-source estimate, which always reflects what is currently staged.
-    private var estimatedCost: Double {
-        stale ? fallbackCost : (plan?.cost(for: model) ?? fallbackCost)
     }
 
     var body: some View {
@@ -686,7 +668,7 @@ private struct StagedHeader: View {
     }
 
     private var costLine: some View {
-        Text("~$\(String(format: "%.2f", estimatedCost))")
+        Text("~$\(String(format: "%.2f", cost))")
             .font(Theme.Font.meta(10))
             .foregroundStyle(Theme.Colors.textTertiary)
             .monospacedDigit()
@@ -719,7 +701,7 @@ private struct StagedHeader: View {
             }
             .buttonStyle(PillButton(tint: Theme.Colors.accentAmber))
         } else {
-            Button(plan == nil ? "Group" : "Regroup", action: onPreview)
+            Button(hasPlan ? "Regroup" : "Group", action: onPreview)
                 .buttonStyle(PillButton(.neutral))
         }
     }

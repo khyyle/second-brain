@@ -79,7 +79,7 @@ def _read_title(path: Path) -> str:
     return path.stem
 
 
-def _group_cost_usd(
+def group_cost_usd(
     total_bytes: int, input_usd_per_mtok: float, output_usd_per_mtok: float
 ) -> float:
     """Estimate the USD cost of compiling one group from its total bytes."""
@@ -90,7 +90,7 @@ def _group_cost_usd(
     )
 
 
-def _model_prices() -> dict[str, tuple[float, float]]:
+def model_prices() -> dict[str, tuple[float, float]]:
     """Return (input, output) USD-per-Mtok for every selectable model.
 
     Precomputed once per preview so the plan can carry a cost for each
@@ -119,10 +119,10 @@ def _staged_sources(config: Config, manifest: Manifest) -> list[str]:
     list[str]
         Sorted relative raw paths staged for compilation.
     """
-    from second_brain.compilation.compiler import _find_new_sources
+    from second_brain.compilation.compiler import find_new_sources
     from second_brain.triage.pipeline import worthwhile_sources
 
-    new_sources = _find_new_sources(config, manifest)
+    new_sources = find_new_sources(config, manifest)
     if config.triage.enabled:
         new_sources = worthwhile_sources(manifest, new_sources)
     return new_sources
@@ -153,7 +153,7 @@ def build_preview(
     """
     staged = _staged_sources(config, manifest)
     profile = resolve_profile(config.compilation.provider, config.compilation.model)
-    model_prices = _model_prices()
+    prices = model_prices()
     clusters = cluster_scoped_sources(
         staged,
         config.raw_dir,
@@ -165,14 +165,14 @@ def build_preview(
     )
 
     groups: list[dict] = []
-    total_costs: dict[str, float] = dict.fromkeys(model_prices, 0.0)
+    total_costs: dict[str, float] = dict.fromkeys(prices, 0.0)
     for members in clusters:
         sized = [(rel, (config.raw_dir / rel).stat().st_size) for rel in members]
         total_bytes = sum(size for _, size in sized)
         representative = max(sized, key=lambda pair: pair[1])[0]
         costs = {
-            model: _group_cost_usd(total_bytes, input_price, output_price)
-            for model, (input_price, output_price) in model_prices.items()
+            model: group_cost_usd(total_bytes, input_price, output_price)
+            for model, (input_price, output_price) in prices.items()
         }
         for model, cost in costs.items():
             total_costs[model] += cost
