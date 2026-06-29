@@ -11,6 +11,7 @@ import re
 from pathlib import Path
 
 from second_brain.mcp_server.tools import WikiTools
+from second_brain.wiki.slugs import slugify
 from second_brain.wiki.structure import (
     CONTENT_DIRS,
     _parse_frontmatter,
@@ -446,12 +447,6 @@ def _is_raw_path(path: str) -> bool:
     return path.startswith("raw/") or path.startswith("../raw/")
 
 
-def _slugify(title: str) -> str:
-    """Reduce a page title to a kebab-case filename stem."""
-    cleaned = "".join(c if c.isalnum() or c in " -" else "" for c in title.lower())
-    return "-".join(cleaned.split())
-
-
 class WikiToolExecutor:
     """Runs the agent's filesystem tools, sandboxed to the wiki and source trees.
 
@@ -661,7 +656,7 @@ class WikiToolExecutor:
             return f"Error: type must be one of {', '.join(_PAGE_TYPES)}, got '{page_type}'"
         if not title:
             return "Error: a non-empty title is required"
-        slug = _slugify(title)
+        slug = slugify(title)
         if not slug:
             return f"Error: title {title!r} has no slug-able characters"
 

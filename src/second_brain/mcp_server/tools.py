@@ -14,6 +14,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from second_brain.mcp_server.search import SearchIndex
+from second_brain.wiki.slugs import normalize_link_target, slugify
 from second_brain.wiki.structure import CONTENT_DIRS, _parse_frontmatter, strip_frontmatter
 
 logger = logging.getLogger(__name__)
@@ -335,8 +336,7 @@ class WikiTools:
 
     def _resolve_page(self, title: str) -> Path | None:
         """Resolve a title/slug to its page file, or None if no page matches."""
-        # the wiki is flat by design, probe <content_dir>/<slug>.md
-        slug = title.lower().replace(" ", "-")
+        slug = normalize_link_target(title)
         for content_dir in CONTENT_DIRS:
             path = self._wiki / content_dir / f"{slug}.md"
             if path.exists():
@@ -486,8 +486,7 @@ class WikiTools:
             return "Nothing to capture: content is empty."
 
         heading = (title or text.split("\n", 1)[0]).strip()[:80] or "captured note"
-        slug = "".join(c if c.isalnum() or c in " -" else "" for c in heading.lower())
-        slug = "-".join(slug.split()) or "note"
+        slug = slugify(heading) or "note"
 
         captured_at = datetime.now(tz=UTC)
         drops_documents = self._raw.parent / "drops" / "documents"
@@ -640,7 +639,7 @@ class WikiTools:
             yet as gaps, followed by a coverage note when the result is capped, or
             a not-found / no-relations message.
         """
-        slug = title.lower().replace(" ", "-")
+        slug = normalize_link_target(title)
         if not self._search.page_titles({slug}):
             return f"Page not found: {title}"
 
@@ -735,7 +734,7 @@ class WikiTools:
             foundations note, and a cycle or depth-cutoff note when either
             applies. Falls back to a not-found / no-prerequisites message.
         """
-        slug = title.lower().replace(" ", "-")
+        slug = normalize_link_target(title)
         if not self._search.page_titles({slug}):
             return f"Page not found: {title}"
 
@@ -802,7 +801,7 @@ class WikiTools:
             A wikilink list of the dependent pages, with a coverage note when
             the result is capped, or a not-found / none message.
         """
-        slug = title.lower().replace(" ", "-")
+        slug = normalize_link_target(title)
         if not self._search.page_titles({slug}):
             return f"Page not found: {title}"
 

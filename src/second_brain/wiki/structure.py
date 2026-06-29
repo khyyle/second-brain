@@ -10,10 +10,10 @@ from pathlib import Path
 
 import yaml
 
+from second_brain.wiki.slugs import iter_wikilink_targets, normalize_link_target
+
 logger = logging.getLogger(__name__)
 
-# Captures the target from [[target]] and [[target|display text]] wikilinks
-_WIKILINK_RE = re.compile(r"\[\[([^\]|]+)(?:\|[^\]]+)?\]\]")
 # DOTALL so .*? spans multi-line YAML blocks between --- fences
 _FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n", re.DOTALL)
 _FRONTMATTER_EDGE_FIELDS = {
@@ -150,52 +150,6 @@ def update_frontmatter(content: str, changes: dict) -> str | None:
     return f"---\n{_dump_frontmatter(frontmatter)}---\n{content[match.end() :]}"
 
 
-def _normalize_link_target(target: str) -> str:
-    """Reduce a wikilink target to a bare page stem.
-
-    Wikilinks appear both bare (``[[point-estimation]]``) and folder-
-    prefixed (``[[concepts/point-estimation]]``), and may carry a ``.md``
-    suffix or an ``#anchor``. Pages are keyed by bare stem, so every
-    target is reduced to that form for consistent graph resolution.
-
-    Parameters
-    ----------
-    target: str
-        The raw text captured between ``[[`` and ``]]`` (display text
-        already stripped).
-
-    Returns
-    -------
-    str
-        The bare stem the link points to.
-    """
-    target = target.strip().split("#", 1)[0].strip()
-    target = target.rsplit("/", 1)[-1]
-    if target.endswith(".md"):
-        target = target[:-3]
-    return target.strip()
-
-
-def _normalize_edge_target(target: str) -> str:
-    """Normalize a frontmatter or body link target to a comparable page stem.
-
-    Frontmatter values are either wikilinks (``"[[statistical-models]]"``) or
-    free text naming a not-yet-written fundamental (``"probability
-    distributions"``). Stripping the ``[[ ]]`` wrapper and lower-casing and
-    hyphenating free text collapse both onto the stem form pages use, so an
-    edge resolves to a page the moment one exists.
-    """
-    text = target.strip()
-    if text.startswith("[[") and text.endswith("]]"):
-        text = text[2:-2]
-    return _normalize_link_target(text).lower().replace(" ", "-")
-
-
-def _extract_wikilinks(content: str) -> list[str]:
-    """Return all wikilink target stems found in the content, normalized."""
-    return [stem for raw in _WIKILINK_RE.findall(content) if (stem := _normalize_link_target(raw))]
-
-
 def _count_words(content: str) -> int:
     """Count words in the body only, excluding YAML frontmatter."""
     return len(strip_frontmatter(content).split())
@@ -226,13 +180,13 @@ def extract_typed_edges(content: str) -> list[tuple[str, str]]:
         for item in frontmatter.get(edge_field) or []:
             if not isinstance(item, str):
                 continue
-            target = _normalize_edge_target(item)
+            target = normalize_link_target(item)
             if target and (target, kind) not in seen:
                 seen.add((target, kind))
                 edges.append((target, kind))
 
     body = strip_frontmatter(content)
-    for target in _extract_wikilinks(body):
+    for target in iter_wikilink_targets(body):
         if (target, WIKILINK_KIND) not in seen:
             seen.add((target, WIKILINK_KIND))
             edges.append((target, WIKILINK_KIND))
@@ -266,7 +220,7 @@ def discover_all_pages(wiki_dir: Path) -> dict[str, WikiPage]:
                 rel_path=f"{content_dir}/{md_file.name}",
                 stem=stem,
                 frontmatter=_parse_frontmatter(content),
-                outgoing_links=_extract_wikilinks(content),
+                outgoing_links=iter_wikilink_targets(content),
                 word_count=_count_words(content),
             )
     return pages

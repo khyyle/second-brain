@@ -9,15 +9,17 @@ from pathlib import Path
 
 from second_brain.parsing.output import write_parse_output
 from second_brain.parsing.provider import ParseBlock, ParseLane, ParseResult
+from second_brain.wiki.slugs import slugify
 
 logger = logging.getLogger(__name__)
+
+# Cap source slugs so nested dirs + the conversation-ID suffix stay under the
+# macOS 1024-byte path limit.
+_MAX_SOURCE_SLUG_CHARS = 80
 
 
 def _slugify(title: str) -> str:
     """Convert a conversation title to a filesystem-safe kebab-case slug.
-
-    Truncated to 80 chars to avoid path length issues on macOS (1024
-    limit can be hit with nested directories + conversation ID suffix).
 
     Parameters
     ----------
@@ -27,12 +29,10 @@ def _slugify(title: str) -> str:
     Returns
     -------
     str
-        Lowercased, kebab-cased slug capped at 80 characters.
+        Kebab-cased slug capped at 80 characters, or ``"untitled"`` when the
+        title yields no slug-able characters.
     """
-    slug = title.lower().strip()
-    slug = "".join(c if c.isalnum() or c in (" ", "-") else "" for c in slug)
-    slug = "-".join(slug.split())
-    return slug[:80] or "untitled"
+    return slugify(title)[:_MAX_SOURCE_SLUG_CHARS] or "untitled"
 
 
 def _format_timestamp(ts: float | int | None) -> str:

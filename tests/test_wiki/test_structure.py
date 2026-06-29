@@ -5,8 +5,6 @@ from __future__ import annotations
 from pathlib import Path
 
 from second_brain.wiki.structure import (
-    _extract_wikilinks,
-    _normalize_link_target,
     _parse_frontmatter,
     build_link_graph,
     detect_gaps,
@@ -15,19 +13,6 @@ from second_brain.wiki.structure import (
     strip_frontmatter,
     update_frontmatter,
 )
-
-
-def test_normalize_strips_folder_prefix_suffix_and_anchor() -> None:
-    assert _normalize_link_target("concepts/exchange-traded-funds") == "exchange-traded-funds"
-    assert _normalize_link_target("point-estimation") == "point-estimation"
-    assert _normalize_link_target("concepts/foo.md") == "foo"
-    assert _normalize_link_target("concepts/foo#section") == "foo"
-    assert _normalize_link_target("  spaced  ") == "spaced"
-
-
-def test_extract_wikilinks_normalizes_both_styles() -> None:
-    content = "See [[point-estimation]] and [[concepts/exchange-traded-funds|ETFs]]."
-    assert _extract_wikilinks(content) == ["point-estimation", "exchange-traded-funds"]
 
 
 def _write_page(wiki: Path, content_dir: str, stem: str, body: str) -> None:
