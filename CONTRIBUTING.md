@@ -66,7 +66,7 @@ All commit messages must follow the [Conventional Commits](https://www.conventio
 
 Use a scope to clarify which part of the codebase is affected:
 
-`ingestion` `triage` `parsing` `compilation` `clustering` `mcp` `cli` `config` `gui` `docs` `ci`
+`ingestion` `triage` `parsing` `compilation` `clustering` `wiki` `mcp` `cli` `config` `gui`
 
 ### Examples
 
