@@ -59,7 +59,7 @@ def test_write_page_creates_valid_page_and_stamps_sources(tmp_path: Path) -> Non
             "type": "concept",
             "title": "Point Estimation",
             "domains": ["mathematics"],
-            "prerequisites": ["[[statistical-models]]"],
+            "prerequisites": ["[[Statistical Models]]"],
             "body": "# Point Estimation\n\nBody.",
         },
     )
@@ -71,9 +71,45 @@ def test_write_page_creates_valid_page_and_stamps_sources(tmp_path: Path) -> Non
     assert fm["title"] == "Point Estimation"
     assert fm["type"] == "concept"
     assert fm["domains"] == ["mathematics"]
-    assert fm["prerequisites"] == ["[[statistical-models]]"]
+    assert fm["prerequisites"] == ["statistical-models"]
     # provenance is stamped by the executor, not the agent
     assert fm["sources"] == ["raw/documents/inference-modeling.md"]
+
+
+def test_write_page_canonicalizes_body_wikilinks(tmp_path: Path) -> None:
+    executor, wiki, _raw = _executor(tmp_path)
+
+    executor.execute(
+        "write_page",
+        {
+            "type": "concept",
+            "title": "Deep Ensembles",
+            "body": "Compared with [[Bayes Rays]] and `arr[[0]]` in code.",
+        },
+    )
+
+    body = (wiki / "concepts" / "deep-ensembles.md").read_text(encoding="utf-8")
+    assert "[[bayes-rays|Bayes Rays]]" in body  # prose link canonicalized with display kept
+    assert "`arr[[0]]`" in body  # bracket inside inline code left untouched
+
+
+def test_edit_canonicalizes_body_wikilinks(tmp_path: Path) -> None:
+    executor, wiki, _raw = _executor(tmp_path)
+    page = wiki / "concepts" / "foo.md"
+    page.write_text("---\ntitle: Foo\ntype: concept\n---\n\nBody.\n", encoding="utf-8")
+
+    executor.execute(
+        "edit_file",
+        {
+            "path": "concepts/foo.md",
+            "old_string": "Body.",
+            "new_string": "Body, see [[Neural Fields]].",
+        },
+    )
+
+    text = page.read_text(encoding="utf-8")
+    assert "[[neural-fields|Neural Fields]]" in text
+    assert "title: Foo" in text  # frontmatter untouched
 
 
 def test_write_page_rejects_unknown_type(tmp_path: Path) -> None:
@@ -102,14 +138,14 @@ def test_set_page_meta_merges_frontmatter_and_keeps_body(tmp_path: Path) -> None
     )
 
     out = executor.execute(
-        "set_page_meta", {"slug": "foo", "domains": ["b"], "related": ["[[bar]]"]}
+        "set_page_meta", {"slug": "foo", "domains": ["b"], "related": ["[[Bar Baz]]"]}
     )
 
     assert "foo" in out
     text = page.read_text(encoding="utf-8")
     fm = _parse_frontmatter(text)
     assert fm["domains"] == ["b"]  # replaced wholesale
-    assert fm["related"] == ["[[bar]]"]  # added
+    assert fm["related"] == ["bar-baz"]  # added, canonicalized to a bare slug
     assert fm["title"] == "Foo"  # untouched
     assert "# Foo\n\nBody." in text  # body untouched
 

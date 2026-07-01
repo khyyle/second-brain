@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from second_brain.wiki.slugs import (
     iter_wikilink_targets,
+    normalize_link_list,
     normalize_link_target,
+    normalize_wikilinks,
     slugify,
 )
 
@@ -57,3 +59,86 @@ def test_iter_wikilink_targets_normalizes_both_styles() -> None:
 def test_iter_wikilink_targets_canonicalizes_title_case() -> None:
     content = "The [[Bayes Rays]] method extends [[Neural Fields]]."
     assert iter_wikilink_targets(content) == ["bayes-rays", "neural-fields"]
+
+
+def test_iter_wikilink_targets_ignores_code_and_math() -> None:
+    # A [[...]] inside a fenced code block or math is a literal bracket, not a
+    # link, so it must not become a graph edge or a phantom gap.
+    content = (
+        "See [[Bayes Rays]].\n"
+        "```python\n"
+        "tokens = torch.tensor([[12, 305, 87, 999]])\n"
+        "```\n"
+        "Inline $[[2.5, 2.5]]$ and `df[['CHANNEL']]` too.\n"
+    )
+    assert iter_wikilink_targets(content) == ["bayes-rays"]
+
+
+def test_normalize_link_list_canonicalizes_mixed_forms() -> None:
+    values = ["[[Neural Fields]]", "laplace-approximation", "Fisher Information"]
+    assert normalize_link_list(values) == [
+        "neural-fields",
+        "laplace-approximation",
+        "fisher-information",
+    ]
+
+
+def test_normalize_link_list_dedupes_preserving_order() -> None:
+    values = ["Bayes Rays", "neural-fields", "[[bayes-rays]]"]
+    assert normalize_link_list(values) == ["bayes-rays", "neural-fields"]
+
+
+def test_normalize_link_list_skips_empty_and_non_strings() -> None:
+    assert normalize_link_list(["!!!", "", 5, "Bayes Rays"]) == ["bayes-rays"]
+
+
+def test_normalize_wikilinks_injects_display_when_target_changes() -> None:
+    assert normalize_wikilinks("See [[Bayes Rays]].") == "See [[bayes-rays|Bayes Rays]]."
+
+
+def test_normalize_wikilinks_leaves_bare_slug_alone() -> None:
+    assert normalize_wikilinks("See [[bayes-rays]].") == "See [[bayes-rays]]."
+
+
+def test_normalize_wikilinks_preserves_existing_display() -> None:
+    text = "the [[trilinear-interpolation|trilinearly interpolated]] grid"
+    assert normalize_wikilinks(text) == text
+
+
+def test_normalize_wikilinks_slugs_target_keeps_display() -> None:
+    assert normalize_wikilinks("[[Bayes Rays|the method]]") == "[[bayes-rays|the method]]"
+
+
+def test_normalize_wikilinks_is_idempotent() -> None:
+    once = normalize_wikilinks("See [[Bayes Rays]] and [[Neural Fields|fields]].")
+    assert normalize_wikilinks(once) == once
+
+
+def test_normalize_wikilinks_strips_path_and_suffix() -> None:
+    assert normalize_wikilinks("[[concepts/foo.md|Foo]]") == "[[foo|Foo]]"
+
+
+def test_normalize_wikilinks_ignores_links_in_fenced_code() -> None:
+    text = "```python\nx = np.array([[1, 2], [3, 4]])\n```"
+    assert normalize_wikilinks(text) == text
+
+
+def test_normalize_wikilinks_ignores_links_in_inline_code() -> None:
+    text = "Select with `df[['CHANNEL', 'FIXED_COST']]` here."
+    assert normalize_wikilinks(text) == text
+
+
+def test_normalize_wikilinks_ignores_links_in_inline_math() -> None:
+    text = "The value $[[1, 2], [3, 4]]$ is a matrix."
+    assert normalize_wikilinks(text) == text
+
+
+def test_normalize_wikilinks_ignores_links_in_bracket_display_math() -> None:
+    text = "\\[\nM = [[a, b], [c, d]]\n\\]"
+    assert normalize_wikilinks(text) == text
+
+
+def test_normalize_wikilinks_rewrites_prose_but_not_adjacent_code() -> None:
+    text = "Use [[Bayes Rays]] like `arr[[0]]` does."
+    expected = "Use [[bayes-rays|Bayes Rays]] like `arr[[0]]` does."
+    assert normalize_wikilinks(text) == expected

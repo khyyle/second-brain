@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 # DOTALL so .*? spans multi-line YAML blocks between --- fences
 _FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n", re.DOTALL)
-_FRONTMATTER_EDGE_FIELDS = {
+FRONTMATTER_EDGE_FIELDS = {
     "prerequisites": "prerequisite",
     "related": "related",
     "concepts_tested": "tests",
@@ -25,7 +25,7 @@ _FRONTMATTER_EDGE_FIELDS = {
 WIKILINK_KIND = "mention"
 
 # Every edge type that can appear in wiki_links
-LINK_KINDS = (*_FRONTMATTER_EDGE_FIELDS.values(), WIKILINK_KIND)
+LINK_KINDS = (*FRONTMATTER_EDGE_FIELDS.values(), WIKILINK_KIND)
 
 CONTENT_DIRS = ("concepts", "problems", "projects", "insights")
 
@@ -176,7 +176,7 @@ def extract_typed_edges(content: str) -> list[tuple[str, str]]:
     edges: list[tuple[str, str]] = []
     seen: set[tuple[str, str]] = set()
 
-    for edge_field, kind in _FRONTMATTER_EDGE_FIELDS.items():
+    for edge_field, kind in FRONTMATTER_EDGE_FIELDS.items():
         for item in frontmatter.get(edge_field) or []:
             if not isinstance(item, str):
                 continue

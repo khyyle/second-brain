@@ -11,9 +11,11 @@ import re
 from pathlib import Path
 
 from second_brain.mcp_server.tools import WikiTools
-from second_brain.wiki.slugs import slugify
+from second_brain.wiki.slugs import normalize_link_list, normalize_wikilinks, slugify
 from second_brain.wiki.structure import (
+    _FRONTMATTER_RE,
     CONTENT_DIRS,
+    FRONTMATTER_EDGE_FIELDS,
     _parse_frontmatter,
     serialize_page,
     update_frontmatter,
@@ -680,12 +682,18 @@ class WikiToolExecutor:
             "status",
         ):
             value = args.get(key)
-            if value:
-                frontmatter[key] = value
+            if not value:
+                continue
+            if key in FRONTMATTER_EDGE_FIELDS and isinstance(value, list):
+                value = normalize_link_list(value)
+                if not value:
+                    continue
+            frontmatter[key] = value
         if self._sources:
             frontmatter["sources"] = [f"raw/{source}" for source in self._sources]
 
-        return self._write(rel_path, serialize_page(frontmatter, args.get("body", "")))
+        body = normalize_wikilinks(args.get("body", ""))
+        return self._write(rel_path, serialize_page(frontmatter, body))
 
     def _content_page_path(self, slug: str) -> str | None:
         """Return the relative path of the content page with this stem, if any."""
@@ -720,9 +728,13 @@ class WikiToolExecutor:
             return f"Error: no page found with slug '{slug}'"
 
         managed = {"slug", "sources", "type", "title"}
-        changes = {
-            key: value for key, value in args.items() if key not in managed and value is not None
-        }
+        changes: dict = {}
+        for key, value in args.items():
+            if key in managed or value is None:
+                continue
+            if key in FRONTMATTER_EDGE_FIELDS and isinstance(value, list):
+                value = normalize_link_list(value)
+            changes[key] = value
         if not changes:
             return "Error: no frontmatter fields given to update"
 
@@ -803,10 +815,19 @@ class WikiToolExecutor:
             self._record("updated", rel_path)
             return f"[dry-run] Would edit {rel_path}"
 
-        content = content.replace(old, new, 1)
+        content = self._normalize_page_links(rel_path, content.replace(old, new, 1))
         path.write_text(content, encoding="utf-8")
         self._record("updated", rel_path)
         return f"Edited {rel_path}"
+
+    def _normalize_page_links(self, rel_path: str, content: str) -> str:
+        """Canonicalize body wikilinks in the body of a page, leaving frontmatter untouched"""
+        if Path(rel_path).parts[0] not in CONTENT_DIRS:
+            return content
+        match = _FRONTMATTER_RE.match(content)
+        if not match:
+            return normalize_wikilinks(content)
+        return content[: match.end()] + normalize_wikilinks(content[match.end() :])
 
     def _search_root(self, glob: str) -> tuple[Path, str, str]:
         """Resolve a glob's prefix to a search root.
