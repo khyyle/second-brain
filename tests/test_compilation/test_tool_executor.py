@@ -71,7 +71,8 @@ def test_write_page_creates_valid_page_and_stamps_sources(tmp_path: Path) -> Non
     assert fm["title"] == "Point Estimation"
     assert fm["type"] == "concept"
     assert fm["domains"] == ["mathematics"]
-    assert fm["prerequisites"] == ["statistical-models"]
+    # edge targets are canonicalized to wrapped wikilinks on write, whatever form is supplied
+    assert fm["prerequisites"] == ["[[statistical-models]]"]
     # provenance is stamped by the executor, not the agent
     assert fm["sources"] == ["raw/documents/inference-modeling.md"]
 
@@ -145,7 +146,7 @@ def test_set_page_meta_merges_frontmatter_and_keeps_body(tmp_path: Path) -> None
     text = page.read_text(encoding="utf-8")
     fm = _parse_frontmatter(text)
     assert fm["domains"] == ["b"]  # replaced wholesale
-    assert fm["related"] == ["bar-baz"]  # added, canonicalized to a bare slug
+    assert fm["related"] == ["[[bar-baz]]"]  # added, canonicalized to a wrapped wikilink
     assert fm["title"] == "Foo"  # untouched
     assert "# Foo\n\nBody." in text  # body untouched
 

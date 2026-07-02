@@ -139,12 +139,14 @@ def iter_wikilink_targets(text: str) -> list[str]:
 
 def normalize_link_list(values: list[str]) -> list[str]:
     """
-    Resolve a list of frontmatter edge values to canonical stems.
+    Resolve a list of frontmatter edge values to canonical wikilinks.
 
     Frontmatter relationship fields such as prerequisites and related hold a
-    list of references. Each reference is resolved with `normalize_link_target`,
-    which accepts a wrapped wikilink, a bare stem, or free text naming a page
-    that does not exist yet. The first occurrence of each stem sets its
+    list of references. Each reference is resolved to its stem with
+    `normalize_link_target`, which accepts a wrapped wikilink, a bare stem, or
+    free text naming a page that does not exist yet, then wrapped as a
+    ``[[stem]]`` wikilink to keep the reference clickable in Obsidian
+    and counted in the link graph. The first occurrence of each stem sets its
     position, and any later reference that resolves to a stem already seen is
     removed.
 
@@ -156,18 +158,22 @@ def normalize_link_list(values: list[str]) -> list[str]:
     Returns
     -------
     list[str]
-        The resolved stems, deduplicated and in first-seen order. Entries that
-        resolve to nothing, and entries that are not strings, are skipped.
+        The resolved references as ``[[stem]]`` wikilinks, deduplicated and in
+        first-seen order. Entries that resolve to nothing, and entries that are
+        not strings, are skipped.
     """
     canonical: list[str] = []
     seen: set[str] = set()
+
     for value in values:
         if not isinstance(value, str):
             continue
         slug = normalize_link_target(value)
+
         if slug and slug not in seen:
             seen.add(slug)
-            canonical.append(slug)
+            canonical.append(f"[[{slug}]]")
+
     return canonical
 
 

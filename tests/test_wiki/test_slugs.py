@@ -74,22 +74,22 @@ def test_iter_wikilink_targets_ignores_code_and_math() -> None:
     assert iter_wikilink_targets(content) == ["bayes-rays"]
 
 
-def test_normalize_link_list_canonicalizes_mixed_forms() -> None:
+def test_normalize_link_list_canonicalizes_mixed_forms_to_wrapped_links() -> None:
     values = ["[[Neural Fields]]", "laplace-approximation", "Fisher Information"]
     assert normalize_link_list(values) == [
-        "neural-fields",
-        "laplace-approximation",
-        "fisher-information",
+        "[[neural-fields]]",
+        "[[laplace-approximation]]",
+        "[[fisher-information]]",
     ]
 
 
 def test_normalize_link_list_dedupes_preserving_order() -> None:
     values = ["Bayes Rays", "neural-fields", "[[bayes-rays]]"]
-    assert normalize_link_list(values) == ["bayes-rays", "neural-fields"]
+    assert normalize_link_list(values) == ["[[bayes-rays]]", "[[neural-fields]]"]
 
 
 def test_normalize_link_list_skips_empty_and_non_strings() -> None:
-    assert normalize_link_list(["!!!", "", 5, "Bayes Rays"]) == ["bayes-rays"]
+    assert normalize_link_list(["!!!", "", 5, "Bayes Rays"]) == ["[[bayes-rays]]"]
 
 
 def test_normalize_wikilinks_injects_display_when_target_changes() -> None:
