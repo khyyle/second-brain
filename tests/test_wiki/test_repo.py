@@ -13,6 +13,7 @@ from second_brain.wiki.repo import (
     count_commits,
     detect_renames,
     list_commits,
+    merge_pages,
     repair_links,
     rollback,
 )
@@ -159,3 +160,76 @@ def test_repair_links_noop_without_mapping(tmp_path: Path) -> None:
     wiki = _init_wiki(tmp_path)
 
     assert repair_links(wiki, {}) == []
+
+
+def _write_page(wiki: Path, stem: str, frontmatter: str, body: str) -> Path:
+    page = wiki / "concepts" / f"{stem}.md"
+    page.write_text(
+        f"---\ntitle: {stem}\ntype: concept\n{frontmatter}---\n\n{body}\n", encoding="utf-8"
+    )
+    return page
+
+
+def test_merge_pages_unions_repoints_and_retires(tmp_path: Path) -> None:
+    wiki = _init_wiki(tmp_path)
+    keeper = _write_page(
+        wiki,
+        "electrolysis",
+        "related:\n- '[[water-electrolysis]]'\nsources:\n- raw/chatgpt/a.md\n",
+        "The kept page.",
+    )
+    _write_page(
+        wiki,
+        "water-electrolysis",
+        "related:\n- '[[nernst-equation]]'\nsources:\n- raw/chatgpt/b.md\n",
+        "The duplicate.",
+    )
+    linker = _write_page(
+        wiki,
+        "linker",
+        "related:\n- '[[water-electrolysis]]'\n",
+        "See [[water-electrolysis|splitting water]].",
+    )
+    _git(wiki, "add", "-A")
+    _git(wiki, "commit", "-m", "seed")
+
+    repairs = merge_pages(wiki, "electrolysis", ["water-electrolysis"])
+
+    assert not (wiki / "concepts" / "water-electrolysis.md").exists()
+    kept = _parse_frontmatter(keeper.read_text(encoding="utf-8"))
+    assert kept["sources"] == ["raw/chatgpt/a.md", "raw/chatgpt/b.md"]  # provenance unioned
+    # edges unioned, minus anything pointing at the merged pages themselves
+    assert kept["related"] == ["[[nernst-equation]]"]
+    linker_text = linker.read_text(encoding="utf-8")
+    assert "[[electrolysis|splitting water]]" in linker_text  # body repointed, label kept
+    assert _parse_frontmatter(linker_text)["related"] == ["[[electrolysis]]"]
+    assert any(repair.rel_path == "concepts/linker.md" for repair in repairs)
+    # the merge is checkpointed into the wiki history
+    assert list_commits(wiki, limit=1)[0].subject == (
+        "auto: merge water-electrolysis into electrolysis"
+    )
+
+
+def test_merge_pages_mutual_references_leave_no_self_link(tmp_path: Path) -> None:
+    # Duplicates often point only at each other; the kept page must not end
+    # up related to itself after the retired stem is repointed onto it.
+    wiki = _init_wiki(tmp_path)
+    keeper = _write_page(wiki, "electrolysis", "related:\n- '[[water-electrolysis]]'\n", "Kept.")
+    _write_page(wiki, "water-electrolysis", "related:\n- '[[electrolysis]]'\n", "Retired.")
+    _git(wiki, "add", "-A")
+    _git(wiki, "commit", "-m", "seed")
+
+    merge_pages(wiki, "electrolysis", ["water-electrolysis"])
+
+    kept = _parse_frontmatter(keeper.read_text(encoding="utf-8"))
+    assert kept["related"] == []
+
+
+def test_merge_pages_rejects_missing_or_self(tmp_path: Path) -> None:
+    wiki = _init_wiki(tmp_path)
+    _write_page(wiki, "a", "", "Body.")
+
+    with pytest.raises(WikiRepoError, match="No page found"):
+        merge_pages(wiki, "a", ["ghost"])
+    with pytest.raises(WikiRepoError, match="into itself"):
+        merge_pages(wiki, "a", ["a"])

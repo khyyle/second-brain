@@ -723,6 +723,35 @@ def wiki_repair_links(ctx: click.Context, dry_run: bool) -> None:
         _sync_search_index(config)
 
 
+@wiki.command(name="merge")
+@click.argument("dest")
+@click.argument("sources", nargs=-1, required=True)
+@click.pass_context
+def wiki_merge(ctx: click.Context, dest: str, sources: tuple[str, ...]) -> None:
+    """Retire duplicate SOURCES pages into DEST, repointing every link.
+
+    Move any prose worth keeping into DEST first; the merge carries over the
+    retired pages' provenance and relationships, not their body text.
+    """
+    config: Config = ctx.obj["config"]
+    from second_brain.wiki.repo import WikiRepoError, merge_pages
+
+    try:
+        repairs = merge_pages(config.wiki_dir, dest, list(sources))
+    except WikiRepoError as exc:
+        raise click.ClickException(str(exc)) from exc
+
+    _sync_search_index(config)
+    from second_brain.state import emit_state
+
+    emit_state(config)
+    total = sum(repair.links_repointed for repair in repairs)
+    click.echo(
+        f"Merged {', '.join(sources)} into '{dest}'; "
+        f"repointed {total} link(s) across {len(repairs)} page(s)"
+    )
+
+
 @wiki.command(name="dismiss")
 @click.argument("page_a")
 @click.argument("page_b")

@@ -8,6 +8,7 @@ from second_brain.wiki.slugs import (
     _WIKILINK_RE,
     _mask_protected_spans,
     _restore_protected_spans,
+    normalize_link_list,
     normalize_link_target,
 )
 from second_brain.wiki.structure import (
@@ -15,6 +16,8 @@ from second_brain.wiki.structure import (
     CONTENT_DIRS,
     FRONTMATTER_EDGE_FIELDS,
     _parse_frontmatter,
+    content_page_path,
+    rebuild_structure,
     update_frontmatter,
 )
 
@@ -338,3 +341,100 @@ def _repoint_page(content: str, mapping: dict[str, str]) -> tuple[str, int]:
     body = _restore_protected_spans(masked, spans)
 
     return head + body, repointed
+
+
+# The list-valued frontmatter fields a merge unions into the destination.
+_MERGEABLE_LIST_FIELDS = ("domains", "tags", "sources", *FRONTMATTER_EDGE_FIELDS)
+
+
+def merge_pages(wiki_dir: Path, dest: str, sources: list[str]) -> list[PageRepair]:
+    """
+    Retire duplicate pages into one, keeping provenance and repointing links.
+
+    Prose is not moved. The merge unions each retired page's list frontmatter
+    into the destination, deletes the retired pages, repoints every link in the
+    vault at the destination, rebuilds the derived views, and checkpoints
+    the result into the wiki's git history. The retired pages' raw sources
+    stay marked compiled, since their knowledge now lives in the destination.
+
+    Parameters
+    ----------
+    wiki_dir: Path
+        Root directory of the wiki.
+    dest: str
+        stem or title of the page that survives.
+    sources: list[str]
+        stems or titles of the duplicate pages to retire into `dest`.
+
+    Returns
+    -------
+    list[PageRepair]
+        One entry per page whose links were repointed.
+
+    Raises
+    ------
+    WikiRepoError
+        When a named page does not exist, or `dest` is also listed in
+        `sources`.
+    """
+    dest_stem = normalize_link_target(dest)
+    dest_path = content_page_path(wiki_dir, dest_stem)
+    if dest_path is None:
+        raise WikiRepoError(f"No page found for '{dest}'")
+
+    retired: dict[str, Path] = {}
+    for source in sources:
+        stem = normalize_link_target(source)
+        if stem == dest_stem:
+            raise WikiRepoError("Cannot merge a page into itself")
+        path = content_page_path(wiki_dir, stem)
+        if path is None:
+            raise WikiRepoError(f"No page found for '{source}'")
+        retired[stem] = path
+
+    # union each retired page's list frontmatter into the destination,
+    # dropping edges that would point at the merged result itself
+    merged_stems = {dest_stem, *retired}
+    dest_text = dest_path.read_text(encoding="utf-8")
+    frontmatter = _parse_frontmatter(dest_text)
+    unions: dict[str, list[str]] = {}
+    for field_name in _MERGEABLE_LIST_FIELDS:
+        combined = _as_list(frontmatter.get(field_name))
+        for path in retired.values():
+            retired_frontmatter = _parse_frontmatter(path.read_text(encoding="utf-8"))
+            combined += _as_list(retired_frontmatter.get(field_name))
+        if field_name in FRONTMATTER_EDGE_FIELDS:
+            combined = [
+                entry
+                for entry in normalize_link_list(combined)
+                if normalize_link_target(entry) not in merged_stems
+            ]
+        else:
+            combined = list(dict.fromkeys(combined))
+        # An empty union still overwrites: it means the destination's only
+        # edge pointed at a retired page, and leaving it would let the link
+        # repair below turn it into a self-link.
+        if combined != _as_list(frontmatter.get(field_name)):
+            unions[field_name] = combined
+    if unions:
+        updated = update_frontmatter(dest_text, unions)
+        if updated is not None:
+            dest_path.write_text(updated, encoding="utf-8")
+
+    for path in retired.values():
+        path.unlink()
+
+    repairs = repair_links(wiki_dir, dict.fromkeys(retired, dest_stem))
+
+    rebuild_structure(wiki_dir)
+    commit_all(wiki_dir, f"auto: merge {', '.join(retired)} into {dest_stem}")
+    return repairs
+
+
+def _as_list(value: object) -> list[str]:
+    """Coerce a frontmatter value to a list of strings, dropping non-strings."""
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, list):
+        return [entry for entry in value if isinstance(entry, str)]
+    return []

@@ -193,6 +193,31 @@ def extract_typed_edges(content: str) -> list[tuple[str, str]]:
     return edges
 
 
+def content_page_path(wiki_dir: Path, stem: str) -> Path | None:
+    """Return the path of the content page with this stem, or None.
+
+    The wiki is flat by design, so a stem appears in at most one content
+    directory.
+
+    Parameters
+    ----------
+    wiki_dir: Path
+        Root directory of the wiki.
+    stem: str
+        Page filename without folder or extension.
+
+    Returns
+    -------
+    Path | None
+        The page's path, or None when no content directory holds it.
+    """
+    for content_dir in CONTENT_DIRS:
+        path = wiki_dir / content_dir / f"{stem}.md"
+        if path.exists():
+            return path
+    return None
+
+
 def discover_all_pages(wiki_dir: Path) -> dict[str, WikiPage]:
     """
     Walk wiki content directories and parse each page.
