@@ -8,17 +8,17 @@ Two kinds of material go in, and they go in differently on purpose.
 
 1. Documents (PDFs, Markdown, plain text, LaTeX) go on the drop zone at the top. Drop a file or a folder onto it, or click it to browse. Dropping copies a file in and starts parsing it locally. None of this costs anything.
 
-2. Chat history can be added by clicking the "Import ChatGPT export" button just under the drop zone. The app supports entering individual `conversation-*.json` files or a full data export folder--should you provide the full folder, the app will parse it and extract only the relevant `conversation-*.json` files.
+2. Chat history can be added by clicking the "Import ChatGPT export" button just under the drop zone. The app supports individual `conversation-*.json` files or a full data export folder. If you provide the full folder, the app extracts only the conversation files it needs.
 
 ## The tabs
 
 The first three tabs follow your material through the pipeline; the last two are about the wiki it produces.
 
-**Ingest** is where parsing happens. A file appears here while it is being turned into Markdown, with a spinner and a running clock; once parsed, it leaves this tab. Anything that fails to parse stays behind with a Retry. This stage is mechanical and free.
+**Ingest** is where parsing happens. A file appears here while it is being turned into Markdown, with a spinner and a running clock; once parsed, it leaves this tab. Anything that fails to parse stays behind with a Retry. Hovering a row reveals a remove action, which moves the file to the Trash. This stage is mechanical and free.
 
-**Chats** is the review desk for imported conversations. Chat history is noisy, so a small local model sorts each conversation into worthwhile, review, or skip as it comes in (see [architecture doc](architecture.md) for more details). A "Needs review" list shows the conversations the model was unsure about, each with Keep and Skip. Below it, "Recent" shows what was already decided. You can flip any of these decisions, skip something that slipped through, or restore something you set aside. It is highly recommended that you prune chats for redundancy whether through this review, manually, or through an agent of your choice (just tell Cursor, Claude Code, Codex, to prune ~/second-brain/drops/chatgpt/). Only ingested *chats* show up here.
+**Chats** is the review desk for imported conversations. Chat history is noisy, so a small local model sorts each conversation into worthwhile, review, or skip as it comes in (see [architecture doc](architecture.md) for more details). A "Needs review" list shows the conversations the model was unsure about, each with Keep and Skip. Below it, "Recent" shows what was already decided. You can flip any of these decisions, skip something that slipped through, or restore something you set aside. It is highly recommended that you prune chats for redundancy, whether through this review, manually, or through an agent of your choice (just tell an agent of your choice to prune `~/second-brain/drops/chatgpt/`). Only ingested *chats* show up here.
 
-**Build** is where the wiki gets made, and the only tab tied to spending money. It lists what is staged: everything ingested and kept, ready to compile, with a rough cost estimate. Below that is a log of pages already built.
+**Build** is where the wiki gets made, and the only tab tied to spending money. It lists what is staged: everything ingested and kept, ready to compile, with a rough cost estimate. Hovering a staged row reveals a remove action, which takes the source out of the pipeline entirely (see [deletion](lifecycle.md#deletion) for what each kind of removal keeps). Below that is a log of pages already built.
 
 **Domains** manages the wiki's vocabulary of subject areas. Each domain is a broad area tagged in page frontmatter; the tab lists them with a page count, and you can rename, merge, or delete one — the change rewrites every affected page. Domains are grown by the build, so this tab fills in as the wiki does.
 
@@ -26,11 +26,11 @@ The first three tabs follow your material through the pipeline; the last two are
 
 ## Building the wiki
 
-A build reads your staged sources and writes wiki pages with a Claude agent. The number on the Build tab is a rough estimate based on known input/output costs. Once the a build is run, the real cost will ticks in the status line.
+A build reads your staged sources and writes wiki pages with a cloud model agent. The number on the Build tab is a rough estimate based on known input/output costs. Once a build is running, the real cost ticks in the status line.
 
 Before building a large pile of chats, it is worth grouping them first. Many conversations cover the same ground, and compiling each alone pays to write near-duplicate pages. "Group" (it appears on the Build tab once chats are staged) bundles related conversations so a topic compiles into one page instead of many. Grouping is local and free, and it shows its progress as it runs.
 
-Once a grouping exists, the Build tab shows it. Each cluster is an expandable row: open it to see the conversations inside, split it back apart if the grouping reached too far, or pop a single conversation out to compile on its own. Conversations that didn't cluster with anything sit behind a collapsible "ungrouped" count, since each just becomes its own page. Stage or remove sources after grouping and the grouping no longer matches what is staged. The tab will show just the plain staged list--"Regroup" to cluster with the updated set.
+Once a grouping exists, the Build tab shows it. Each cluster is an expandable row: open it to see the conversations inside, split it back apart if the grouping reached too far, or pop a single conversation out to compile on its own. Conversations that didn't cluster with anything sit behind a collapsible "ungrouped" count, since each just becomes its own page. Stage or remove sources after grouping and the grouping no longer matches what is staged. The tab then falls back to the plain staged list; click Regroup to cluster the updated set.
 
 When the plan looks right, "Build wiki" compiles it. You can "Stop" mid-build: pages finished so far are kept, and the conversation in progress is rolled back cleanly so the next build redoes it from scratch.
 
@@ -46,11 +46,11 @@ The gear opens Settings. Here you can choose the compilation provider and its mo
 
 ### Running on a schedule
 
-By default the app only acts when you do: dropped files ingest on their own (free and local), and a wiki is built only when you press Build wiki. Turning on "Run automatically" (in Settings, under Automation) instead runs the pipeline on a timer, installing a macOS LaunchAgent (`com.secondbrain.pipeline`, via `launchd`) that ingests and builds at the times you set--the same work as dropping files and pressing Build wiki, but unattended.
+By default the app only acts when you do: dropped files ingest on their own (free and local), and a wiki is built only when you press Build wiki. Turning on "Run automatically" (in Settings, under Automation) instead runs the pipeline on a timer, installing a macOS LaunchAgent (`com.secondbrain.pipeline`, via `launchd`) that ingests and builds at the times you set. It is the same work as dropping files and pressing Build wiki, but unattended.
 
-Automation can also watch folders you choose. The app remembers what it has already ingested, so a watched folder is one you can just keep adding to: point it at a folder--say one where you continually drop research papers--and each scheduled run pulls in whatever is new and leaves the rest alone. It only ever reads from a watched folder; your originals are never moved or deleted, only copied and parsed into your vault. These folders are swept on scheduled runs, alongside the `~/second-brain/drops/` folders.
+Automation can also watch folders you choose. The app remembers what it has already ingested, so a watched folder is one you can keep adding to. Point it at a folder where you continually drop research papers, and each scheduled run pulls in whatever is new and leaves the rest alone. It only ever reads from a watched folder; your originals are never moved or deleted, only copied and parsed into your vault. These folders are swept on scheduled runs, alongside the `~/second-brain/drops/` folders.
 
 Two things to know about scheduled runs:
 
-- They include the build, so they call Claude and cost money. Your per-build spend cap still applies, so a run won't exceed it.
+- They include the build, so they call the cloud model and cost money. Your per-build spend cap still applies, so a run won't exceed it.
 - The agent runs even when the app is closed and survives logout and restart, but only if your computer is open and logged in. A run missed because the Mac was asleep happens on the next wake.

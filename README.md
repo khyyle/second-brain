@@ -15,7 +15,7 @@ A local-first macOS app that turns your notes, PDFs, and exported ChatGPT histor
 - Runs on your Mac. Parsing, filtering, and search are local; only the wiki build uses a cloud model.
 - Keeps cost down: it filters low-value chats and groups related ones before building, and you can cap spend per build.
 - Reads as an Obsidian vault, with graph view, backlinks, and rendered math.
-- Answers questions from Claude Desktop or Cursor: a built-in MCP server lets agents search your wiki, walk the links between pages--what a topic builds on, what relates to it, what's still missing--and trace any page back to its sources.
+- Answers questions from Claude Desktop or Cursor: a built-in MCP server lets an assistant search the wiki, walk the links between pages, and trace any page back to its sources.
 - Can run unattended on a schedule, ingesting new material from watched folders.
 
 ## How it works
@@ -25,11 +25,11 @@ Second Brain watches a drop folder, converts anything you add into Markdown, and
 A document you drop is already something you chose to keep, so it goes straight to the build. A ChatGPT export is bulk: most conversations are not worth keeping, and many cover the same ground. Chats are filtered and grouped first, so you do not pay to write throwaway or near-duplicate pages.
 
 ```
-documents   drop -> parse --------------> build -> read
-chats       drop -> parse -> filter -> group -> build -> read
+documents   capture -> ingest ----------------------> compile -> access
+chats       capture -> ingest -> triage -> cluster -> compile -> access
 ```
 
-The build is the only step that uses a paid model; everything before it is local. See [Architecture](docs/architecture.md) to understand each step in detail.
+See [Architecture](docs/architecture.md) to understand each step in detail.
 
 ## Installation
 
@@ -40,7 +40,7 @@ The build is the only step that uses a paid model; everything before it is local
 - About 10 GB of free disk for the Python dependencies and on-device models.
 - [uv](https://github.com/astral-sh/uv) for the Python environment.
 - The Swift toolchain to build the app (Xcode, or `xcode-select --install`).
-- An Anthropic API key for wiki compilation. Enter it in the app's Settings (which writes a local `.env` for you), or add `ANTHROPIC_API_KEY=...` to a `.env` file at the repository root.
+- An API key for the compilation provider, Anthropic by default or DeepSeek. Enter it in the app's Settings (which writes a local `.env` for you), or add `ANTHROPIC_API_KEY=...` (or `DEEPSEEK_API_KEY=...`) to a `.env` file at the repository root.
 - [Ollama](https://ollama.com), required for chat triage, clustering, and MCP semantic search. Install it and start it (open the Ollama app, or run `ollama serve`) before installing. It must be *running*, not just installed.
 
 ### Install
@@ -91,15 +91,13 @@ The wiki is plain Markdown under `~/second-brain/wiki/`:
 - Backlinks on every page, so you can see what refers to what.
 - YAML front matter and rendered LaTeX where the content calls for it.
 
-It opens directly as an Obsidian vault, with graph view and backlinks.
+It opens directly as an Obsidian vault.
 
 ![The compiled wiki in Obsidian's graph view](docs/images/wiki-graph.png)
 
-For asking questions instead of browsing, Second Brain ships an MCP server that hands the wiki to an assistant like Claude Desktop or Cursor. Beyond keyword and semantic search, it can traverse the links between your pages, finding things like what a topic builds on, what relates to it, what you haven't written down yet, and trace any page back to its sources, so the assistant answers from how your notes connect, not one page at a time. 
+For asking questions instead of browsing, Second Brain ships an MCP server that hands the wiki to an assistant like Claude Desktop or Cursor. Beyond keyword and semantic search, it can walk the links between your pages (finding things like what a topic builds on, what relates to it, what you haven't written down yet) and trace any page back to its sources, so the assistant answers from how your notes connect rather than one page at a time.
 
-
->See [Querying over MCP](docs/mcp.md) for the full set of tools.
-
+> See [Querying over MCP](docs/mcp.md) for the full set of tools.
 
 ## Documentation
 For deeper dives:

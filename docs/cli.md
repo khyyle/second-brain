@@ -22,6 +22,13 @@ Build or update the wiki from everything staged:
 uv run second-brain compile
 ```
 
+Remove a source from the pipeline, either mid-ingest or already staged (see [deletion](lifecycle.md#deletion) for what each removal keeps):
+
+```bash
+uv run second-brain forget-drop <path>    # a file still in drops/
+uv run second-brain forget <raw-path>     # a staged source, forgotten entirely
+```
+
 Connect the wiki to an assistant over MCP:
 
 ```bash
@@ -32,4 +39,26 @@ Run the whole pipeline unattended on a schedule (8am, 2pm, and 8pm by default) o
 
 ```bash
 uv run second-brain schedule install
+```
+
+## Wiki maintenance
+
+The wiki is its own git repository, committed to as each build progresses (see [how the wiki is versioned](lifecycle.md#how-the-wiki-is-versioned)). The `wiki` group inspects and repairs it while keeping the manifest, views, and search index in step.
+
+View the `N` most recent build commits:
+
+```bash
+uv run second-brain wiki log -n 3
+```
+
+Undo the last `N` build commits, requeueing their sources for compilation. This command will prompt before resetting (pass `--yes` to skip) and refuses to run on a dirty wiki tree.
+
+```bash
+uv run second-brain wiki rollback <N>
+```
+
+Detect pages renamed outside the pipeline (e.g. manual renames in Finder or from a script) and repoint every link that targeted the old name. Note that renaming files inside of Obsidian will automatically rewrite links and won't need any repair. Run without `--dry-run` to apply:
+
+```bash
+uv run second-brain wiki repair-links --dry-run
 ```
