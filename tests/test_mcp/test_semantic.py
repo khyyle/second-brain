@@ -102,3 +102,89 @@ def test_keyword_search_still_works_with_semantic_on(
     _index_sample(index)
     hits = index.search("penguin")
     assert any(h.stem == "penguins" for h in hits)
+
+
+def test_near_duplicate_pairs_finds_only_close_pages(
+    tmp_path: Path, semantic_config: SearchConfig
+) -> None:
+    index = SearchIndex(tmp_path / "s.db", semantic_config)
+    _index_sample(index)
+    # A near-copy of the gradient page: its fake embedding matches "gradient"
+    # exactly, while the penguin page points in an orthogonal direction.
+    index.index_page(
+        stem="gradient-descent-2",
+        title="Gradient methods",
+        content="gradient stepping toward minima",
+        content_type="concept",
+        domains=["math"],
+        tags=[],
+        word_count=4,
+        path="concepts/gradient-descent-2.md",
+    )
+    index.embed_pending()
+
+    pairs = index.near_duplicate_pairs(min_similarity=0.95)
+
+    assert [(a, b) for a, b, _ in pairs] == [("gradient-descent", "gradient-descent-2")]
+    assert pairs[0][2] >= 0.95
+
+
+def test_near_duplicate_pairs_ignores_cross_type_matches(
+    tmp_path: Path, semantic_config: SearchConfig
+) -> None:
+    index = SearchIndex(tmp_path / "s.db", semantic_config)
+    # A concept and a problem that embed identically: high similarity, but a
+    # problem drilling a concept is intentional, not a duplicate.
+    index.index_page(
+        stem="gradient-descent",
+        title="Gradient Descent",
+        content="gradient based optimization method",
+        content_type="concept",
+        domains=["math"],
+        tags=[],
+        word_count=4,
+        path="concepts/gradient-descent.md",
+    )
+    index.index_page(
+        stem="gradient-descent-drill",
+        title="Gradient Descent drill",
+        content="gradient based optimization method",
+        content_type="problem",
+        domains=["math"],
+        tags=[],
+        word_count=4,
+        path="problems/gradient-descent-drill.md",
+    )
+    index.embed_pending()
+
+    assert index.near_duplicate_pairs(min_similarity=0.95) == []
+
+
+def test_near_duplicate_pairs_empty_without_semantic(tmp_path: Path) -> None:
+    index = SearchIndex(tmp_path / "s.db")
+    assert index.near_duplicate_pairs() == []
+
+
+def test_near_duplicate_pairs_excludes_dismissed(
+    tmp_path: Path, semantic_config: SearchConfig
+) -> None:
+    index = SearchIndex(tmp_path / "s.db", semantic_config)
+    _index_sample(index)
+    index.index_page(
+        stem="gradient-descent-2",
+        title="Gradient methods",
+        content="gradient stepping toward minima",
+        content_type="concept",
+        domains=["math"],
+        tags=[],
+        word_count=4,
+        path="concepts/gradient-descent-2.md",
+    )
+    index.embed_pending()
+
+    pairs = index.near_duplicate_pairs(
+        min_similarity=0.95,
+        exclude={("gradient-descent", "gradient-descent-2")},
+    )
+
+    assert ("gradient-descent", "gradient-descent-2") not in [(a, b) for a, b, _ in pairs]

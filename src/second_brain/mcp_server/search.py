@@ -63,6 +63,10 @@ def _hash_content(content: str) -> str:
     return hashlib.sha256(content.encode("utf-8")).hexdigest()
 
 
+def _is_same_kind(type_a: str | None, type_b: str | None) -> bool:
+    return type_a is not None and type_a == type_b
+
+
 @dataclass(frozen=True)
 class SearchHit:
     stem: str
@@ -512,6 +516,83 @@ class SearchIndex:
             logger.debug("Similarity ranking unavailable: %s", exc)
             return []
         return [row["stem"] for row in rows]
+
+    def near_duplicate_pairs(
+        self,
+        min_similarity: float = 0.90,
+        limit: int | None = None,
+        exclude: set[tuple[str, str]] | None = None,
+    ) -> list[tuple[str, str, float]]:
+        """
+        Find pairs of pages whose embeddings are close enough to suggest overlap.
+
+        Compares every same-type embedded page by cosine similarity and returns
+        the closest pairs. Returns an empty list when the semantic layer is
+        disabled or nothing is embedded yet.
+
+        Parameters
+        ----------
+        min_similarity: float
+            Cosine similarity floor; pairs below it are not reported.
+        limit: int | None
+            Optional cap on the number of pairs returned; ``None`` returns all
+            above the floor.
+        exclude: set[tuple[str, str]] | None
+            Dismissed pairs to leave out, each as a sorted stem tuple.
+
+        Returns
+        -------
+        list[tuple[str, str, float]]
+            ``(stem_a, stem_b, similarity)`` triples, most similar first.
+        """
+        if not self._semantic:
+            return []
+        try:
+            with self._vec_conn() as conn:
+                rows = conn.execute("SELECT stem, embedding FROM wiki_vec").fetchall()
+        except sqlite3.Error as exc:
+            logger.debug("Duplicate sweep unavailable: %s", exc)
+            return []
+        if len(rows) < 2:
+            return []
+
+        with self._conn() as conn:
+            page_type = {
+                r["stem"]: r["content_type"]
+                for r in conn.execute("SELECT stem, content_type FROM wiki_meta")
+            }
+
+        import numpy as np
+
+        stems = [row["stem"] for row in rows]
+
+        # compute cosine similarity of every page against every other
+        vectors = np.vstack([np.frombuffer(row["embedding"], dtype=np.float32) for row in rows])
+        norms = np.linalg.norm(vectors, axis=1, keepdims=True)
+        norms[norms == 0] = 1.0  # a zero vector would divide to nan
+        units = vectors / norms
+        similarity = units @ units.T
+
+        # Take each unordered pair once (upper triangle, no self-pairs) and keep
+        # only those at or above the floor before inspecting any in Python.
+        row_index, col_index = np.triu_indices(len(stems), k=1)
+        above_floor = similarity[row_index, col_index] >= min_similarity
+
+        dismissed = exclude or set()
+        pairs: list[tuple[str, str, float]] = []
+        for i, j in zip(row_index[above_floor], col_index[above_floor], strict=True):
+            a, b = stems[i], stems[j]
+            # A page may legitimately sit close to a page of another type (a
+            # problem drilling the concept it came from), so only same-type
+            # pairs count as duplicates.
+            if not _is_same_kind(page_type.get(a), page_type.get(b)):
+                continue
+            if tuple(sorted((a, b))) in dismissed:
+                continue
+            pairs.append((a, b, float(similarity[i, j])))
+
+        pairs.sort(key=lambda pair: -pair[2])
+        return pairs[:limit]
 
     @staticmethod
     def _kind_filter(kinds: tuple[str, ...] | None) -> tuple[str, list[str]]:
