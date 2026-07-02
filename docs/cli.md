@@ -62,3 +62,9 @@ Detect pages renamed outside the pipeline (e.g. manual renames in Finder or from
 ```bash
 uv run second-brain wiki repair-links --dry-run
 ```
+
+Retire duplicate pages into the one worth keeping. Move any prose worth saving into the destination first; the merge carries over sources and relationships, not body text:
+
+```bash
+uv run second-brain wiki merge <dest> <source 1>...
+```

@@ -22,7 +22,7 @@ The first three tabs follow your material through the pipeline; the last two are
 
 **Domains** manages the wiki's vocabulary of subject areas. Each domain is a broad area tagged in page frontmatter; the tab lists them with a page count, and you can rename, merge, or delete one — the change rewrites every affected page. Domains are grown by the build, so this tab fills in as the wiki does.
 
-**Overview** is a read-only view of the compiled wiki in two parts. *Improve your wiki* surfaces growth opportunities: concepts [referenced but not written](wiki-structure.md#gaps-and-orphans) (ranked by how many pages want them) and pages nothing links to yet. *Health* flags defects like oversized or stub pages, missing frontmatter, and pages whose sources changed since the last build. Each check expands to the pages it flagged, which open on click. Fixes will show on the next build.
+**Overview** shows the compiled wiki in two parts. *Improve your wiki* surfaces growth opportunities: concepts [referenced but not written](wiki-structure.md#gaps-and-orphans) (ranked by how many pages want them), pages nothing links to yet, and possible duplicates. Hover a pair to merge one into the other (after moving any prose worth keeping into the survivor) or to dismiss the suggestion. *Health* flags defects like oversized or stub pages and missing frontmatter.
 
 ## Building the wiki
 
