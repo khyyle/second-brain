@@ -1,6 +1,13 @@
 import SwiftUI
 import AppKit
 
+extension Notification.Name {
+    /// Posted when the menu-bar panel is brought to the front. The panel is
+    /// reused across opens, so views that read from disk listen for this to
+    /// refresh, since `.onAppear` only fires on the panel's first show.
+    static let panelDidShow = Notification.Name("SecondBrainPanelDidShow")
+}
+
 /// Menu bar entry point.
 
 @main
@@ -93,6 +100,10 @@ final class StatusBarController: NSObject, NSApplicationDelegate {
             NSApp.activate(ignoringOtherApps: true)
             panel.makeKeyAndOrderFront(nil)
         }
+        // The panel is reused across opens, so SwiftUI's .onAppear fires only
+        // the first time. Broadcast each show so disk-backed views reload
+        // (e.g. the build log written by a background run while we were hidden).
+        NotificationCenter.default.post(name: .panelDidShow, object: nil)
     }
 
     private func showStatusMenu() {

@@ -179,6 +179,7 @@ struct IngestTab: View {
             }
         }
         .onAppear(perform: refresh)
+        .onPanelShow(refresh)
         .onReceive(Timer.publish(every: 1, on: .main, in: .common).autoconnect()) { _ in refresh() }
     }
 
@@ -310,6 +311,7 @@ struct ChatsTab: View {
             }
         }
         .onAppear(perform: refresh)
+        .onPanelShow(refresh)
         .onReceive(Timer.publish(every: 3, on: .main, in: .common).autoconnect()) { _ in refresh() }
     }
 
@@ -497,6 +499,7 @@ struct BuildTab: View {
             recentSection
         }
         .onAppear(perform: refresh)
+        .onPanelShow(refresh)
         .onReceive(Timer.publish(every: 1, on: .main, in: .common).autoconnect()) { _ in refresh() }
     }
 
@@ -963,6 +966,7 @@ struct DomainsTab: View {
             content
         }
         .onAppear(perform: refresh)
+        .onPanelShow(refresh)
         .alert("Rename domain", isPresented: renamePresented) {
             TextField("New name", text: $renameText)
             Button("Rename", action: performRename)
@@ -1177,6 +1181,7 @@ struct OverviewTab: View {
             content
         }
         .onAppear(perform: refresh)
+        .onPanelShow(refresh)
         .alert("Merge duplicates", isPresented: mergePresented) {
             if let merge = merging {
                 Button("Keep '\(merge.pageA)'", role: .destructive) {

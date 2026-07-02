@@ -39,6 +39,13 @@ extension View {
     func openableTitle(_ full: String) -> some View {
         modifier(OpenableTitle(full: full))
     }
+
+    /// Run `action` whenever the menu-bar panel is brought to the front. The
+    /// panel is reused across opens, so `.onAppear` fires only once; disk-backed
+    /// views pair this with their `.onAppear` refresh to reload on every reopen.
+    func onPanelShow(_ action: @escaping () -> Void) -> some View {
+        onReceive(NotificationCenter.default.publisher(for: .panelDidShow)) { _ in action() }
+    }
 }
 
 /// Holds a row's resting label and its hover action in one trailing slot,
