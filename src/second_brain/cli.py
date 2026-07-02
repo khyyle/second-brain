@@ -766,39 +766,58 @@ def health(ctx: click.Context, as_json: bool) -> None:
     report = run_health_check(config.wiki_dir, config.raw_dir)
 
     if as_json:
-        # Each item carries a display string and the page stem to open, or null
-        # when it is not page-backed (a gap points at a page that does not exist).
+        # Each item carries a display string, the page stem to open (null when
+        # not page-backed, as a gap points at a page that does not exist), and an
+        # optional detail shown beside it. Categories are grouped into two
+        # sections: "improve" (growth opportunities) and "health" (defects).
         categories = [
             (
+                "gap_links",
+                "Referenced but not written",
+                "improve",
+                [
+                    {"text": stem, "page": None, "detail": f"{refs} ref{'' if refs == 1 else 's'}"}
+                    for stem, refs in report.gap_links
+                ],
+            ),
+            (
                 "orphan_pages",
-                "Orphan pages",
+                "Not linked from any page",
+                "improve",
                 [{"text": s, "page": s} for s in report.orphan_pages],
             ),
-            ("gap_links", "Gaps", [{"text": g, "page": None} for g in report.gap_links]),
             (
                 "oversized_pages",
                 "Oversized pages",
+                "health",
                 [{"text": f"{s} ({w:,} words)", "page": s} for s, w in report.oversized_pages],
             ),
             (
                 "undersized_pages",
                 "Stub pages",
+                "health",
                 [{"text": f"{s} ({w:,} words)", "page": s} for s, w in report.undersized_pages],
             ),
             (
                 "missing_frontmatter",
                 "Missing frontmatter",
+                "health",
                 [{"text": m, "page": m.split(":", 1)[0]} for m in report.missing_frontmatter],
             ),
-            ("stale_pages", "Stale pages", [{"text": s, "page": s} for s in report.stale_pages]),
+            (
+                "stale_pages",
+                "Stale pages",
+                "health",
+                [{"text": s, "page": s} for s in report.stale_pages],
+            ),
         ]
         click.echo(
             json.dumps(
                 {
                     "healthy": report.is_healthy,
                     "categories": [
-                        {"key": key, "label": label, "items": items}
-                        for key, label, items in categories
+                        {"key": key, "label": label, "section": section, "items": items}
+                        for key, label, section, items in categories
                     ],
                 }
             )
@@ -807,10 +826,11 @@ def health(ctx: click.Context, as_json: bool) -> None:
 
     click.echo(report.summary())
 
-    if report.orphan_pages:
-        click.echo(f"\nOrphans: {', '.join(report.orphan_pages[:10])}")
     if report.gap_links:
-        click.echo(f"\nGaps: {', '.join(report.gap_links[:10])}")
+        top_gaps = ", ".join(stem for stem, _ in report.gap_links[:10])
+        click.echo(f"\nReferenced but not written: {top_gaps}")
+    if report.orphan_pages:
+        click.echo(f"\nNot linked from any page: {', '.join(report.orphan_pages[:10])}")
     if report.oversized_pages:
         click.echo("\nOversized pages:")
         for stem, wc in report.oversized_pages:

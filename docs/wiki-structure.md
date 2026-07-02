@@ -25,7 +25,16 @@ The four content directories are **typed buckets** — they sort a page by what 
 
 The per-domain pages under `_views/domains/` are generated from frontmatter, so a page appears under every domain it declares. This structure avoids forcing a single home for a file, which results in a queryable, traversable, and intuitive graph structure.
 
-### Domains are emergent, not pre-defined
+### Gaps and orphans
+
+The wiki is deliberately allowed to link to concepts that have no page yet. A page that builds on an unwritten fundamental links it anyway, acting as a record of where that concept is needed. Obsidian renders these links muted rather than broken, and when a later build writes a page with that name, every existing reference to it resolves on its own. This can also serve as a pointer to what to add to your knowledge base next.
+
+- **Gaps** ("referenced but not written"): a prerequisite, related link, or body link that names a concept with no page. A gap is a concept the wiki leans on but has not written up. Ranked by how many pages reference it, the list reads as a demand-ordered "write this next" list.
+- **Orphans** ("not linked from any page"): a page nothing else links to. It is still reachable by search and the index, but linking to it from a related page makes it easier to find while browsing.
+
+Both are surfaced in the app's Overview tab. Gaps are also written to `_views/gaps.md` and queryable over MCP with `list_gaps`.
+
+### Domains are emergent
 
 A new wiki is initialized with **no domains**. Over time, the compilation agent creates domains from your content, steered to prefer broad subject areas (e.g. `finance`, `biology`) and to reuse an existing one before inventing a new one. After each build the domains it used are registered back into `topic_schema.yaml`, which therefore acts as the canonical, reusable vocabulary. Because domains are just frontmatter, an over-narrow one can be renamed, merged, or removed later without recompiling.
 

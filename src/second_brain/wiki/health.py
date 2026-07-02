@@ -21,12 +21,16 @@ class HealthReport:
     """
     Aggregated results from all wiki health checks.
 
-    Each field collects a specific category of issue; an empty
-    list means no problems were found in that category.
+    Fields split into two groups. Growth signals (``gap_links``,
+    ``orphan_pages``) describe where the wiki could expand or connect better and
+    are expected, not defects. Defect signals (``oversized_pages``,
+    ``undersized_pages``, ``missing_frontmatter``, ``stale_pages``)
+    should trend to zero. Each ``gap_links`` entry pairs the referenced-but-
+    unwritten stem with how many pages point at it.
     """
 
     orphan_pages: list[str] = field(default_factory=list)
-    gap_links: list[str] = field(default_factory=list)
+    gap_links: list[tuple[str, int]] = field(default_factory=list)
     oversized_pages: list[tuple[str, int]] = field(default_factory=list)
     undersized_pages: list[tuple[str, int]] = field(default_factory=list)
     missing_frontmatter: list[str] = field(default_factory=list)
@@ -34,10 +38,10 @@ class HealthReport:
 
     @property
     def is_healthy(self) -> bool:
+        # growth signals (gaps, orphans) and soft signals (stub and stale pages)
+        # are omitted as they aren't necessarily hard defects
         return not any(
             [
-                self.orphan_pages,
-                self.gap_links,
                 self.oversized_pages,
                 self.missing_frontmatter,
             ]
@@ -52,9 +56,9 @@ class HealthReport:
         str
             Multi-line text summarizing issue counts.
         """
-        lines = ["=== Health Report ==="]
-        lines.append(f"Orphan pages (no incoming links): {len(self.orphan_pages)}")
-        lines.append(f"Gap links (broken wikilinks): {len(self.gap_links)}")
+        lines = ["=== Wiki Report ==="]
+        lines.append(f"Referenced but not written (gaps): {len(self.gap_links)}")
+        lines.append(f"Not linked from any page (orphans): {len(self.orphan_pages)}")
         lines.append(f"Oversized pages (>4000 words): {len(self.oversized_pages)}")
         lines.append(f"Undersized pages (<150 words): {len(self.undersized_pages)}")
         lines.append(f"Missing required frontmatter: {len(self.missing_frontmatter)}")
@@ -93,7 +97,12 @@ def run_health_check(
     report = HealthReport()
 
     report.orphan_pages = detect_orphans(pages, graph)
-    report.gap_links = detect_gaps(pages, graph)
+    # Pair each gap with how many pages reference it, most-referenced first, so
+    # the list reads as a demand-ranked "write these next" queue.
+    report.gap_links = sorted(
+        ((stem, len(graph.backward.get(stem, ()))) for stem in detect_gaps(pages, graph)),
+        key=lambda gap: (-gap[1], gap[0]),
+    )
 
     for stem, page in pages.items():
         if page.word_count > SPLIT_THRESHOLD:

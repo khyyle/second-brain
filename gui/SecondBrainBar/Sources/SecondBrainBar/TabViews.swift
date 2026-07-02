@@ -1157,11 +1157,11 @@ private struct DomainRow: View {
     }
 }
 
-/// Read-only structural health of the compiled wiki: the checks from
-/// `second-brain health`, shown as a compact table. A check with issues
+/// The compiled wiki's overview: growth opportunities to improve it, then its
+/// structural health, both from `second-brain health`. A check with items
 /// expands inline to the pages it flagged, which open on click. There are no
 /// action buttons — every fix lands on the next build, which is the Build tab.
-struct HealthTab: View {
+struct OverviewTab: View {
     let config: AppConfig
     @State private var health: WikiHealth?
     @State private var loaded = false
@@ -1169,17 +1169,6 @@ struct HealthTab: View {
 
     var body: some View {
         VStack(spacing: 1) {
-            SectionHeader(
-                title: "Health",
-                help: """
-                Orphan pages — nothing links to them.
-                Gaps — links to pages not written yet.
-                Oversized pages — over 4000 words; split candidates.
-                Stub pages — under 150 words.
-                Missing frontmatter — no title, type, or domains.
-                Stale pages — source changed since the last build.
-                """
-            )
             content
         }
         .onAppear(perform: refresh)
@@ -1190,9 +1179,38 @@ struct HealthTab: View {
         if !loaded {
             EmptyListMessage(text: nil)
         } else if unavailable {
-            EmptyListMessage(text: "Health needs the installed pipeline. Reinstall to view it.")
+            EmptyListMessage(text: "The overview needs the installed pipeline. Reinstall to view it.")
         } else if let health {
-            ForEach(health.categories) { category in
+            section(
+                title: "Improve your wiki",
+                help: """
+                Referenced but not written — concepts the wiki points to but \
+                has not written up yet, ranked by how often they are referenced.
+                Not linked from any page — pages with no incoming links. Add \
+                a reference from a related note to make them easier to discover.
+                """,
+                categories: health.categories(in: "improve")
+            )
+            section(
+                title: "Health",
+                help: """
+                Oversized pages — over 4000 words; candidates to split.
+                Stub pages — under 150 words.
+                Missing frontmatter — no title, type, or domains.
+                Stale pages — source changed since the last build.
+                """,
+                categories: health.categories(in: "health")
+            )
+        }
+    }
+
+    /// One titled, explained section — a header with a "?" popover over its
+    /// checks. Rendered only when the section has checks to show.
+    @ViewBuilder
+    private func section(title: String, help: String, categories: [HealthCategory]) -> some View {
+        if !categories.isEmpty {
+            SectionHeader(title: title, help: help)
+            ForEach(categories) { category in
                 HealthCategoryRow(category: category, onOpen: open)
             }
         }
@@ -1245,8 +1263,8 @@ private struct HealthCategoryRow: View {
     /// help button — the labels carry the rest.
     private var explanation: String {
         switch category.key {
-        case "orphan_pages": return "Pages nothing links to."
-        case "gap_links": return "Links to pages not written yet."
+        case "gap_links": return "Concepts your pages reference but you haven't written yet."
+        case "orphan_pages": return "Pages nothing links to yet — reachable by search, easy to miss."
         case "oversized_pages": return "Pages over 4000 words — candidates to split."
         case "undersized_pages": return "Pages under 150 words."
         case "missing_frontmatter": return "Pages missing a title, type, or domains."
@@ -1307,6 +1325,11 @@ private struct HealthItemRow: View {
             Spacer().frame(width: 12)
             title
             Spacer(minLength: 6)
+            if let detail = item.detail {
+                Text(detail)
+                    .font(Theme.Font.meta(9.5))
+                    .foregroundStyle(Theme.Colors.textTertiary)
+            }
         }
         .modifier(RowBackground(hovering: hovering && openable))
         .contentShape(Rectangle())

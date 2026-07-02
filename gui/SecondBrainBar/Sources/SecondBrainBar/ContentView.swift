@@ -2,14 +2,14 @@ import SwiftUI
 
 /// Which pipeline stage the shared scroll area is showing, left to right: the
 /// daily pipeline actions (ingest, build) lead, the occasional ChatGPT import
-/// follows, and the two wiki-state views (domains, health) close it out —
-/// health last, as the overall status of the compiled wiki.
+/// follows, and the two wiki-state views (domains, overview) close it out —
+/// overview last, as the growth opportunities and health of the compiled wiki.
 private enum Tab: String, CaseIterable, Identifiable {
     case ingest = "Ingest"
     case build = "Build"
     case chats = "Chats"
     case domains = "Domains"
-    case health = "Health"
+    case overview = "Overview"
     var id: String { rawValue }
 }
 
@@ -151,7 +151,7 @@ struct ContentView: View {
                     canBuild: config.runScriptPath != nil
                 )
                 case .domains: DomainsTab(config: config)
-                case .health:  HealthTab(config: config)
+                case .overview: OverviewTab(config: config)
                 case .chats:   ChatsTab(config: config)
                 }
             }
