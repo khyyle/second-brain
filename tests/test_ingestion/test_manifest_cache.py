@@ -38,6 +38,13 @@ def test_unmark_compiled_empty_list_is_noop(manifest: Manifest) -> None:
     assert manifest.unmark_compiled([]) == 0
 
 
+def test_dismiss_duplicate_is_order_independent_and_idempotent(manifest: Manifest) -> None:
+    manifest.dismiss_duplicate("water-electrolysis", "electrolysis")
+    manifest.dismiss_duplicate("electrolysis", "water-electrolysis")
+
+    assert manifest.get_dismissed_duplicates() == {("electrolysis", "water-electrolysis")}
+
+
 def test_page_cache_round_trip(manifest: Manifest) -> None:
     """A put_cached_page entry should be returned verbatim by get_cached_page."""
     manifest.put_cached_page(

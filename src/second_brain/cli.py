@@ -723,6 +723,21 @@ def wiki_repair_links(ctx: click.Context, dry_run: bool) -> None:
         _sync_search_index(config)
 
 
+@wiki.command(name="dismiss")
+@click.argument("page_a")
+@click.argument("page_b")
+@click.pass_context
+def wiki_dismiss(ctx: click.Context, page_a: str, page_b: str) -> None:
+    """Mark PAGE_A and PAGE_B as not duplicates, hiding the suggestion."""
+    config: Config = ctx.obj["config"]
+    from second_brain.wiki.slugs import normalize_link_target
+
+    stem_a = normalize_link_target(page_a)
+    stem_b = normalize_link_target(page_b)
+    Manifest(config.manifest_db_path).dismiss_duplicate(stem_a, stem_b)
+    click.echo(f"Dismissed duplicate suggestion: {stem_a} + {stem_b}")
+
+
 @main.group()
 def schedule() -> None:
     """Manage the launchd scheduler."""
