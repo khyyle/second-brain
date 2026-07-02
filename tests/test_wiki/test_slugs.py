@@ -27,8 +27,27 @@ def test_slugify_is_idempotent_on_an_existing_slug() -> None:
     assert slugify("bayes-rays") == "bayes-rays"
 
 
-def test_slugify_keeps_unicode_letters() -> None:
-    assert slugify("Ampère's Law") == "ampères-law"
+def test_slugify_collapses_hyphen_runs_and_trims_edges() -> None:
+    # A dropped symbol (e.g. a minus sign in a math title) must not leave a
+    # hyphen run, or the same name would slug two different ways.
+    assert slugify("deep--learning") == "deep-learning"
+    assert slugify("Critical Points of xy - x²y") == "critical-points-of-xy-x2y"
+    assert slugify("-dot-product-") == "dot-product"
+
+
+def test_slugify_maps_dash_family_and_underscores_to_hyphens() -> None:
+    # An en dash or minus sign separates words just like a hyphen; dropping it
+    # would glue the words into a different slug than the hyphen spelling.
+    assert slugify("Borsuk–Ulam Theorem") == "borsuk-ulam-theorem"
+    assert slugify("xy − x²y") == "xy-x2y"
+    assert slugify("word_break") == "word-break"
+
+
+def test_slugify_folds_unicode_to_ascii() -> None:
+    # Accents decompose to base letters and superscripts to digits, so a stem
+    # is always typeable and immune to lookalike-character mismatches.
+    assert slugify("Ampère's Law") == "amperes-law"
+    assert slugify("L'Hôpital's Rule") == "lhopitals-rule"
 
 
 def test_slugify_empty_when_no_sluggable_characters() -> None:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 
 # A wikilink, capturing its target and optional display label:
 # [[target]] or [[target|display label]].
@@ -25,16 +26,25 @@ _PROTECTED_SPAN_RES = (
 _MASK_SENTINEL = "\x00{}\x00"
 _MASK_RESTORE_RE = re.compile("\x00(\\d+)\x00")
 
+# Characters that read as word separators but are not the ASCII hyphen: the
+# Unicode hyphen/dash family, the minus sign, and the underscore. Mapped to "-"
+# before ASCII folding so "Borsuk–Ulam" slugs to borsuk-ulam rather than the
+# glued borsukulam a plain character drop would produce.
+_SEPARATOR_TRANSLATION = str.maketrans(dict.fromkeys("‐‑‒–—―−_", "-"))
+
 
 def slugify(text: str) -> str:
     """
-    Reduce arbitrary text to a kebab-case stem.
+    Reduce arbitrary text to an ASCII kebab-case stem.
 
-    The text is lower-cased. Every character that is not a letter, a digit, a
-    space, or a hyphen is removed. Runs of whitespace then collapse into single
-    hyphens. Letters outside ASCII are preserved, so an accented word keeps its
-    letters while punctuation such as apostrophes, commas, and parentheses is
-    dropped.
+    The text is lower-cased, dash-like characters and underscores become
+    hyphens, and the rest is folded to ASCII: accented letters decompose to
+    their base letters and superscripts to plain digits, while characters with
+    no ASCII equivalent are dropped. Every remaining character that is not a
+    letter, a digit, a space, or a hyphen is removed. Runs of whitespace and
+    hyphens then collapse into single hyphens, and leading or trailing hyphens
+    are trimmed, so a dropped symbol can never leave a hyphen run that would
+    make the same name slug two different ways.
 
     Parameters
     ----------
@@ -44,11 +54,13 @@ def slugify(text: str) -> str:
     Returns
     -------
     str
-        The kebab-case stem. Text that already has this form is returned
+        The ASCII kebab-case stem. Text that already has this form is returned
         unchanged. Text with no usable characters returns an empty string.
     """
-    cleaned = "".join(char if char.isalnum() or char in " -" else "" for char in text.lower())
-    return "-".join(cleaned.split())
+    text = text.lower().translate(_SEPARATOR_TRANSLATION)
+    text = unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode("ascii")
+    cleaned = "".join(char if char.isalnum() or char in " -" else "" for char in text)
+    return re.sub(r"-{2,}", "-", "-".join(cleaned.split())).strip("-")
 
 
 def normalize_link_target(target: str) -> str:
