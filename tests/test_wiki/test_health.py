@@ -50,3 +50,14 @@ def test_gap_links_are_ranked_by_reference_count(tmp_path: Path) -> None:
 
     assert report.gap_links[0] == ("popular", 2)
     assert ("rare", 1) in report.gap_links
+
+
+def test_duplicate_pairs_pass_through_as_growth_signal(tmp_path: Path) -> None:
+    wiki = tmp_path / "wiki"
+    _write(wiki, "concepts", "a", "Body.")
+
+    pairs = [("dot-product", "inner-product", 0.94)]
+    report = run_health_check(wiki, duplicate_pairs=pairs)
+
+    assert report.possible_duplicates == pairs
+    assert report.is_healthy

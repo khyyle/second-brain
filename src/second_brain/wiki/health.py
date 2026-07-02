@@ -1,5 +1,3 @@
-"""Health checks — contradiction detection, gap analysis, stale page detection."""
-
 from __future__ import annotations
 
 import logging
@@ -22,24 +20,26 @@ class HealthReport:
     Aggregated results from all wiki health checks.
 
     Fields split into two groups. Growth signals (``gap_links``,
-    ``orphan_pages``) describe where the wiki could expand or connect better and
-    are expected, not defects. Defect signals (``oversized_pages``,
-    ``undersized_pages``, ``missing_frontmatter``, ``stale_pages``)
+    ``orphan_pages``, ``possible_duplicates``) describe where the wiki could
+    expand, connect, or consolidate and are expected, not defects. Defect
+    signals (``oversized_pages``, ``undersized_pages``, ``missing_frontmatter``)
     should trend to zero. Each ``gap_links`` entry pairs the referenced-but-
-    unwritten stem with how many pages point at it.
+    unwritten stem with how many pages point at it, and each
+    ``possible_duplicates`` entry pairs two page stems with their embedding
+    similarity.
     """
 
     orphan_pages: list[str] = field(default_factory=list)
     gap_links: list[tuple[str, int]] = field(default_factory=list)
+    possible_duplicates: list[tuple[str, str, float]] = field(default_factory=list)
     oversized_pages: list[tuple[str, int]] = field(default_factory=list)
     undersized_pages: list[tuple[str, int]] = field(default_factory=list)
     missing_frontmatter: list[str] = field(default_factory=list)
-    stale_pages: list[str] = field(default_factory=list)
 
     @property
     def is_healthy(self) -> bool:
-        # growth signals (gaps, orphans) and soft signals (stub and stale pages)
-        # are omitted as they aren't necessarily hard defects
+        # growth signals (gaps, orphans, duplicates) and the soft undersized
+        # signal are omitted as they aren't necessarily hard defects
         return not any(
             [
                 self.oversized_pages,
@@ -59,10 +59,10 @@ class HealthReport:
         lines = ["=== Wiki Report ==="]
         lines.append(f"Referenced but not written (gaps): {len(self.gap_links)}")
         lines.append(f"Not linked from any page (orphans): {len(self.orphan_pages)}")
+        lines.append(f"Possible duplicates: {len(self.possible_duplicates)}")
         lines.append(f"Oversized pages (>4000 words): {len(self.oversized_pages)}")
         lines.append(f"Undersized pages (<150 words): {len(self.undersized_pages)}")
         lines.append(f"Missing required frontmatter: {len(self.missing_frontmatter)}")
-        lines.append(f"Stale pages (source updated): {len(self.stale_pages)}")
         return "\n".join(lines)
 
 
@@ -73,7 +73,7 @@ MERGE_THRESHOLD = 150
 
 def run_health_check(
     wiki_dir: Path,
-    raw_dir: Path | None = None,
+    duplicate_pairs: list[tuple[str, str, float]] | None = None,
 ) -> HealthReport:
     """
     Run all health checks against the wiki.
@@ -82,9 +82,8 @@ def run_health_check(
     ----------
     wiki_dir: Path
         Root directory of the wiki.
-    raw_dir: Path | None
-        Directory containing raw sources. When provided,
-        stale-page detection is included.
+    duplicate_pairs: list[tuple[str, str, float]] | None
+        Near-duplicate page pairs from the search index's embedding sweep.
 
     Returns
     -------
@@ -103,6 +102,7 @@ def run_health_check(
         ((stem, len(graph.backward.get(stem, ()))) for stem in detect_gaps(pages, graph)),
         key=lambda gap: (-gap[1], gap[0]),
     )
+    report.possible_duplicates = duplicate_pairs or []
 
     for stem, page in pages.items():
         if page.word_count > SPLIT_THRESHOLD:
@@ -115,51 +115,5 @@ def run_health_check(
         if missing:
             report.missing_frontmatter.append(f"{stem}: missing {missing}")
 
-    if raw_dir and raw_dir.exists():
-        report.stale_pages = _find_stale_pages(wiki_dir, raw_dir, pages)
-
     logger.info(report.summary())
     return report
-
-
-def _find_stale_pages(
-    wiki_dir: Path,
-    raw_dir: Path,
-    pages: dict,
-) -> list[str]:
-    """
-    Find wiki pages whose sources changed since last compile.
-
-    Parameters
-    ----------
-    wiki_dir: Path
-        Root directory of the wiki.
-    raw_dir: Path
-        Directory containing raw source files.
-    pages: dict
-        Mapping of page stem to WikiPage.
-
-    Returns
-    -------
-    list[str]
-        Stems of wiki pages that are stale.
-    """
-    stale: list[str] = []
-
-    for stem, page in pages.items():
-        sources = page.frontmatter.get("sources", [])
-        if not sources:
-            continue
-
-        wiki_mtime = page.path.stat().st_mtime
-
-        for src in sources:
-            for raw_file in raw_dir.rglob(src):
-                if raw_file.stat().st_mtime > wiki_mtime:
-                    stale.append(stem)
-                    break
-            else:
-                continue
-            break
-
-    return stale

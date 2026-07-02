@@ -873,9 +873,15 @@ def health(ctx: click.Context, as_json: bool) -> None:
     """Run health checks on the wiki."""
     config: Config = ctx.obj["config"]
 
+    from second_brain.mcp_server.search import SearchIndex
     from second_brain.wiki.health import run_health_check
 
-    report = run_health_check(config.wiki_dir, config.raw_dir)
+    search = SearchIndex(config.search_db_path, config.search)
+    dismissed = Manifest(config.manifest_db_path).get_dismissed_duplicates()
+    report = run_health_check(
+        config.wiki_dir,
+        duplicate_pairs=search.near_duplicate_pairs(exclude=dismissed),
+    )
 
     if as_json:
         # Each item carries a display string, the page stem to open (null when
@@ -899,6 +905,15 @@ def health(ctx: click.Context, as_json: bool) -> None:
                 [{"text": s, "page": s} for s in report.orphan_pages],
             ),
             (
+                "possible_duplicates",
+                "Possible duplicates",
+                "improve",
+                [
+                    {"text": a, "page": a, "pair": b, "detail": f"{similarity:.0%} similar"}
+                    for a, b, similarity in report.possible_duplicates
+                ],
+            ),
+            (
                 "oversized_pages",
                 "Oversized pages",
                 "health",
@@ -915,12 +930,6 @@ def health(ctx: click.Context, as_json: bool) -> None:
                 "Missing frontmatter",
                 "health",
                 [{"text": m, "page": m.split(":", 1)[0]} for m in report.missing_frontmatter],
-            ),
-            (
-                "stale_pages",
-                "Stale pages",
-                "health",
-                [{"text": s, "page": s} for s in report.stale_pages],
             ),
         ]
         click.echo(
