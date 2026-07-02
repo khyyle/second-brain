@@ -627,6 +627,103 @@ def domain_delete(ctx: click.Context, name: str) -> None:
 
 
 @main.group()
+def wiki() -> None:
+    """Inspect and repair the compiled wiki repository."""
+    pass
+
+
+@wiki.command(name="log")
+@click.option("-n", "--limit", default=10, show_default=True, help="Commits to show")
+@click.pass_context
+def wiki_log(ctx: click.Context, limit: int) -> None:
+    """List the wiki's most recent build commits."""
+    config: Config = ctx.obj["config"]
+    from second_brain.wiki.repo import WikiRepoError, count_commits, list_commits
+
+    try:
+        commits = list_commits(config.wiki_dir, limit)
+        total = count_commits(config.wiki_dir)
+    except WikiRepoError as exc:
+        raise click.ClickException(str(exc)) from exc
+    if not commits:
+        click.echo("No wiki commits yet.")
+        return
+    for commit in commits:
+        click.echo(
+            f"{commit.short_hash}  {commit.date}  "
+            f"{commit.files_changed:>4} file(s)  {commit.subject}"
+        )
+    if len(commits) < total:
+        click.echo(f"Showing {len(commits)} of {total} commits. Pass -n <count> to see more.")
+
+
+@wiki.command(name="rollback")
+@click.argument("count", type=click.IntRange(min=1), default=1)
+@click.option("--yes", is_flag=True, help="Skip the confirmation prompt")
+@click.pass_context
+def wiki_rollback(ctx: click.Context, count: int, yes: bool) -> None:
+    """Undo the last COUNT wiki build commits and requeue their sources."""
+    config: Config = ctx.obj["config"]
+    from second_brain.wiki.repo import WikiRepoError, rollback
+    from second_brain.wiki.structure import rebuild_structure
+
+    if not yes:
+        click.confirm(
+            f"Roll the wiki back {count} commit(s)? The affected pages are "
+            "discarded and their sources recompile on the next build.",
+            abort=True,
+        )
+    try:
+        sources = rollback(config.wiki_dir, count)
+    except WikiRepoError as exc:
+        raise click.ClickException(str(exc)) from exc
+
+    # the wiki records sources as raw/<path>; the manifest keys on <path>
+    manifest = Manifest(config.manifest_db_path)
+    requeued = manifest.unmark_compiled([s.removeprefix("raw/") for s in sources])
+
+    rebuild_structure(config.wiki_dir)
+    _sync_search_index(config)
+    from second_brain.state import emit_state
+
+    emit_state(config)
+    click.echo(f"Rolled back {count} commit(s); {requeued} source(s) requeued for the next build")
+
+
+@wiki.command(name="repair-links")
+@click.option("--dry-run", is_flag=True, help="Show what would change without writing")
+@click.pass_context
+def wiki_repair_links(ctx: click.Context, dry_run: bool) -> None:
+    """Repoint links to pages that were renamed outside the pipeline."""
+    config: Config = ctx.obj["config"]
+    from second_brain.wiki.repo import WikiRepoError, detect_renames, repair_links
+    from second_brain.wiki.structure import rebuild_structure
+
+    try:
+        mapping = detect_renames(config.wiki_dir)
+        repairs = repair_links(config.wiki_dir, mapping, dry_run=dry_run)
+    except WikiRepoError as exc:
+        raise click.ClickException(str(exc)) from exc
+
+    if not mapping:
+        click.echo("No renamed pages detected.")
+        return
+    click.echo("Detected renames:")
+    for old, new in sorted(mapping.items()):
+        click.echo(f"  {old} -> {new}")
+
+    verb = "Would repoint" if dry_run else "Repointed"
+    total = sum(repair.links_repointed for repair in repairs)
+    click.echo(f"{verb} {total} link(s) across {len(repairs)} page(s)")
+    for repair in repairs:
+        click.echo(f"  {repair.rel_path}: {repair.links_repointed}")
+
+    if not dry_run and repairs:
+        rebuild_structure(config.wiki_dir)
+        _sync_search_index(config)
+
+
+@main.group()
 def schedule() -> None:
     """Manage the launchd scheduler."""
     pass

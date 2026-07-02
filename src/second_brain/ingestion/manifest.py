@@ -526,6 +526,33 @@ class Manifest:
                     (rel, now),
                 )
 
+    def unmark_compiled(self, raw_paths: list[str]) -> int:
+        """
+        Clear the compiled record for the given raw files.
+
+        These sources become eligible for the next normal build again, while
+        their manifest and triage rows stay intact unlike ``forget_source``,
+        which un-ingests a source entirely.
+
+        Parameters
+        ----------
+        raw_paths: list[str]
+            Raw file paths (relative to the raw directory) to unmark.
+
+        Returns
+        -------
+        int
+            Number of compiled records actually cleared.
+        """
+        if not raw_paths:
+            return 0
+        cleared = 0
+        with self._conn() as conn:
+            for rel in raw_paths:
+                cursor = conn.execute("DELETE FROM compiled WHERE raw_path = ?", (rel,))
+                cleared += cursor.rowcount
+        return cleared
+
     def get_compiled_raw_paths(self) -> set[str]:
         """Return the set of raw file paths already compiled into the wiki.
 

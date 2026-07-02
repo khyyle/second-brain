@@ -16,6 +16,7 @@ from pathlib import Path
 
 import yaml
 
+from second_brain.wiki.repo import commit_all
 from second_brain.wiki.schema import remap_schema_domains
 from second_brain.wiki.structure import (
     _FRONTMATTER_RE,
@@ -142,6 +143,13 @@ def _remap(wiki_dir: Path, mapping: dict[str, str | None]) -> int:
     remap_schema_domains(wiki_dir, mapping)
     _prune_domain_views(wiki_dir, mapping)
     rebuild_structure(wiki_dir)
+
+    # checkpoint the edit so a vocabulary change is traceable and reversible
+    edits = ", ".join(
+        f"{old} -> {new}" if new else f"{old} removed" for old, new in mapping.items()
+    )
+    commit_all(wiki_dir, f"auto: domain edit ({edits})")
+
     logger.info("Remapped domains %s across %d page(s)", mapping, changed)
     return changed
 

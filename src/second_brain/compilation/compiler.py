@@ -599,52 +599,8 @@ def _git_restore(wiki_dir: Path) -> None:
 
 def _git_commit(wiki_dir: Path) -> None:
     """
-    Auto-commit wiki changes if the directory is a git repo.
-
-    Initializes a repository if none exists, then stages and
-    commits all changes.
-
-    Parameters
-    ----------
-    wiki_dir: Path
-        Root directory of the wiki.
+    Checkpoint the wiki after a build step.
     """
-    git_dir = wiki_dir / ".git"
-    if not git_dir.exists():
-        try:
-            subprocess.run(
-                ["git", "init"],
-                cwd=wiki_dir,
-                capture_output=True,
-                check=True,
-            )
-        except (subprocess.CalledProcessError, FileNotFoundError):
-            logger.warning("Could not initialize git in wiki directory")
-            return
+    from second_brain.wiki.repo import commit_all
 
-    try:
-        subprocess.run(
-            ["git", "add", "-A"],
-            cwd=wiki_dir,
-            capture_output=True,
-            check=True,
-        )
-        result = subprocess.run(
-            ["git", "status", "--porcelain"],
-            cwd=wiki_dir,
-            capture_output=True,
-            text=True,
-        )
-        if not result.stdout.strip():
-            logger.info("No wiki changes to commit")
-            return
-
-        subprocess.run(
-            ["git", "commit", "-m", "auto: compilation + structure rebuild"],
-            cwd=wiki_dir,
-            capture_output=True,
-            check=True,
-        )
-        logger.info("Committed wiki changes")
-    except subprocess.CalledProcessError as e:
-        logger.warning("Git commit failed: %s", e.stderr)
+    commit_all(wiki_dir, "auto: compilation + structure rebuild")

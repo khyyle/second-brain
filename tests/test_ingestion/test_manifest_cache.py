@@ -24,6 +24,20 @@ def sample_file(tmp_path: Path) -> Path:
     return p
 
 
+def test_unmark_compiled_requeues_without_forgetting(manifest: Manifest) -> None:
+    """Unmarking clears only the compiled record, and reports how many it hit."""
+    manifest.mark_compiled(["chatgpt/a.md", "chatgpt/b.md"])
+
+    cleared = manifest.unmark_compiled(["chatgpt/a.md", "chatgpt/never-compiled.md"])
+
+    assert cleared == 1  # only the path that was actually compiled
+    assert manifest.get_compiled_raw_paths() == {"chatgpt/b.md"}
+
+
+def test_unmark_compiled_empty_list_is_noop(manifest: Manifest) -> None:
+    assert manifest.unmark_compiled([]) == 0
+
+
 def test_page_cache_round_trip(manifest: Manifest) -> None:
     """A put_cached_page entry should be returned verbatim by get_cached_page."""
     manifest.put_cached_page(

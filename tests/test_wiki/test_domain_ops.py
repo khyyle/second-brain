@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 
 import yaml
@@ -12,6 +13,7 @@ from second_brain.wiki.domain_ops import (
     merge_domains,
     rename_domain,
 )
+from second_brain.wiki.repo import list_commits
 from second_brain.wiki.schema import register_domains, write_default_schema
 
 
@@ -73,6 +75,18 @@ def test_list_surfaces_unregistered_used_domain(tmp_path: Path) -> None:
 
     assert infos["uncharted"].page_count == 1
     assert infos["uncharted"].in_schema is False
+
+
+def test_rename_checkpoints_the_edit_into_wiki_git(tmp_path: Path) -> None:
+    wiki = _wiki(tmp_path)
+    _write_page(wiki, "concepts", "vectors", ["math"])
+    for args in (["init"], ["config", "user.email", "t@t"], ["config", "user.name", "t"]):
+        subprocess.run(["git", *args], cwd=wiki, check=True, capture_output=True)
+
+    rename_domain(wiki, "math", "mathematics")
+
+    subjects = [c.subject for c in list_commits(wiki, limit=3)]
+    assert subjects[0] == "auto: domain edit (math -> mathematics)"
 
 
 def test_rename_updates_pages_schema_and_views(tmp_path: Path) -> None:
