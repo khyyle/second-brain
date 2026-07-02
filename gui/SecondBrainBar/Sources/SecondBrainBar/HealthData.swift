@@ -3,12 +3,14 @@ import Foundation
 /// One flagged item within a category. `page` is the wiki page stem to open, or
 /// nil when the item is not page-backed (a gap points at a page that does not
 /// exist). `detail` is an optional note shown beside it, e.g. a gap's reference
-/// count.
+/// count. `pair` is a second page stem for items that flag a pair of pages
+/// (a possible duplicate), rendered as its own clickable line.
 struct HealthItem: Identifiable {
     let id = UUID()
     let text: String
     let page: String?
     let detail: String?
+    let pair: String?
 }
 
 /// A single check and the items it flagged. `section` places it under either
@@ -33,12 +35,9 @@ struct WikiHealth {
     }
 }
 
-/// Reads wiki health via `second-brain health --json`, so the link-graph and
-/// staleness checks stay defined once on the Python side instead of being
-/// re-implemented here.
 enum HealthData {
     /// Run the health check. Call off the main thread (this spawns a
-    /// subprocess). Returns nil when the command can't run.
+    /// subprocess).
     static func load(config: AppConfig) -> WikiHealth? {
         guard let repo = config.repoDir,
               let output = PipelineRunner.runManagedCapturing(
@@ -60,7 +59,8 @@ enum HealthData {
                 return HealthItem(
                     text: text,
                     page: item["page"] as? String,
-                    detail: item["detail"] as? String
+                    detail: item["detail"] as? String,
+                    pair: item["pair"] as? String
                 )
             }
             return HealthCategory(

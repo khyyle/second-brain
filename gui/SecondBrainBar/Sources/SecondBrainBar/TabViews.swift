@@ -1157,21 +1157,46 @@ private struct DomainRow: View {
     }
 }
 
+/// A duplicate pair the user chose to merge
+private struct PendingMerge {
+    let pageA: String
+    let pageB: String
+}
+
 /// The compiled wiki's overview: growth opportunities to improve it, then its
-/// structural health, both from `second-brain health`. A check with items
-/// expands inline to the pages it flagged, which open on click. There are no
-/// action buttons — every fix lands on the next build, which is the Build tab.
+/// structural health, both from `second-brain health`.
 struct OverviewTab: View {
     let config: AppConfig
     @State private var health: WikiHealth?
     @State private var loaded = false
     @State private var unavailable = false
+    @State private var merging: PendingMerge?
 
     var body: some View {
         VStack(spacing: 1) {
             content
         }
         .onAppear(perform: refresh)
+        .alert("Merge duplicates", isPresented: mergePresented) {
+            if let merge = merging {
+                Button("Keep '\(merge.pageA)'", role: .destructive) {
+                    performMerge(dest: merge.pageA, source: merge.pageB)
+                }
+                Button("Keep '\(merge.pageB)'", role: .destructive) {
+                    performMerge(dest: merge.pageB, source: merge.pageA)
+                }
+            }
+            Button("Cancel", role: .cancel) { merging = nil }
+        } message: {
+            Text(
+                "The kept page will absorb the other's links and sources. The retired page "
+                    + "will be deleted--its text is not copied, so move anything worth keeping first."
+            )
+        }
+    }
+
+    private var mergePresented: Binding<Bool> {
+        Binding(get: { merging != nil }, set: { if !$0 { merging = nil } })
     }
 
     @ViewBuilder
@@ -1188,6 +1213,8 @@ struct OverviewTab: View {
                 has not written up yet, ranked by how often they are referenced.
                 Not linked from any page — pages with no incoming links. Add \
                 a reference from a related note to make them easier to discover.
+                Possible duplicates — pairs of pages that cover very similar \
+                material.
                 """,
                 categories: health.categories(in: "improve")
             )
@@ -1197,7 +1224,6 @@ struct OverviewTab: View {
                 Oversized pages — over 4000 words; candidates to split.
                 Stub pages — under 150 words.
                 Missing frontmatter — no title, type, or domains.
-                Stale pages — source changed since the last build.
                 """,
                 categories: health.categories(in: "health")
             )
@@ -1211,7 +1237,13 @@ struct OverviewTab: View {
         if !categories.isEmpty {
             SectionHeader(title: title, help: help)
             ForEach(categories) { category in
-                HealthCategoryRow(category: category, onOpen: open)
+                let actionable = category.key == "possible_duplicates"
+                HealthCategoryRow(
+                    category: category,
+                    onOpen: open,
+                    onDismiss: actionable ? dismiss : nil,
+                    onMerge: actionable ? { merging = PendingMerge(pageA: $0, pageB: $1) } : nil
+                )
             }
         }
     }
@@ -1225,6 +1257,27 @@ struct OverviewTab: View {
                 openInDefaultApp(url)
                 return
             }
+        }
+    }
+
+    /// Record that a suggested pair is not a duplicate, then reload so the
+    /// next closest pair takes its slot.
+    private func dismiss(_ item: HealthItem) {
+        guard let page = item.page, let pair = item.pair else { return }
+        runWikiCommand("wiki dismiss \(page) \(pair)")
+    }
+
+    /// Apply the confirmed merge
+    private func performMerge(dest: String, source: String) {
+        merging = nil
+        runWikiCommand("wiki merge \(dest) \(source)")
+    }
+
+    private func runWikiCommand(_ command: String) {
+        guard let repo = config.repoDir else { return }
+        DispatchQueue.global(qos: .userInitiated).async {
+            _ = PipelineRunner.runManagedSync(repoDir: repo, command: command)
+            DispatchQueue.main.async { refresh() }
         }
     }
 
@@ -1254,6 +1307,8 @@ struct OverviewTab: View {
 private struct HealthCategoryRow: View {
     let category: HealthCategory
     let onOpen: (String) -> Void
+    var onDismiss: ((HealthItem) -> Void)? = nil
+    var onMerge: ((String, String) -> Void)? = nil
     @State private var expanded = false
     @State private var hovering = false
 
@@ -1265,10 +1320,10 @@ private struct HealthCategoryRow: View {
         switch category.key {
         case "gap_links": return "Concepts your pages reference but you haven't written yet."
         case "orphan_pages": return "Pages nothing links to yet — reachable by search, easy to miss."
-        case "oversized_pages": return "Pages over 4000 words — candidates to split."
+        case "possible_duplicates": return "Pairs of pages covering very similar material."
+        case "oversized_pages": return "Pages over 4000 words."
         case "undersized_pages": return "Pages under 150 words."
         case "missing_frontmatter": return "Pages missing a title, type, or domains."
-        case "stale_pages": return "Pages whose source changed since the last build."
         default: return category.label
         }
     }
@@ -1278,7 +1333,7 @@ private struct HealthCategoryRow: View {
             row
             if expanded {
                 PaginatedList(items: category.items) { item in
-                    HealthItemRow(item: item, onOpen: onOpen)
+                    HealthItemRow(item: item, onOpen: onOpen, onDismiss: onDismiss, onMerge: onMerge)
                 }
             }
         }
@@ -1311,46 +1366,89 @@ private struct HealthCategoryRow: View {
     }
 }
 
-/// One flagged item under an expanded check. Page-backed items open on click;
-/// a broken link points at a missing page, so it stays inert text.
+/// One flagged item under an expanded check
 private struct HealthItemRow: View {
     let item: HealthItem
     let onOpen: (String) -> Void
+    var onDismiss: ((HealthItem) -> Void)? = nil
+    var onMerge: ((String, String) -> Void)? = nil
     @State private var hovering = false
 
     private var openable: Bool { item.page != nil }
 
     var body: some View {
-        HStack(spacing: 9) {
-            Spacer().frame(width: 12)
-            title
-            Spacer(minLength: 6)
-            if let detail = item.detail {
-                Text(detail)
-                    .font(Theme.Font.meta(9.5))
-                    .foregroundStyle(Theme.Colors.textTertiary)
+        VStack(alignment: .leading, spacing: 1) {
+            HStack(spacing: 9) {
+                Spacer().frame(width: 12)
+                title(item.text, page: item.page)
+                Spacer(minLength: 6)
+                if let onDismiss {
+                    TrailingReserve(hovering: hovering) {
+                        detailText
+                    } hover: {
+                        HStack(spacing: 4) {
+                            mergeIcon
+                            HoverIcon(systemName: "xmark.circle.fill",
+                                      help: "Dismiss") {
+                                onDismiss(item)
+                            }
+                        }
+                    }
+                } else {
+                    detailText
+                }
+            }
+            .contentShape(Rectangle())
+            .onTapGesture { if let page = item.page { onOpen(page) } }
+            if let pair = item.pair {
+                HStack(spacing: 9) {
+                    Spacer().frame(width: 22)
+                    title("+ \(pair)", page: pair)
+                    Spacer(minLength: 6)
+                }
+                .contentShape(Rectangle())
+                .onTapGesture { onOpen(pair) }
             }
         }
         .modifier(RowBackground(hovering: hovering && openable))
-        .contentShape(Rectangle())
-        .onTapGesture { if let page = item.page { onOpen(page) } }
         .onHover { hovering = $0 }
         .animation(.easeInOut(duration: 0.12), value: hovering)
     }
 
-    // Page-backed items open on click, so they carry the openable underline;
-    // an item with no page (a broken link's missing target) stays inert text.
+    // Direction is chosen in the confirmation alert ("Keep A" / "Keep B"),
+    // so the icon itself is a plain hover button like dismiss.
     @ViewBuilder
-    private var title: some View {
-        let base = Text(item.text)
+    private var mergeIcon: some View {
+        if let onMerge, let page = item.page, let pair = item.pair {
+            HoverIcon(systemName: "arrow.merge",
+                      help: "Merge") {
+                onMerge(page, pair)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var detailText: some View {
+        if let detail = item.detail {
+            Text(detail)
+                .font(Theme.Font.meta(9.5))
+                .foregroundStyle(Theme.Colors.textTertiary)
+        }
+    }
+
+    // Page-backed lines open on click, so they carry the openable underline;
+    // a line with no page (a broken link's missing target) stays inert text.
+    @ViewBuilder
+    private func title(_ text: String, page: String?) -> some View {
+        let base = Text(text)
             .font(Theme.Font.body(11))
-            .foregroundStyle(openable ? Theme.Colors.textSecondary : Theme.Colors.textTertiary)
+            .foregroundStyle(page != nil ? Theme.Colors.textSecondary : Theme.Colors.textTertiary)
             .lineLimit(1)
             .truncationMode(.middle)
-        if openable {
-            base.openableTitle(item.text)
+        if page != nil {
+            base.openableTitle(text)
         } else {
-            base.help(item.text)
+            base.help(text)
         }
     }
 }
