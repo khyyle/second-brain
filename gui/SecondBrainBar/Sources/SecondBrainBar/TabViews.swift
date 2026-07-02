@@ -1219,7 +1219,7 @@ struct OverviewTab: View {
     /// Open a flagged page by stem; the flat wiki keeps stems unique, so the
     /// first content folder that has it wins.
     private func open(_ stem: String) {
-        for dir in ["concepts", "problems", "projects", "insights", "syntheses"] {
+        for dir in ["concepts", "problems", "projects", "insights"] {
             let url = config.wikiRoot.appending(path: "\(dir)/\(stem).md")
             if FileManager.default.fileExists(atPath: url.path) {
                 openInDefaultApp(url)
