@@ -14,12 +14,12 @@ from typing import NamedTuple
 import anthropic
 
 from second_brain.compilation.agent import (
-    COMPILATION_SYSTEM_PROMPT,
     EXPLORE_TOOLS_GUIDANCE,
     WIKI_TOOLS,
     WikiToolExecutor,
     build_compilation_prompt,
     build_source_block,
+    build_system_prompt,
     compact_history,
     explore_tool_schemas,
 )
@@ -153,6 +153,11 @@ def _build_work_units(config: Config, raw_dir: Path, new_sources: list[str]) -> 
         clusters = [[source] for source in new_sources]
 
     return _split_oversized(clusters, config.clustering.max_sources_per_run)
+
+
+def _resolve_compile_mode(config: Config, unit: list[str]) -> str:
+    source = config.sources.get(unit[0].split("/", 1)[0])
+    return source.compile_mode if source else "synthesize"
 
 
 def find_new_sources(config: Config, manifest: Manifest) -> list[str]:
@@ -334,6 +339,7 @@ def run_compilation(
                         started_at=started,
                         base_cost=cumulative_cost,
                         progress=(index, total),
+                        compile_mode=_resolve_compile_mode(config, unit),
                     )
                 except Exception:
                     # A transient failure (rate limit, network, an API call
@@ -419,6 +425,7 @@ def _run_agent(
     started_at: str,
     base_cost: float = 0.0,
     progress: tuple[int, int] | None = None,
+    compile_mode: str = "synthesize",
 ) -> RunResult:
     """
     Invoke the compilation agent via the Anthropic API.
@@ -446,6 +453,9 @@ def _run_agent(
     progress: tuple[int, int] | None
         ``(index, total)`` of this file within the Build, for the i/n
         readout.
+    compile_mode: str
+        One of ``second_brain.config.COMPILE_MODES``, selects the system
+        prompt variant.
 
     Returns
     -------
@@ -491,13 +501,14 @@ def _run_agent(
     # gaps between groups, and the per-unit source at the default 5m TTL (it
     # changes each unit). Only Anthropic honors cache_control; DeepSeek caches
     # prefixes automatically.
+    system_text = build_system_prompt(compile_mode)
     system: str | list[dict]
     tools = [dict(t) for t in (*WIKI_TOOLS, *explore_schemas)]
     if profile.prompt_caching:
         system = [
             {
                 "type": "text",
-                "text": COMPILATION_SYSTEM_PROMPT,
+                "text": system_text,
                 "cache_control": {"type": "ephemeral", "ttl": "1h"},
             }
         ]
@@ -505,7 +516,7 @@ def _run_agent(
         if len(source_block) // 4 >= profile.min_cacheable_tokens:
             user_content[-1]["cache_control"] = {"type": "ephemeral"}
     else:
-        system = COMPILATION_SYSTEM_PROMPT
+        system = system_text
 
     messages: list[dict] = [{"role": "user", "content": user_content}]
 

@@ -120,6 +120,52 @@ updated and end your turn.
 """
 
 
+# Appended to the system prompt for material the user deliberately
+# kept, where every source must leave a citable footprint rather
+# than being skipped as already covered.
+REFERENCE_MODE_ADDENDUM = """\
+
+## Reference sources (this run)
+The sources in this run are reference material the user chose to keep
+(papers, lecture notes). In addition to everything above:
+- Every source must land in the wiki. Its central contribution gets a page:
+  create one named after the method or idea, or extend the existing page
+  that covers it. Never skip a source as "already covered" — if the wiki
+  already covers the idea, add this source's specific formulation, findings,
+  and numbers to those pages so the source is cited there.
+- Type the central page a concept. Reserve project for things the user
+  builds themselves; a separate insight page is optional, not expected.
+- Derive the method in the page's own scope: assumptions, formulation, the
+  actual math. Link prerequisite concepts.
+- Compress results, discussion, and limitations to key numbers and
+  takeaways. Limitations and future work may leave gap links.
+- Record authors and year in frontmatter when the source names them.
+- A reference page may run long; up to ~4000 words is fine when the
+  derivation warrants it.
+"""
+
+
+def build_system_prompt(compile_mode: str) -> str:
+    """Assemble the system prompt for a compile run.
+
+    The core prompt is the synthesize behavior; reference mode appends its
+    addendum so the two modes share one source of truth.
+
+    Parameters
+    ----------
+    compile_mode: str
+        One of ``second_brain.config.COMPILE_MODES``.
+
+    Returns
+    -------
+    str
+        The full system prompt.
+    """
+    if compile_mode == "reference":
+        return COMPILATION_SYSTEM_PROMPT + REFERENCE_MODE_ADDENDUM
+    return COMPILATION_SYSTEM_PROMPT
+
+
 def build_compilation_prompt(new_sources: list[str]) -> str:
     """
     Build the per-run task message, detailing sources and start sequence.
@@ -292,6 +338,12 @@ WIKI_TOOLS = [
                 },
                 "difficulty": {"type": "string", "description": "problem: difficulty."},
                 "status": {"type": "string", "description": "project: status."},
+                "authors": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Source authors, when the source names them.",
+                },
+                "year": {"type": "integer", "description": "Source publication year."},
                 "body": {
                     "type": "string",
                     "description": "Markdown body only (no frontmatter block).",
@@ -352,6 +404,12 @@ WIKI_TOOLS = [
                 },
                 "difficulty": {"type": "string", "description": "problem: difficulty."},
                 "status": {"type": "string", "description": "project: status."},
+                "authors": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Source authors, when the source names them.",
+                },
+                "year": {"type": "integer", "description": "Source publication year."},
             },
             "required": ["slug"],
         },
@@ -698,6 +756,8 @@ class WikiToolExecutor:
             "key_takeaways",
             "difficulty",
             "status",
+            "authors",
+            "year",
         ):
             value = args.get(key)
             if not value:

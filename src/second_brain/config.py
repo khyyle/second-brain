@@ -27,6 +27,9 @@ def _resolve_path(v: str | Path) -> Path:
     return Path(v).expanduser().resolve()
 
 
+COMPILE_MODES = ("synthesize", "reference")
+
+
 class SourceConfig(BaseModel):
     """
     A single watched source directory and its ingestion settings.
@@ -42,6 +45,10 @@ class SourceConfig(BaseModel):
     force_parse_lane: str | None, default=None
         Pin every PDF to "chandra" or "docling" instead of per-page
         routing; None uses automatic routing.
+    compile_mode: str, default="synthesize"
+        How this source's files compile. "synthesize" distills freely and
+        may skip material the wiki already covers; "reference" additionally
+        guarantees each source a cited page with its methods derived.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -50,6 +57,7 @@ class SourceConfig(BaseModel):
     enabled: bool = True
     file_types: tuple[str, ...] = ("pdf",)
     force_parse_lane: str | None = None
+    compile_mode: str = "synthesize"
 
     @field_validator("path", mode="before")
     @classmethod
@@ -61,6 +69,13 @@ class SourceConfig(BaseModel):
     def _validate_lane(cls, v: str | None) -> str | None:
         if v is not None and v not in ("chandra", "docling"):
             raise ValueError(f"force_parse_lane must be 'chandra', 'docling', or null — got '{v}'")
+        return v
+
+    @field_validator("compile_mode")
+    @classmethod
+    def _validate_mode(cls, v: str) -> str:
+        if v not in COMPILE_MODES:
+            raise ValueError(f"compile_mode must be one of {COMPILE_MODES}, got '{v}'")
         return v
 
 
@@ -390,6 +405,7 @@ def _merge_user_sources(raw: dict) -> dict:
             "path": src_path,
             "enabled": entry.get("enabled", True),
             "file_types": entry.get("file_types", ["pdf", "md", "txt"]),
+            "compile_mode": entry.get("compile_mode", "synthesize"),
         }
 
     merged = dict(raw)
