@@ -2,22 +2,10 @@ data_dir: ~/second-brain
 
 # data ingest points
 sources:
-  # caltech:
-  #   path: ~/caltech
-  #   enabled: true
-  #   file_types: [pdf, md, tex]
-  # goodnotes:
-  #   path: ~/Google Drive/My Drive/Goodnotes
-  #   enabled: true
-  #   force_parse_lane: chandra
-  #   file_types: [pdf]
   chatgpt:
     path: ~/second-brain/drops/chatgpt
     enabled: true
     file_types: [json]
-  # Single general inbox. PDFs are auto-routed to the right parse lane
-  # (Docling for born-digital, Chandra for scanned/handwritten) by
-  # parsing/router.py.
   documents:
     path: ~/second-brain/drops/documents
     enabled: true
