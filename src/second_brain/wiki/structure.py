@@ -27,7 +27,7 @@ WIKILINK_KIND = "mention"
 # Every edge type that can appear in wiki_links
 LINK_KINDS = (*FRONTMATTER_EDGE_FIELDS.values(), WIKILINK_KIND)
 
-CONTENT_DIRS = ("concepts", "problems", "projects", "insights")
+CONTENT_DIRS = ("concepts", "problems", "projects", "papers", "insights")
 
 
 @dataclass

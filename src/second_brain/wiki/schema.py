@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 _SCHEMA_HEADER = (
     "# Topic Schema — the compilation agent MUST read this before writing.\n"
     "# Domains live in frontmatter metadata, NOT in folder paths.\n"
-    "# Folders are typed buckets (concepts/, problems/, projects/, insights/).\n\n"
+    "# Folders are typed buckets (concepts/, problems/, projects/, papers/, insights/).\n\n"
 )
 
 DEFAULT_SCHEMA: dict = {
@@ -57,8 +57,28 @@ DEFAULT_SCHEMA: dict = {
                 "sources",
             ],
         },
+        "paper": {
+            "description": (
+                "Academic papers — the paper's argument: problem, contribution, "
+                "key results, limitations; its concepts live in concepts/"
+            ),
+            "directory": "papers/",
+            "frontmatter": [
+                "title",
+                "type",
+                "domains",
+                "tags",
+                "authors",
+                "year",
+                "related",
+                "sources",
+            ],
+        },
         "insight": {
-            "description": "Distilled knowledge from conversations, lectures, readings",
+            "description": (
+                "Realizations synthesized across sources or from the user's own "
+                "thinking; a single paper's takeaways belong on its papers/ page"
+            ),
             "directory": "insights/",
             "frontmatter": [
                 "title",

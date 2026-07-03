@@ -8,7 +8,7 @@ The wiki is the `wiki/` subtree of the vault root. It contains plain Markdown, s
 
 ```
 wiki/
-├── concepts/  problems/  projects/  insights/   content pages — the graph nodes
+├── concepts/  problems/  projects/  papers/  insights/   content pages — the graph nodes
 ├── _meta/
 │   └── topic_schema.yaml      content types, the domain vocabulary, and rules
 └── _views/                    generated browse aids
@@ -18,10 +18,12 @@ wiki/
 
 ### Pages are a flat, relational graph
 
-The four content directories are **typed buckets** — they sort a page by what it *is* (a concept, a problem, a project, an insight), nothing more. These are intentionally flat, and do not contain subfolders. Topical organization instead comes from two places in *each* page:
+The five content directories are **typed buckets** that sort a page by what it *is* (a concept, a problem, a project, a paper, an insight), nothing more. These are intentionally flat, and do not contain subfolders; topical organization instead comes from two places in *each* page:
 
 - **Frontmatter `domains`** — a list, so one page can belong to several domains (e.g. a page is both `mathematics` and `computer-science`). A folder could only file it under one; the list cannot be expressed as a path. This is why domains are metadata, not directories.
 - **`[[wikilinks]]` and backlinks** — the relationships between pages. The value of the wiki is this link graph, which is independent of where a file sits.
+
+The buckets were chosen to mirror the hierarchy of knowledge, minimizing redundancy and making linkage powerful. Concepts are axiomatic or foundational knowledge that the other buckets reference. Problems and projects are applications and realizations of that knowledge; holding them separately lets them refer to a concept without rewriting it. Papers are cross-cutting, both building upon concepts and feeding novel contributions back into them; they are given their own bucket so that a paper's argument (e.g. its problem, contribution, and key results) stays referenceable as a whole, while the methods it introduces live on as concepts. Insights record realizations synthesized across sources, connections that belong to no single concept.
 
 The per-domain pages under `_views/domains/` are generated from frontmatter, so a page appears under every domain it declares. This structure avoids forcing a single home for a file, which results in a queryable, traversable, and intuitive graph structure.
 

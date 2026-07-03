@@ -28,10 +28,17 @@ source documents and compile them into a structured, interlinked wiki.
 ## Working Directory
 You operate inside a wiki directory with this structure:
 - _meta/topic_schema.yaml — defines content types, the domain vocabulary, and rules
-- concepts/ — what things ARE (theory, definitions, math)
-- problems/ — practice problems, exercises, worked examples
-- projects/ — things being BUILT (systems, experiments)
-- insights/ — distilled knowledge from conversations, lectures
+- concepts/ — what things ARE: definitions, theory, derivations. The
+  axiomatic layer every other bucket links against.
+- problems/ — worked examples, exercises, and drills that apply concepts.
+- projects/ — things the USER built or ran: their systems, experiments,
+  code. A system described in a paper is not a project; it belongs on that
+  paper's page.
+- papers/ — one page per academic paper: its argument (problem,
+  contribution, key results, limitations). The methods a paper introduces
+  or uses live in concepts/.
+- insights/ — realizations that span sources or come from the user's own
+  thinking. A single paper's takeaways belong on its papers/ page.
 - raw/ — the ingested source documents to read (read-only). Reference
   them with their full `raw/...` path, exactly as listed in the task.
 
@@ -43,10 +50,10 @@ You operate inside a wiki directory with this structure:
    sources again to see their content.
 3. Search existing wiki pages for related content
 4. For each piece of knowledge, decide:
-   a. Content type (concept / problem / project / insight)
+   a. Content type (concept / problem / project / paper / insight)
    b. Does a related page exist? → update it
    c. Is this new? → create a new page in the right folder
-   d. Is a page too long (>4000 words)? → split it
+   d. Is a page bloated by separable ideas? → split it into linked pages
 5. Write or update each page per the Fields and Rules below
 
 ## Writing pages
@@ -67,7 +74,7 @@ accents, and stray dashes, so an imperfect one still resolves.
 ## Fields you choose
 write_page assembles the frontmatter from the fields you pass. On every page:
 - title: human-readable string
-- type: concept | problem | project | insight
+- type: concept | problem | project | paper | insight
 - domains: list of broad subject areas
 - tags: list of narrow topics
 
@@ -75,12 +82,21 @@ Plus the fields specific to its type:
 - concept: prerequisites, related
 - problem: difficulty, concepts_tested
 - project: status, concepts_used
+- paper: authors, year, related
 - insight: key_takeaways
 
 The relationship fields (prerequisites, related, concepts_tested,
 concepts_used) are lists of [[wikilinks]].
 
 ## Rules
+- Every academic paper gets a papers/ page: the problem, why prior
+  approaches fall short, the contribution as links to the concepts it
+  introduces, key results with numbers, and limitations. Derivations go in
+  concept pages. This holds even when the wiki already covers the ideas —
+  extend the covering pages with the paper's findings so they cite it; a
+  paper is never skipped as already covered. If the title collides with an
+  existing page name, disambiguate with author or year — the title "NICE
+  (Dinh 2015)" gives the identifier [[nice-dinh-2015]].
 - Cross-reference with [[wikilinks]]. Add a display label when the prose
   wants one, as in [[dot-product|dot product]].
 - A linked concept does not need to have a page yet, whether the link sits in
@@ -105,7 +121,11 @@ concepts_used) are lists of [[wikilinks]].
 - Do NOT rebuild index.md or structural metadata--it runs separately
 
 ## Quality Standards
-- Pages should be 500-3000 words
+- Knowledge stays dense: write derivations and reasoning out in full, and
+  never summarize them away. Length follows content, most pages land
+  between 500 and 3000 words, but a genuinely atomic derivation/explanation may run
+  long. Split only when a page bundles separable ideas, never for length
+  alone.
 - Synthesize across sources, don't just copy
 - Resolve contradictions between sources when possible
 - Preserve detail from the source material (e.g. mathematical precision)
@@ -118,52 +138,6 @@ sources, and do not keep "improving" existing pages beyond what the new
 sources warrant. When done, briefly summarize what you created or
 updated and end your turn.
 """
-
-
-# Appended to the system prompt for material the user deliberately
-# kept, where every source must leave a citable footprint rather
-# than being skipped as already covered.
-REFERENCE_MODE_ADDENDUM = """\
-
-## Reference sources (this run)
-The sources in this run are reference material the user chose to keep
-(papers, lecture notes). In addition to everything above:
-- Every source must land in the wiki. Its central contribution gets a page:
-  create one named after the method or idea, or extend the existing page
-  that covers it. Never skip a source as "already covered" — if the wiki
-  already covers the idea, add this source's specific formulation, findings,
-  and numbers to those pages so the source is cited there.
-- Type the central page a concept. Reserve project for things the user
-  builds themselves; a separate insight page is optional, not expected.
-- Derive the method in the page's own scope: assumptions, formulation, the
-  actual math. Link prerequisite concepts.
-- Compress results, discussion, and limitations to key numbers and
-  takeaways. Limitations and future work may leave gap links.
-- Record authors and year in frontmatter when the source names them.
-- A reference page may run long; up to ~4000 words is fine when the
-  derivation warrants it.
-"""
-
-
-def build_system_prompt(compile_mode: str) -> str:
-    """Assemble the system prompt for a compile run.
-
-    The core prompt is the synthesize behavior; reference mode appends its
-    addendum so the two modes share one source of truth.
-
-    Parameters
-    ----------
-    compile_mode: str
-        One of ``second_brain.config.COMPILE_MODES``.
-
-    Returns
-    -------
-    str
-        The full system prompt.
-    """
-    if compile_mode == "reference":
-        return COMPILATION_SYSTEM_PROMPT + REFERENCE_MODE_ADDENDUM
-    return COMPILATION_SYSTEM_PROMPT
 
 
 def build_compilation_prompt(new_sources: list[str]) -> str:
@@ -227,7 +201,7 @@ def build_source_block(sources: list[str], raw_dir: Path) -> str:
 
 
 # Content types the agent may create, each mapping to its `<type>s/` directory.
-_PAGE_TYPES = ("concept", "problem", "project", "insight")
+_PAGE_TYPES = ("concept", "problem", "project", "paper", "insight")
 
 # Tool definitions in Anthropic's tool-use schema format.
 # These are passed to the API as the `tools` parameter and define
@@ -744,6 +718,14 @@ class WikiToolExecutor:
                 f"Error: {rel_path} already exists. Edit its body with edit_file "
                 "rather than recreating it."
             )
+        # Stems are unique across all content folders (links resolve by stem
+        # alone), so a new page may not reuse another folder's name.
+        taken = self._content_page_path(slug)
+        if taken is not None:
+            return (
+                f"Error: the name '{slug}' is taken by {taken}. Pick a distinct "
+                "title — for a paper, add the author or year."
+            )
 
         frontmatter: dict = {"title": title, "type": page_type}
         for key in (
@@ -946,7 +928,7 @@ class WikiToolExecutor:
             return "\n".join(sorted(matches)) if matches else "No matches found"
 
         matches = []
-        for content_dir in ("concepts", "problems", "projects", "insights", "_meta"):
+        for content_dir in (*CONTENT_DIRS, "_meta"):
             dir_path = self._wiki_dir / content_dir
             if not dir_path.exists():
                 continue

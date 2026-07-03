@@ -512,10 +512,6 @@ private struct WatchedRow: View {
                     .lineLimit(1).truncationMode(.middle)
             }
             Spacer(minLength: 6)
-            Toggle("", isOn: $folder.enabled)
-                .labelsHidden().toggleStyle(.switch).tint(Theme.Colors.accent)
-                .scaleEffect(0.85)
-                .help("Include this folder in scheduled runs")
             Button(action: onRemove) {
                 Image(systemName: "xmark.circle.fill")
                     .font(.system(size: 11))

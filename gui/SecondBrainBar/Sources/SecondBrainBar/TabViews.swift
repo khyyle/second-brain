@@ -672,7 +672,7 @@ private struct StagedHeader: View {
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(Theme.Colors.textTertiary)
                     HelpButton(text: "Ingested files that will be compiled when build is selected. 'Group' (chats only) "
-                        + "bundles related conversation into one compilation to avoid duplicate calls/pages. "
+                        + "bundles related conversations into one compilation to avoid duplicate calls/pages. "
                         + "Cost is a rough upper bound.")
                 }
                 if !running, sourceCount > 0 {
@@ -1305,7 +1305,7 @@ struct OverviewTab: View {
     /// Open a flagged page by stem; the flat wiki keeps stems unique, so the
     /// first content folder that has it wins.
     private func open(_ stem: String) {
-        for dir in ["concepts", "problems", "projects", "insights"] {
+        for dir in ["concepts", "problems", "projects", "papers", "insights"] {
             let url = config.wikiRoot.appending(path: "\(dir)/\(stem).md")
             if FileManager.default.fileExists(atPath: url.path) {
                 openInDefaultApp(url)
