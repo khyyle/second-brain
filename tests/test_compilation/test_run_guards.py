@@ -160,7 +160,7 @@ def test_build_stops_when_cost_cap_reached(
 def test_exhausted_unit_is_deferred_not_compiled(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A run that never converges parks its unit and the build moves on."""
+    """A run that never finishes parks its unit and the build moves on."""
     config = _build_config(tmp_path)
     manifest = Manifest(config.manifest_db_path)
 

@@ -34,6 +34,8 @@ Once a grouping exists, the Build tab shows it. Each cluster is an expandable ro
 
 When the plan looks right, "Build wiki" compiles it. You can "Stop" mid-build: pages finished so far are kept, and the conversation in progress is rolled back cleanly so the next build redoes it from scratch.
 
+If a source can't be compiled cleanly (e.g., the agent runs away without finishing, or the source is too large for the model to read in one pass)  it is rolled back and set aside instead of left half-written showing a "Set aside" badge with the reason. Failed sources can be recompiled via the retry button which marks them ready for compilation again. Sources that are too large to compiled cannot be retried and must be split into smaller, more digestible files first.
+
 ## Reading what you built
 
 The wiki is plain Markdown under `~/second-brain/wiki/`, so the natural way to read it is to open that folder as an Obsidian vault. "Reveal" in the status line opens the vault in Finder.
