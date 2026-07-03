@@ -7,7 +7,9 @@ import os
 import shutil
 import subprocess
 import threading
+from enum import Enum
 from pathlib import Path
+from typing import NamedTuple
 
 import anthropic
 
@@ -39,6 +41,19 @@ class MissingAPIKeyError(RuntimeError):
 # NOTE: provider limits are Opus/Sonnet 128K, Haiku 64K, DeepSeek V4 ~384K.
 _MAX_OUTPUT_TOKENS_PER_TURN = 16384
 
+
+class RunOutcome(Enum):
+    COMPLETED = "completed"
+    EXHAUSTED = "exhausted"
+    COST_CAPPED = "cost_capped"
+
+
+class RunResult(NamedTuple):
+    cost: float
+    outcome: RunOutcome
+    reason: str = ""
+
+
 # Holding folder under raw/ for skipped sources: kept out of the build
 # but recoverable until a build finalizes the curation.
 SKIPPED_DIRNAME = ".skipped"
@@ -69,8 +84,8 @@ def _purge_skipped(raw_dir: Path) -> None:
 def _split_oversized(clusters: list[list[str]], max_size: int) -> list[list[str]]:
     """Split clusters larger than ``max_size`` into bounded batches.
 
-    A single agent run has a bounded token budget, so any cluster larger
-    than the cap is divided into batches that each fit within one run.
+    A single agent run stays a bounded, coherent unit, so any cluster
+    larger than the cap is divided into batches that each fit one run.
 
     Parameters
     ----------
@@ -144,6 +159,9 @@ def find_new_sources(config: Config, manifest: Manifest) -> list[str]:
     """
     Find raw source files that haven't been compiled yet.
 
+    Deferred sources (a prior run ended without completing) are excluded,
+    so scheduled builds don't retry them unattended.
+
     Parameters
     ----------
     config: Config
@@ -161,6 +179,7 @@ def find_new_sources(config: Config, manifest: Manifest) -> list[str]:
         return []
 
     compiled = manifest.get_compiled_raw_paths()
+    deferred = manifest.get_deferred_sources()
     new_sources: list[str] = []
 
     for md_file in raw_dir.rglob("*.md"):
@@ -168,7 +187,7 @@ def find_new_sources(config: Config, manifest: Manifest) -> list[str]:
         if any(part.startswith(".") for part in relative.parts):
             continue  # skip the .skipped/ holding folder and other dotfiles
         rel = str(relative)
-        if rel not in compiled:
+        if rel not in compiled and rel not in deferred:
             new_sources.append(rel)
 
     return sorted(new_sources)
@@ -307,7 +326,7 @@ def run_compilation(
                     cost_usd=cumulative_cost,
                 )
                 try:
-                    cost = _run_agent(
+                    result = _run_agent(
                         config,
                         wiki_dir,
                         raw_dir,
@@ -333,10 +352,34 @@ def run_compilation(
                     logger.info("Stopped during %s — rolled back partial work", ", ".join(unit))
                     was_stopped = True
                     break
-                cumulative_cost += cost
-                manifest.mark_compiled(unit)
-                _git_commit(wiki_dir)  # commit each completed group
-                compiled_count += len(unit)
+                cumulative_cost += result.cost
+                if result.outcome is RunOutcome.COMPLETED:
+                    manifest.mark_compiled(unit)
+                    _git_commit(wiki_dir)  # commit each completed group
+                    compiled_count += len(unit)
+                elif result.outcome is RunOutcome.COST_CAPPED:
+                    # The build's budget is spent so discard this group's
+                    # partial pages and leave everything else staged. The
+                    # next build starts with a fresh budget and retries.
+                    _git_restore(wiki_dir)
+                    logger.info(
+                        "Cost cap reached during %s — rolled back partial work; "
+                        "%d group(s) left staged",
+                        ", ".join(unit),
+                        total - index,
+                    )
+                    break
+                else:
+                    # The run ended without completing (e.g. never converged).
+                    # Retrying unattended would likely fail the same way and
+                    # re-bill, so park the group where the user can see why.
+                    _git_restore(wiki_dir)
+                    manifest.defer_sources(unit, result.reason)
+                    logger.warning(
+                        "Deferred %s: %s — rolled back partial work",
+                        ", ".join(unit),
+                        result.reason,
+                    )
         finally:
             stop_heartbeat.set()
             heartbeat.join(timeout=2.0)
@@ -376,7 +419,7 @@ def _run_agent(
     started_at: str,
     base_cost: float = 0.0,
     progress: tuple[int, int] | None = None,
-) -> float:
+) -> RunResult:
     """
     Invoke the compilation agent via the Anthropic API.
 
@@ -398,15 +441,17 @@ def _run_agent(
         ISO timestamp of the overall Build run (for elapsed display).
     base_cost: float
         Cost already spent by earlier files in this Build, so the
-        heartbeat shows a cumulative figure.
+        heartbeat shows a cumulative figure and the build-level cost cap
+        can bind mid-run.
     progress: tuple[int, int] | None
         ``(index, total)`` of this file within the Build, for the i/n
         readout.
 
     Returns
     -------
-    float
-        The USD cost of this single agent run.
+    RunResult
+        The run's USD cost, how it ended, and--for runs that ended
+        without completing--a human-readable reason.
     """
     from second_brain.status import stop_requested, write_status
 
@@ -465,12 +510,14 @@ def _run_agent(
     messages: list[dict] = [{"role": "user", "content": user_content}]
 
     max_iterations = config.compilation.max_iterations
-    token_budget = config.compilation.token_budget_per_run
+    cost_cap = config.compilation.max_cost_per_build_usd
     total_input_tokens = 0
     total_output_tokens = 0
     total_cache_read_tokens = 0
     total_cache_write_tokens = 0
     cur, tot = progress if progress else (0, 0)
+    outcome = RunOutcome.EXHAUSTED
+    outcome_reason = f"did not converge in {max_iterations} iterations"
 
     for iteration in range(max_iterations):
         # Honor a cancel between turns (the costly call is below), so a
@@ -495,10 +542,6 @@ def _run_agent(
         total_output_tokens += response.usage.output_tokens
         total_cache_read_tokens += getattr(response.usage, "cache_read_input_tokens", 0) or 0
         total_cache_write_tokens += getattr(response.usage, "cache_creation_input_tokens", 0) or 0
-        # The budget is a runaway-loop guard on newly processed tokens.
-        # ``input_tokens`` already excludes cache reads, so a large cached
-        # source re-sent each turn does not inflate it.
-        uncached_total = total_input_tokens + total_output_tokens
         cost = profile.estimate_cost(
             total_input_tokens,
             total_output_tokens,
@@ -514,28 +557,32 @@ def _run_agent(
             cost_usd=base_cost + cost,
         )
         logger.debug(
-            "Iteration %d: +%d in (+%d cached), +%d out (cumulative %d / budget %d)",
+            "Iteration %d: +%d in (+%d cached), +%d out (~$%.2f)",
             iteration + 1,
             response.usage.input_tokens,
             getattr(response.usage, "cache_read_input_tokens", 0) or 0,
             response.usage.output_tokens,
-            uncached_total,
-            token_budget,
+            cost,
         )
 
         messages.append({"role": "assistant", "content": response.content})
 
         if response.stop_reason == "end_turn":
+            outcome = RunOutcome.COMPLETED
+            outcome_reason = ""
             logger.info("Agent completed after %d iterations", iteration + 1)
             break
 
-        # Stop before the next turn once over budget. Checked after appending
-        # the assistant turn so work already done stays on disk.
-        if uncached_total >= token_budget:
+        # Stop before the next turn once the build's spend ceiling is hit.
+        # The caller rolls this unit back, so stopping here only avoids
+        # paying for further turns.
+        if cost_cap > 0 and base_cost + cost >= cost_cap:
+            outcome = RunOutcome.COST_CAPPED
+            outcome_reason = "build cost cap reached"
             logger.warning(
-                "Token budget exceeded (%d >= %d) after %d iterations — stopping early",
-                uncached_total,
-                token_budget,
+                "Build cost cap reached (~$%.2f >= $%.2f) after %d iterations — stopping this run",
+                base_cost + cost,
+                cost_cap,
                 iteration + 1,
             )
             break
@@ -554,6 +601,9 @@ def _run_agent(
                 )
 
         if not tool_results:
+            # Treat a turn that requested no tools but did not end cleanly
+            # as not completed.
+            outcome_reason = f"ended without completing (stop_reason={response.stop_reason})"
             break
 
         messages.append({"role": "user", "content": tool_results})
@@ -569,14 +619,15 @@ def _run_agent(
         cache_write_tokens=total_cache_write_tokens,
     )
     logger.info(
-        "Agent finished: %d changes, %d in + %d out tokens (%d cache read), ~$%.2f",
+        "Agent finished (%s): %d changes, %d in + %d out tokens (%d cache read), ~$%.2f",
+        outcome.value,
         len(executor.changes),
         total_input_tokens,
         total_output_tokens,
         total_cache_read_tokens,
         cost,
     )
-    return cost
+    return RunResult(cost, outcome, outcome_reason)
 
 
 def _git_restore(wiki_dir: Path) -> None:

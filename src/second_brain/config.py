@@ -100,14 +100,13 @@ class CompilationConfig(BaseModel):
     max_tokens_per_page: int, default=4000
         Soft target for the length of a generated wiki page.
     max_iterations: int, default=20
-        Hard cap on agent tool-use turns per source.
-    token_budget_per_run: int, default=150000
-        Hard cap on cumulative tokens (input + output) per source, so a
-        confused agent can't spend unbounded API money on one document.
+        Hard cap on agent tool-use turns per source, catching a model stuck
+        in a loop.
     max_cost_per_build_usd: float, default=0.0
         Ceiling on estimated spend for a whole build. Once cumulative cost
-        crosses it the build stops before the next source; finished pages
-        are kept and the rest stay staged for the next run. 0 disables it.
+        crosses it the build stops; finished pages are kept, the
+        interrupted source's partial work is rolled back, and everything
+        unfinished stays staged for the next run. 0 disables it.
     explore_tools: bool, default=True
         When True, the compilation agent also gets read-only wiki exploration
         tools (keyword/semantic search and graph traversal) for finding existing
@@ -120,7 +119,6 @@ class CompilationConfig(BaseModel):
     model: str = "claude-sonnet-4-6"
     max_tokens_per_page: int = Field(default=4000, gt=0)
     max_iterations: int = Field(default=20, gt=0)
-    token_budget_per_run: int = Field(default=150_000, gt=0)
     max_cost_per_build_usd: float = Field(default=0.0, ge=0.0)
     explore_tools: bool = True
 
@@ -164,7 +162,7 @@ class ClusteringConfig(BaseModel):
         Smallest grouping the hdbscan clusterer treats as a cluster.
     max_sources_per_run: int, default=5
         Cap on sources handed to a single agent run; larger clusters are
-        split into batches so one run stays within the token budget.
+        split into batches so one run stays a bounded, coherent unit.
     signature_chars: int, default=8000
         How much of each source's opening to embed as its topical
         fingerprint for clustering.

@@ -20,13 +20,16 @@ struct AppState: Decodable {
     private struct RawStaged: Decodable {
         let rel: String
         let bytes: Int64
+        let defer_reason: String?
     }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         staged = try container.decode([RawStaged].self, forKey: .staged).map { raw in
             let stem = ((raw.rel as NSString).lastPathComponent as NSString).deletingPathExtension
-            return StagedSource(id: raw.rel, displayName: stem, bytes: raw.bytes)
+            return StagedSource(
+                id: raw.rel, displayName: stem, bytes: raw.bytes, deferReason: raw.defer_reason
+            )
         }
         builtCount = try container.decode(Int.self, forKey: .builtCount)
         costs = try container.decode([String: Double].self, forKey: .costs)

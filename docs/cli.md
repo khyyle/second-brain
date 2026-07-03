@@ -29,6 +29,12 @@ uv run second-brain forget-drop <path>    # a file still in drops/
 uv run second-brain forget <raw-path>     # a staged source, forgotten entirely
 ```
 
+Requeue sources for the next build, whether already compiled or set aside:
+
+```bash
+uv run second-brain recompile <raw-path>...
+```
+
 Connect the wiki to an assistant over MCP:
 
 ```bash

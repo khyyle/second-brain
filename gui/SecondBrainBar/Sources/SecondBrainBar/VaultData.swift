@@ -28,6 +28,7 @@ struct StagedSource: Identifiable, Hashable {
     let id: String          // path relative to raw/
     let displayName: String
     let bytes: Int64
+    var deferReason: String? = nil
 
     var sizeText: String {
         ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)

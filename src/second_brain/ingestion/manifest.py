@@ -129,6 +129,14 @@ class Manifest:
                     PRIMARY KEY (stem_a, stem_b)
                 )
             """)
+            # Sources whose compile run ended without completing
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS deferred_sources (
+                    raw_path     TEXT PRIMARY KEY,
+                    reason       TEXT NOT NULL,
+                    deferred_at  TEXT NOT NULL
+                )
+            """)
             self._migrate_add_content_hash(conn)
 
     @staticmethod
@@ -351,9 +359,11 @@ class Manifest:
                 (parse_lane, raw_output, content_hash, now, str(file_path)),
             )
             # (Re)ingesting a source invalidates any prior compilation of
-            # its raw output, so an overwritten/updated file is recompiled.
+            # its raw output, so an overwritten/updated file is recompiled and
+            # deferrals are released.
             if raw_output is not None:
                 conn.execute("DELETE FROM compiled WHERE raw_path = ?", (raw_output,))
+                conn.execute("DELETE FROM deferred_sources WHERE raw_path = ?", (raw_output,))
 
     def mark_failed(self, file_path: Path, error: str | None = None) -> None:
         """Mark a file as failed so it will be retried on the next run.
@@ -573,6 +583,60 @@ class Manifest:
         with self._conn() as conn:
             rows = conn.execute("SELECT raw_path FROM compiled").fetchall()
         return {r["raw_path"] for r in rows}
+
+    def defer_sources(self, raw_paths: list[str], reason: str) -> None:
+        """Record sources as set aside. Re-deferring updates the reason.
+
+        Parameters
+        ----------
+        raw_paths: list[str]
+            Paths relative to the raw directory.
+        reason: str
+            Human-readable cause.
+        """
+        now = datetime.now(UTC).isoformat()
+        with self._conn() as conn:
+            conn.executemany(
+                "INSERT INTO deferred_sources (raw_path, reason, deferred_at) "
+                "VALUES (?, ?, ?) ON CONFLICT(raw_path) DO UPDATE SET "
+                "reason = excluded.reason, deferred_at = excluded.deferred_at",
+                [(path, reason, now) for path in raw_paths],
+            )
+
+    def get_deferred_sources(self) -> dict[str, str]:
+        """Return every deferred source as a raw_path -> reason mapping.
+
+        Returns
+        -------
+        dict[str, str]
+            Deferred raw paths and why each was parked.
+        """
+        with self._conn() as conn:
+            rows = conn.execute("SELECT raw_path, reason FROM deferred_sources").fetchall()
+        return {r["raw_path"]: r["reason"] for r in rows}
+
+    def clear_deferred(self, raw_paths: list[str]) -> int:
+        """Release deferred sources back into the compile queue.
+
+        Parameters
+        ----------
+        raw_paths: list[str]
+            Paths relative to the raw directory.
+
+        Returns
+        -------
+        int
+            Number of rows removed.
+        """
+        if not raw_paths:
+            return 0
+        with self._conn() as conn:
+            cursor = conn.execute(
+                "DELETE FROM deferred_sources WHERE raw_path IN "
+                f"({','.join('?' * len(raw_paths))})",
+                raw_paths,
+            )
+        return cursor.rowcount
 
     def dismiss_duplicate(self, stem_a: str, stem_b: str) -> None:
         """Record that two pages are not duplicates of each other.

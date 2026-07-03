@@ -40,6 +40,17 @@ def _staged_with_sizes(raw_dir: Path, rels: list[str]) -> list[dict]:
     return sized
 
 
+def _deferred_entries(raw_dir: Path, deferred: dict[str, str]) -> list[dict]:
+    """Staged-list entries for parked sources, each carrying its reason."""
+    entries: list[dict] = []
+    for rel, reason in sorted(deferred.items()):
+        path = raw_dir / rel
+        if not path.exists():
+            continue
+        entries.append({"rel": rel, "bytes": path.stat().st_size, "defer_reason": reason})
+    return entries
+
+
 def _build_costs(raw_dir: Path, work_units: list[list[str]]) -> dict[str, float]:
     """Per-model USD estimate for compiling the work units, summed over groups."""
     prices = model_prices()
@@ -80,13 +91,16 @@ def compute_state(config: Config, manifest: Manifest) -> dict:
         The staged sources with sizes, the count of built pages, per-model
         build cost, and whether a reviewed grouping has drifted from staging.
     """
-    staged = worthwhile_sources(manifest, find_new_sources(config, manifest))
-    work_units = reconcile_work_units(config.data_dir, staged) or [[rel] for rel in staged]
+    queue = worthwhile_sources(manifest, find_new_sources(config, manifest))
+    work_units = reconcile_work_units(config.data_dir, queue) or [[rel] for rel in queue]
     preview = load_preview(config.data_dir)
-    stale = preview is not None and preview_members(preview) != set(staged)
+    stale = preview is not None and preview_members(preview) != set(queue)
+    staged = _staged_with_sizes(config.raw_dir, queue) + _deferred_entries(
+        config.raw_dir, manifest.get_deferred_sources()
+    )
     return {
         "generated_at": datetime.now(UTC).isoformat(),
-        "staged": _staged_with_sizes(config.raw_dir, staged),
+        "staged": staged,
         "built_count": _built_count(config.wiki_dir),
         "costs": _build_costs(config.raw_dir, work_units),
         "stale": stale,

@@ -561,6 +561,8 @@ struct BuildTab: View {
                 StagedRow(
                     name: source.displayName,
                     sizeText: source.sizeText,
+                    deferReason: source.deferReason,
+                    onRetry: source.deferReason != nil ? { retry(source.id) } : nil,
                     onOpen: { openRaw(source.id) },
                     onRemove: { remove(source.id) }
                 )
@@ -608,6 +610,17 @@ struct BuildTab: View {
     private func remove(_ rawRel: String) {
         ManifestMutator.removeStagedSource(config: config, rawRel: rawRel)
         refresh()
+    }
+
+    /// Requeue a set-aside source. Single-quoted because raw paths carry
+    /// spaces and shell metacharacters and the command runs through zsh.
+    private func retry(_ rawRel: String) {
+        guard let repo = config.repoDir else { return }
+        let quoted = "'" + rawRel.replacingOccurrences(of: "'", with: "'\\''") + "'"
+        DispatchQueue.global(qos: .userInitiated).async {
+            _ = PipelineRunner.runManagedSync(repoDir: repo, command: "recompile \(quoted)")
+            DispatchQueue.main.async { refresh() }
+        }
     }
 
     private func openRaw(_ rawRel: String) {
@@ -877,6 +890,8 @@ private struct ClusterMemberRow: View {
 private struct StagedRow: View {
     let name: String
     let sizeText: String
+    var deferReason: String? = nil
+    var onRetry: (() -> Void)? = nil
     let onOpen: () -> Void
     let onRemove: () -> Void
     @State private var hovering = false
@@ -893,22 +908,42 @@ private struct StagedRow: View {
                 .foregroundStyle(Theme.Colors.textPrimary)
                 .lineLimit(1).truncationMode(.middle)
                 .openableTitle(cleanName(name))
+            if let deferReason {
+                deferBadge(deferReason)
+            }
             Spacer(minLength: 6)
             TrailingReserve(hovering: hovering) {
                 Text(sizeText)
                     .font(Theme.Font.meta(9.5))
                     .foregroundStyle(Theme.Colors.textTertiary)
             } hover: {
-                HoverIcon(systemName: "xmark.circle.fill",
-                          help: "Remove source (moves the raw file to Trash)",
-                          action: onRemove)
-                    .disabled(store.locked)
+                HStack(spacing: 4) {
+                    if let onRetry {
+                        HoverIcon(systemName: "arrow.clockwise",
+                                  help: "Retry — requeue for the next build",
+                                  action: onRetry)
+                            .disabled(store.locked)
+                    }
+                    HoverIcon(systemName: "xmark.circle.fill",
+                              help: "Remove source (moves the raw file to Trash)",
+                              action: onRemove)
+                        .disabled(store.locked)
+                }
             }
         }
         .modifier(RowBackground(hovering: hovering))
         .contentShape(Rectangle())
         .onTapGesture(perform: onOpen)
         .onHover { hovering = $0 }
+    }
+
+    private func deferBadge(_ reason: String) -> some View {
+        Text("Set aside")
+            .font(Theme.Font.meta(9.5).weight(.medium))
+            .foregroundStyle(Theme.Colors.accentAmber)
+            .padding(.horizontal, 6).padding(.vertical, 2)
+            .background(Capsule().fill(Theme.Colors.accentAmber.opacity(0.14)))
+            .help("Skipped by builds: \(reason)")
     }
 }
 

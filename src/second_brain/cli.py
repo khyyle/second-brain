@@ -375,6 +375,34 @@ def compile(ctx: click.Context, full: bool, dry_run: bool) -> None:
     emit_state(config)
 
 
+@main.command(name="recompile")
+@click.argument("raw_paths", nargs=-1, required=True)
+@click.pass_context
+def recompile(ctx: click.Context, raw_paths: tuple[str, ...]) -> None:
+    """Requeue RAW_PATHS for the next build, releasing set-aside sources.
+
+    Clears a source's compiled mark and any deferral, so the next build
+    redoes it. Paths are relative to the raw directory.
+    """
+    config: Config = ctx.obj["config"]
+    manifest = Manifest(config.manifest_db_path)
+
+    for raw_path in raw_paths:
+        if not (config.raw_dir / raw_path).exists():
+            click.echo(f"Warning: {raw_path} not found under raw/", err=True)
+
+    released = manifest.clear_deferred(list(raw_paths))
+    uncompiled = manifest.unmark_compiled(list(raw_paths))
+
+    from second_brain.state import emit_state
+
+    emit_state(config)
+    click.echo(
+        f"Requeued {len(raw_paths)} source(s) for the next build "
+        f"({released} released from set-aside, {uncompiled} previously compiled)"
+    )
+
+
 @main.command(name="preview-clusters")
 @click.pass_context
 def preview_clusters(ctx: click.Context) -> None:

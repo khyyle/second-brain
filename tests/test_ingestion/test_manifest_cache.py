@@ -45,6 +45,34 @@ def test_dismiss_duplicate_is_order_independent_and_idempotent(manifest: Manifes
     assert manifest.get_dismissed_duplicates() == {("electrolysis", "water-electrolysis")}
 
 
+def test_defer_sources_round_trip_and_release(manifest: Manifest) -> None:
+    manifest.defer_sources(["papers/a.md", "papers/b.md"], "did not converge in 20 iterations")
+    # Re-deferring updates the reason instead of duplicating the row.
+    manifest.defer_sources(["papers/a.md"], "ended without completing")
+
+    assert manifest.get_deferred_sources() == {
+        "papers/a.md": "ended without completing",
+        "papers/b.md": "did not converge in 20 iterations",
+    }
+
+    assert manifest.clear_deferred(["papers/a.md", "papers/missing.md"]) == 1
+    assert manifest.get_deferred_sources() == {"papers/b.md": "did not converge in 20 iterations"}
+    assert manifest.clear_deferred([]) == 0
+
+
+def test_reingesting_a_source_releases_its_deferral(manifest: Manifest, tmp_path: Path) -> None:
+    # The content that failed to compile is no longer the content on disk,
+    # so an updated drop gets a fresh attempt instead of staying parked.
+    source = tmp_path / "notes.md"
+    source.write_text("v2 of the notes", encoding="utf-8")
+    manifest.mark_processing(source, "documents")
+    manifest.defer_sources(["documents/notes.md"], "did not converge in 20 iterations")
+
+    manifest.mark_complete(source, raw_output="documents/notes.md")
+
+    assert manifest.get_deferred_sources() == {}
+
+
 def test_page_cache_round_trip(manifest: Manifest) -> None:
     """A put_cached_page entry should be returned verbatim by get_cached_page."""
     manifest.put_cached_page(
