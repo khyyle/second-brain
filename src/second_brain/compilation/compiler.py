@@ -553,7 +553,7 @@ def _run_agent(
     total_cache_write_tokens = 0
     cur, tot = progress if progress else (0, 0)
     outcome = RunOutcome.EXHAUSTED
-    outcome_reason = f"did not converge in {max_iterations} iterations"
+    outcome_reason = f"failed to compile within {max_iterations} agent turns"
 
     for iteration in range(max_iterations):
         # Honor a cancel between turns (the costly call is below), so a

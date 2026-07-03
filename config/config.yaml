@@ -20,7 +20,7 @@ compilation:
   provider: deepseek   # anthropic | deepseek 
   model: deepseek-v4-pro   # must match the provider (see second_brain/llm_providers.py)
   max_tokens_per_page: 4000
-  max_iterations: 20
+  max_iterations: 100            # runaway guard only; sized so real work never hits it
   max_cost_per_build_usd: 0      # $ ceiling per build; 0 = no limit
   explore_tools: true            # let the compile agent search the wiki to link/dedup pages; false cuts build cost
 

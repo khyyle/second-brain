@@ -91,7 +91,7 @@ def test_end_turn_completes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> 
     assert result.outcome is RunOutcome.COMPLETED
 
 
-def test_iteration_exhaustion_reports_nonconvergence(
+def test_iteration_cap_reports_runaway_stop(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     config = _make_config(tmp_path, max_iter=3)
@@ -102,7 +102,7 @@ def test_iteration_exhaustion_reports_nonconvergence(
 
     assert client.messages.calls == 3
     assert result.outcome is RunOutcome.EXHAUSTED
-    assert "3 iterations" in result.reason
+    assert "3 agent turns" in result.reason
 
 
 def test_cost_cap_stops_midrun(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -171,14 +171,14 @@ def test_exhausted_unit_is_deferred_not_compiled(
 
     def fake_run_agent(_config, _wiki, _raw, unit, **_kwargs) -> RunResult:
         if unit == ["a.md"]:
-            return RunResult(0.1, RunOutcome.EXHAUSTED, "did not converge in 20 iterations")
+            return RunResult(0.1, RunOutcome.EXHAUSTED, "failed to compile within 20 agent turns")
         return RunResult(0.1, RunOutcome.COMPLETED)
 
     monkeypatch.setattr(compiler, "_run_agent", fake_run_agent)
 
     stats = compiler.run_compilation(config, manifest)
 
-    assert manifest.get_deferred_sources() == {"a.md": "did not converge in 20 iterations"}
+    assert manifest.get_deferred_sources() == {"a.md": "failed to compile within 20 agent turns"}
     assert manifest.get_compiled_raw_paths() == {"b.md"}
     assert stats["sources_compiled"] == 1
 
@@ -218,7 +218,7 @@ def test_find_new_sources_excludes_deferred(tmp_path: Path) -> None:
     (config.raw_dir / "a.md").write_text("alpha", encoding="utf-8")
     (config.raw_dir / "b.md").write_text("beta", encoding="utf-8")
 
-    manifest.defer_sources(["b.md"], "did not converge in 20 iterations")
+    manifest.defer_sources(["b.md"], "failed to compile within 20 agent turns")
 
     assert compiler.find_new_sources(config, manifest) == ["a.md"]
 

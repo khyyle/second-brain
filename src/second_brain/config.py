@@ -99,9 +99,11 @@ class CompilationConfig(BaseModel):
         Model the compilation agent runs on. Must be in a supported provider.
     max_tokens_per_page: int, default=4000
         Soft target for the length of a generated wiki page.
-    max_iterations: int, default=20
-        Hard cap on agent tool-use turns per source, catching a model stuck
-        in a loop.
+    max_iterations: int, default=100
+        Runaway guard on agent tool-use turns per source, not a work
+        budget. Sized so real work never hits it (a paper against a mature
+        wiki runs 20+ turns); spend is governed by the cost cap and the
+        user can stop a build at any time.
     max_cost_per_build_usd: float, default=0.0
         Ceiling on estimated spend for a whole build. Once cumulative cost
         crosses it the build stops; finished pages are kept, the
@@ -118,7 +120,7 @@ class CompilationConfig(BaseModel):
     provider: str = "anthropic"
     model: str = "claude-sonnet-4-6"
     max_tokens_per_page: int = Field(default=4000, gt=0)
-    max_iterations: int = Field(default=20, gt=0)
+    max_iterations: int = Field(default=100, gt=0)
     max_cost_per_build_usd: float = Field(default=0.0, ge=0.0)
     explore_tools: bool = True
 
