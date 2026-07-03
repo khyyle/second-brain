@@ -13,6 +13,7 @@ struct ManifestRow: Identifiable, Hashable {
         case pending
         case processing
         case complete
+        case duplicate
         case failed
         case unknown
     }

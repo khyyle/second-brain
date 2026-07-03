@@ -60,6 +60,29 @@ def test_defer_sources_round_trip_and_release(manifest: Manifest) -> None:
     assert manifest.clear_deferred([]) == 0
 
 
+def test_mark_duplicate_records_terminal_state(manifest: Manifest, tmp_path: Path) -> None:
+    original = tmp_path / "original.md"
+    original.write_text("same bytes", encoding="utf-8")
+    manifest.mark_processing(original, "research-papers")
+    manifest.mark_complete(original, raw_output="research-papers/original.md")
+
+    copy = tmp_path / "copy.md"
+    copy.write_text("same bytes", encoding="utf-8")
+    manifest.mark_duplicate(copy, "documents")
+
+    # Terminal: the duplicate no longer needs processing, and re-marking is a no-op.
+    assert manifest.needs_processing(copy) is False
+    manifest.mark_duplicate(copy, "documents")
+    entry = manifest.get_entry(copy)
+    assert entry is not None
+    assert entry.status == "duplicate"
+    assert entry.raw_output_path == "research-papers/original.md"
+
+    # Editing the copy makes it real new content again.
+    copy.write_text("different bytes", encoding="utf-8")
+    assert manifest.needs_processing(copy) is True
+
+
 def test_reingesting_a_source_releases_its_deferral(manifest: Manifest, tmp_path: Path) -> None:
     # The content that failed to compile is no longer the content on disk,
     # so an updated drop gets a fresh attempt instead of staying parked.

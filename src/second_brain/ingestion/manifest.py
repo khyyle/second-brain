@@ -262,7 +262,7 @@ class Manifest:
             return not self._content_already_complete(current_hash, raw_dir)
         if row["sha256"] != current_hash:
             return True
-        if row["status"] != "complete":
+        if row["status"] not in ("complete", "duplicate"):
             return True
         # Complete + unchanged: re-process only if its raw output is gone.
         if raw_dir is not None and not _raw_output_exists(raw_dir, row["raw_output"]):
@@ -364,6 +364,47 @@ class Manifest:
             if raw_output is not None:
                 conn.execute("DELETE FROM compiled WHERE raw_path = ?", (raw_output,))
                 conn.execute("DELETE FROM deferred_sources WHERE raw_path = ?", (raw_output,))
+
+    def mark_duplicate(self, file_path: Path, source_type: str) -> None:
+        """Record a file whose content was already ingested under another path.
+
+        No-op when the path already has any manifest record. The row points
+        at the existing raw output, so the raw-exists self-heal still applies.
+
+        Parameters
+        ----------
+        file_path: Path
+            The duplicate file.
+        source_type: str
+            Label for the source lane it arrived through.
+        """
+        with self._conn() as conn:
+            exists = conn.execute(
+                "SELECT 1 FROM manifest WHERE file_path = ?", (str(file_path),)
+            ).fetchone()
+        if exists:
+            return
+        sha = self.compute_hash(file_path)
+        now = datetime.now(UTC).isoformat()
+        with self._conn() as conn:
+            original = conn.execute(
+                "SELECT raw_output FROM manifest WHERE sha256 = ? AND status = 'complete'",
+                (sha,),
+            ).fetchone()
+            conn.execute(
+                """INSERT OR IGNORE INTO manifest
+                   (file_path, sha256, source_type, status, raw_output,
+                    ingested_at, updated_at)
+                   VALUES (?, ?, ?, 'duplicate', ?, ?, ?)""",
+                (
+                    str(file_path),
+                    sha,
+                    source_type,
+                    original["raw_output"] if original else None,
+                    now,
+                    now,
+                ),
+            )
 
     def mark_failed(self, file_path: Path, error: str | None = None) -> None:
         """Mark a file as failed so it will be retried on the next run.

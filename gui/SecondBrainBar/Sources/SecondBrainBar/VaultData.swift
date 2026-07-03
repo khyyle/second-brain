@@ -10,12 +10,14 @@ struct QueueItem: Identifiable, Hashable {
     enum State {
         case waiting        // in drops, not yet seen by the pipeline
         case processing     // currently being ingested
+        case duplicate      // identical content already ingested elsewhere
         case failed         // ingestion failed
 
         var label: String {
             switch self {
             case .waiting:    return "waiting"
             case .processing: return "processing"
+            case .duplicate:  return "already ingested"
             case .failed:     return "failed"
             }
         }
@@ -60,6 +62,7 @@ enum VaultData {
             let state: QueueItem.State
             switch info?.status {
             case .processing: state = .processing
+            case .duplicate:  state = .duplicate
             case .failed:     state = .failed
             default:          state = .waiting
             }

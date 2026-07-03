@@ -260,6 +260,8 @@ def _batch_scan(
                 continue
             if manifest.needs_processing(file_path, config.raw_dir):
                 work.append((file_path, name))
+            else:
+                manifest.mark_duplicate(file_path, name)
 
     total = len(work)
     processed = 0

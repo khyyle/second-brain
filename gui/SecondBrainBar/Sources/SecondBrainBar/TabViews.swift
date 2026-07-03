@@ -217,7 +217,7 @@ private struct QueueRow: View {
                 if item.state == .processing {
                     ProgressView().controlSize(.small).scaleEffect(0.6)
                 } else {
-                    Image(systemName: item.state == .failed ? "exclamationmark.triangle" : "clock")
+                    Image(systemName: stateIcon)
                         .font(.system(size: 10, weight: .semibold))
                         .foregroundStyle(item.state == .failed ? Theme.Colors.danger : Theme.Colors.textTertiary)
                 }
@@ -242,11 +242,14 @@ private struct QueueRow: View {
                             .foregroundStyle(Theme.Colors.textTertiary)
                             .monospacedDigit()
                     }
-                } else if item.state == .waiting {
+                } else if item.state == .waiting || item.state == .duplicate {
                     Text(item.state.label)
                         .font(Theme.Font.meta(10))
                         .foregroundStyle(Theme.Colors.textTertiary)
                         .monospacedDigit()
+                        .help(item.state == .duplicate
+                            ? "This file's content was already ingested elsewhere"
+                            : "")
                 }
             } hover: {
                 HoverIcon(systemName: "xmark.circle.fill",
@@ -259,6 +262,14 @@ private struct QueueRow: View {
         .contentShape(Rectangle())
         .onTapGesture(perform: onOpen)
         .onHover { hovering = $0 }
+    }
+
+    private var stateIcon: String {
+        switch item.state {
+        case .failed:    return "exclamationmark.triangle"
+        case .duplicate: return "checkmark.circle"
+        default:         return "clock"
+        }
     }
 }
 
