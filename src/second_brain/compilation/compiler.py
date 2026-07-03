@@ -41,11 +41,18 @@ class MissingAPIKeyError(RuntimeError):
 # NOTE: provider limits are Opus/Sonnet 128K, Haiku 64K, DeepSeek V4 ~384K.
 _MAX_OUTPUT_TOKENS_PER_TURN = 16384
 
+# Fraction of the model's context window a unit's inline source text may occupy
+_INLINE_SOURCE_WINDOW_FRACTION = 0.6
+_SOURCE_TOKENS_PER_EXTRA_ITERATION = 4000
+
 
 class RunOutcome(Enum):
     COMPLETED = "completed"
     EXHAUSTED = "exhausted"
     COST_CAPPED = "cost_capped"
+    TOO_LARGE = "too_large"
+    FAILED = "failed"
+    STOPPED = "stopped"
 
 
 class RunResult(NamedTuple):
@@ -158,6 +165,19 @@ def _build_work_units(config: Config, raw_dir: Path, new_sources: list[str]) -> 
 def _resolve_compile_mode(config: Config, unit: list[str]) -> str:
     source = config.sources.get(unit[0].split("/", 1)[0])
     return source.compile_mode if source else "synthesize"
+
+
+def _too_large_reason(estimated_tokens: int) -> str:
+    return (
+        f"too large to compile in one run (~{estimated_tokens // 1000}k tokens); "
+        "split it into parts and re-drop"
+    )
+
+
+def _estimate_unit_tokens(raw_dir: Path, unit: list[str]) -> int:
+    """Rough token count of a unit's inline source text (bytes / 4)."""
+    total_bytes = sum((raw_dir / rel).stat().st_size for rel in unit if (raw_dir / rel).exists())
+    return total_bytes // 4
 
 
 def find_new_sources(config: Config, manifest: Manifest) -> list[str]:
@@ -322,6 +342,20 @@ def run_compilation(
                         total - index,
                     )
                     break
+                # determine if this source can leave working room in model context window
+                estimated_tokens = _estimate_unit_tokens(raw_dir, unit)
+                window = resolve_profile(
+                    config.compilation.provider, config.compilation.model
+                ).context_window_tokens
+                if estimated_tokens > int(window * _INLINE_SOURCE_WINDOW_FRACTION):
+                    manifest.defer_sources(unit, _too_large_reason(estimated_tokens))
+                    logger.warning(
+                        "Deferred %s pre-flight: ~%dk tokens exceeds the %dk-token window",
+                        ", ".join(unit),
+                        estimated_tokens // 1000,
+                        window // 1000,
+                    )
+                    continue
                 write_status(
                     config.data_dir,
                     phase="compile",
@@ -330,6 +364,7 @@ def run_compilation(
                     started_at=started,
                     cost_usd=cumulative_cost,
                 )
+
                 try:
                     result = _run_agent(
                         config,
@@ -341,33 +376,36 @@ def run_compilation(
                         progress=(index, total),
                         compile_mode=_resolve_compile_mode(config, unit),
                     )
+                except anthropic.BadRequestError as exc:
+                    if "prompt is too long" in str(exc).lower():
+                        result = RunResult(
+                            0.0, RunOutcome.TOO_LARGE, _too_large_reason(estimated_tokens)
+                        )
+                    else:
+                        logger.exception("Compile failed for %s", ", ".join(unit))
+                        result = RunResult(0.0, RunOutcome.FAILED)
                 except Exception:
-                    # A transient failure (rate limit, network, an API call
-                    # killed by the machine sleeping) shouldn't abort the batch.
-                    # Discard the group's partial, uncommitted pages so an
-                    # interrupted build leaves nothing dangling, and leave it
-                    # uncompiled for the next build to redo cleanly.
-                    logger.exception("Compile failed for %s — rolling back", ", ".join(unit))
-                    _git_restore(wiki_dir)
-                    continue
+                    # catch transient failures like rate limit, network, an API call
+                    # killed by the machine sleeping
+                    logger.exception("Compile failed for %s", ", ".join(unit))
+                    result = RunResult(0.0, RunOutcome.FAILED)
                 if stop_requested(config.data_dir):
-                    # Stopped mid-group: discard its partial, uncommitted
-                    # pages and leave it uncompiled so the next build redoes
-                    # it cleanly. Earlier groups are already committed.
-                    _git_restore(wiki_dir)
-                    logger.info("Stopped during %s — rolled back partial work", ", ".join(unit))
-                    was_stopped = True
-                    break
+                    result = RunResult(result.cost, RunOutcome.STOPPED)
+
                 cumulative_cost += result.cost
                 if result.outcome is RunOutcome.COMPLETED:
                     manifest.mark_compiled(unit)
-                    _git_commit(wiki_dir)  # commit each completed group
+                    _git_commit(wiki_dir)
                     compiled_count += len(unit)
+                    continue
+
+                # discard partial, uncommitted pages
+                _git_restore(wiki_dir)
+                if result.outcome is RunOutcome.STOPPED:
+                    logger.info("Stopped during %s — rolled back partial work", ", ".join(unit))
+                    was_stopped = True
+                    break
                 elif result.outcome is RunOutcome.COST_CAPPED:
-                    # The build's budget is spent so discard this group's
-                    # partial pages and leave everything else staged. The
-                    # next build starts with a fresh budget and retries.
-                    _git_restore(wiki_dir)
                     logger.info(
                         "Cost cap reached during %s — rolled back partial work; "
                         "%d group(s) left staged",
@@ -375,17 +413,11 @@ def run_compilation(
                         total - index,
                     )
                     break
-                else:
-                    # The run ended without completing (e.g. never converged).
-                    # Retrying unattended would likely fail the same way and
-                    # re-bill, so park the group where the user can see why.
-                    _git_restore(wiki_dir)
+                elif result.outcome in (RunOutcome.EXHAUSTED, RunOutcome.TOO_LARGE):
+                    # Retrying unattended would fail the same way and re-bill,
+                    # so park the group where the user can see why.
                     manifest.defer_sources(unit, result.reason)
-                    logger.warning(
-                        "Deferred %s: %s — rolled back partial work",
-                        ", ".join(unit),
-                        result.reason,
-                    )
+                    logger.warning("Deferred %s: %s", ", ".join(unit), result.reason)
         finally:
             stop_heartbeat.set()
             heartbeat.join(timeout=2.0)
@@ -520,7 +552,11 @@ def _run_agent(
 
     messages: list[dict] = [{"role": "user", "content": user_content}]
 
-    max_iterations = config.compilation.max_iterations
+    # A larger source warrants proportionally more turns
+    max_iterations = max(
+        config.compilation.max_iterations,
+        len(source_block) // 4 // _SOURCE_TOKENS_PER_EXTRA_ITERATION,
+    )
     cost_cap = config.compilation.max_cost_per_build_usd
     total_input_tokens = 0
     total_output_tokens = 0

@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import dataclasses
 from pathlib import Path
 
+import anthropic
+import httpx
 import pytest
 
 from second_brain.compilation import compiler
@@ -218,3 +221,111 @@ def test_find_new_sources_excludes_deferred(tmp_path: Path) -> None:
     manifest.defer_sources(["b.md"], "did not converge in 20 iterations")
 
     assert compiler.find_new_sources(config, manifest) == ["a.md"]
+
+
+def test_over_window_unit_defers_preflight_without_api_call(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A source too large for the model's window parks before any spend."""
+    config = _build_config(tmp_path)
+    manifest = Manifest(config.manifest_db_path)
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setattr(compiler, "rebuild_structure", lambda *_: {})
+    monkeypatch.setattr(compiler, "_git_commit", lambda *_: None)
+    # Shrink the window so an ordinary temp file crosses the 60% line.
+    profile = compiler.resolve_profile(config.compilation.provider, config.compilation.model)
+    monkeypatch.setattr(
+        compiler,
+        "resolve_profile",
+        lambda *a, **k: dataclasses.replace(profile, context_window_tokens=1000),
+    )
+    (config.raw_dir / "huge.md").write_text("x" * 10_000, encoding="utf-8")
+    monkeypatch.setattr(compiler, "find_new_sources", lambda *_: ["huge.md"])
+
+    def fail_run_agent(*_a, **_k):
+        raise AssertionError("agent must not run for an over-window unit")
+
+    monkeypatch.setattr(compiler, "_run_agent", fail_run_agent)
+
+    stats = compiler.run_compilation(config, manifest)
+
+    assert stats["sources_compiled"] == 0
+    deferred = manifest.get_deferred_sources()
+    assert set(deferred) == {"huge.md"}
+    assert "split it into parts" in deferred["huge.md"]
+
+
+def test_transient_failure_stays_staged_not_deferred(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A network-style failure leaves the unit staged for the next build."""
+    config = _build_config(tmp_path)
+    manifest = Manifest(config.manifest_db_path)
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setattr(compiler, "find_new_sources", lambda *_: ["a.md"])
+    monkeypatch.setattr(compiler, "rebuild_structure", lambda *_: {})
+    monkeypatch.setattr(compiler, "_git_commit", lambda *_: None)
+    (config.raw_dir / "a.md").write_text("body", encoding="utf-8")
+
+    def raise_transient(*_a, **_k):
+        raise ConnectionError("network blip")
+
+    monkeypatch.setattr(compiler, "_run_agent", raise_transient)
+
+    stats = compiler.run_compilation(config, manifest)
+
+    assert stats["sources_compiled"] == 0
+    assert manifest.get_deferred_sources() == {}
+    assert manifest.get_compiled_raw_paths() == set()
+
+
+def test_prompt_too_long_rejection_defers_not_retries(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The API's own too-long rejection parks the unit instead of retry-looping."""
+    config = _build_config(tmp_path)
+    manifest = Manifest(config.manifest_db_path)
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setattr(compiler, "find_new_sources", lambda *_: ["a.md"])
+    monkeypatch.setattr(compiler, "rebuild_structure", lambda *_: {})
+    monkeypatch.setattr(compiler, "_git_commit", lambda *_: None)
+    (config.raw_dir / "a.md").write_text("body", encoding="utf-8")
+
+    def raise_too_long(*_a, **_k):
+        request = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+        response = httpx.Response(400, request=request)
+        raise anthropic.BadRequestError(
+            "prompt is too long: 210000 tokens > 200000 maximum", response=response, body=None
+        )
+
+    monkeypatch.setattr(compiler, "_run_agent", raise_too_long)
+
+    stats = compiler.run_compilation(config, manifest)
+
+    assert stats["sources_compiled"] == 0
+    assert set(manifest.get_deferred_sources()) == {"a.md"}
+
+
+def test_iteration_allowance_scales_with_source_size(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A large inline source raises the turn bound above the configured floor."""
+    config = _make_config(tmp_path, max_iter=2)
+    # ~40k chars ≈ 10k tokens → allowance max(2, 10000 // 4000) = 2 is too low;
+    # use ~64k chars ≈ 16k tokens → max(2, 4) = 4 turns.
+    (config.raw_dir / "big.md").write_text("y" * 64_000, encoding="utf-8")
+    client = _install_fake(monkeypatch, FakeResponse("tool_use", FakeUsage(1, 1), [FakeBlock()]))
+
+    result = compiler._run_agent(
+        config,
+        config.wiki_dir,
+        config.raw_dir,
+        ["big.md"],
+        started_at="2026-01-01T00:00:00+00:00",
+    )
+
+    assert client.messages.calls == 4
+    assert result.outcome is RunOutcome.EXHAUSTED
