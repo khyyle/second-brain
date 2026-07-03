@@ -50,6 +50,16 @@ def test_slugify_folds_unicode_to_ascii() -> None:
     assert slugify("L'Hôpital's Rule") == "lhopitals-rule"
 
 
+def test_slugify_spells_out_greek_letters() -> None:
+    # Greek letters carry meaning in math; dropping them would collapse
+    # distinct terms onto a shared stem (ρ-risk and α-risk both to "risk",
+    # σ-algebra to the "algebra" domain) instead of keeping them apart.
+    assert slugify("ρ-Risk") == "rho-risk"
+    assert slugify("α-risk") == "alpha-risk"
+    assert slugify("σ-algebra") == "sigma-algebra"
+    assert slugify("β-VAE") == "beta-vae"
+
+
 def test_slugify_empty_when_no_sluggable_characters() -> None:
     assert slugify("!!!") == ""
 

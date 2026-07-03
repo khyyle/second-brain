@@ -32,19 +32,53 @@ _MASK_RESTORE_RE = re.compile("\x00(\\d+)\x00")
 # glued borsukulam a plain character drop would produce.
 _SEPARATOR_TRANSLATION = str.maketrans(dict.fromkeys("‐‑‒–—―−_", "-"))
 
+_GREEK_TRANSLATION = str.maketrans(
+    {
+        letter: f"-{name}-"
+        for letter, name in {
+            "α": "alpha",
+            "β": "beta",
+            "γ": "gamma",
+            "δ": "delta",
+            "ε": "epsilon",
+            "ζ": "zeta",
+            "η": "eta",
+            "θ": "theta",
+            "ι": "iota",
+            "κ": "kappa",
+            "λ": "lambda",
+            "μ": "mu",
+            "ν": "nu",
+            "ξ": "xi",
+            "ο": "omicron",
+            "π": "pi",
+            "ρ": "rho",
+            "σ": "sigma",
+            "ς": "sigma",
+            "τ": "tau",
+            "υ": "upsilon",
+            "φ": "phi",
+            "χ": "chi",
+            "ψ": "psi",
+            "ω": "omega",
+        }.items()
+    }
+)
+
 
 def slugify(text: str) -> str:
     """
     Reduce arbitrary text to an ASCII kebab-case stem.
 
     The text is lower-cased, dash-like characters and underscores become
-    hyphens, and the rest is folded to ASCII: accented letters decompose to
-    their base letters and superscripts to plain digits, while characters with
-    no ASCII equivalent are dropped. Every remaining character that is not a
-    letter, a digit, a space, or a hyphen is removed. Runs of whitespace and
-    hyphens then collapse into single hyphens, and leading or trailing hyphens
-    are trimmed, so a dropped symbol can never leave a hyphen run that would
-    make the same name slug two different ways.
+    hyphens, Greek letters are spelled out, and the rest is folded
+    to ASCII: accented letters decompose to their base letters and superscripts
+    to plain digits, while characters with no ASCII equivalent are dropped.
+    Every remaining character that is not a letter, a digit, a space, or a
+    hyphen is removed. Runs of whitespace and hyphens then collapse into single
+    hyphens, and leading or trailing hyphens are trimmed, so a dropped symbol
+    can never leave a hyphen run that would make the same name slug two
+    different ways.
 
     Parameters
     ----------
@@ -57,7 +91,7 @@ def slugify(text: str) -> str:
         The ASCII kebab-case stem. Text that already has this form is returned
         unchanged. Text with no usable characters returns an empty string.
     """
-    text = text.lower().translate(_SEPARATOR_TRANSLATION)
+    text = text.lower().translate(_SEPARATOR_TRANSLATION).translate(_GREEK_TRANSLATION)
     text = unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode("ascii")
     cleaned = "".join(char if char.isalnum() or char in " -" else "" for char in text)
     return re.sub(r"-{2,}", "-", "-".join(cleaned.split())).strip("-")
