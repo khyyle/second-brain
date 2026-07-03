@@ -84,16 +84,16 @@ Dragging onto the app sorts each file automatically. If you copy files in by han
 
 ## What you get
 
-The wiki is plain Markdown under `~/second-brain/wiki/`:
+The wiki is plain Markdown under `~/second-brain/wiki/`, opened directly as an Obsidian vault:
 
 - One page per topic, written and linked together with `[[wikilinks]]`.
 - A home page that indexes the wiki, with overview pages that gather each subject area.
 - Backlinks on every page, so you can see what refers to what.
 - YAML front matter and rendered LaTeX where the content calls for it.
 
-It opens directly as an Obsidian vault.
-
-![The compiled wiki in Obsidian's graph view](docs/images/wiki-graph.png)
+<p align="center">
+  <img src="docs/images/wiki-graph.png" width="520" alt="The compiled wiki in Obsidian's graph view">
+</p>
 
 For asking questions instead of browsing, Second Brain ships an MCP server that hands the wiki to an assistant like Claude Desktop or Cursor. Beyond keyword and semantic search, it can walk the links between your pages (finding things like what a topic builds on, what relates to it, what you haven't written down yet) and trace any page back to its sources, so the assistant answers from how your notes connect rather than one page at a time.
 
