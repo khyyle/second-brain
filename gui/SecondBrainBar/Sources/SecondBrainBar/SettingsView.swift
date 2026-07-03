@@ -515,6 +515,7 @@ private struct WatchedRow: View {
             Toggle("", isOn: $folder.enabled)
                 .labelsHidden().toggleStyle(.switch).tint(Theme.Colors.accent)
                 .scaleEffect(0.85)
+                .help("Include this folder in scheduled runs")
             Button(action: onRemove) {
                 Image(systemName: "xmark.circle.fill")
                     .font(.system(size: 11))
