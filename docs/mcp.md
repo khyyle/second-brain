@@ -14,10 +14,7 @@ uv run second-brain mcp install --target chatgpt-desktop
 uv run second-brain mcp install --target cursor
 ```
 
-The installer requires the target application to be installed. It preserves unrelated
-settings in the application's existing configuration and creates the configuration
-directory only after finding the application. Restart the assistant afterwards so it
-picks up the new server.
+The installer requires the target application to be installed and will error otherwise. Installation of the Second Brain mcp will preserve the app's existing settings and only create a new configuration file for that app if one somehow doesn't exist. After adding the second-brain mcp to the desired target, restart it so that it picks up the new server.
 
 ## Finding pages
 

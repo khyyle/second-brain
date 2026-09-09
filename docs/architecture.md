@@ -47,7 +47,7 @@ The wiki's own git history is updated as the build progresses, so a stopped or f
 
 ### Access
 
-The compiled wiki is plain Markdown under `~/second-brain/wiki/`, so it opens directly as an Obsidian vault. An MCP server exposes it to assistants such as Claude Desktop and Cursor, always offering keyword search and adding embedding-based semantic search when Ollama is available.
+The compiled wiki is stored as plain Markdown under `~/second-brain/wiki/`, so it opens directly as an Obsidian vault. An MCP server exposes it to Claude Desktop, ChatGPT Desktop, and Cursor, always offering keyword search and adding embedding-based semantic search when Ollama is available.
 
 ## What runs locally versus in the cloud
 

@@ -1,6 +1,6 @@
 # Second Brain
 
-A local-first macOS app that turns your notes, PDFs, and exported ChatGPT history into one linked Markdown wiki you can read in Obsidian and explore from Claude or Cursor.
+A local-first macOS app that turns your notes, PDFs, and exported ChatGPT history into one linked Markdown wiki you can read in Obsidian and explore from Claude Desktop, ChatGPT Desktop, or Cursor.
 
 > Supported on macOS only.
 
