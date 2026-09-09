@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import json
+import stat
 import tomllib
 from pathlib import Path
 
 import pytest
 from click import ClickException
 
-from second_brain import cli
+from second_brain.mcp_server import install
 
 
 def test_resolve_mcp_client_requires_installed_application(tmp_path: Path) -> None:
@@ -17,7 +18,7 @@ def test_resolve_mcp_client_requires_installed_application(tmp_path: Path) -> No
     applications = tmp_path / "Applications"
 
     with pytest.raises(ClickException, match="Claude Desktop is not installed"):
-        cli._resolve_mcp_client(
+        install.resolve_mcp_client(
             "claude-desktop",
             home=home,
             application_directories=(applications,),
@@ -51,13 +52,12 @@ def test_resolve_mcp_client_uses_native_config(
     application = applications / application_name
     application.mkdir(parents=True)
 
-    client = cli._resolve_mcp_client(
+    client = install.resolve_mcp_client(
         target,
         home=home,
         application_directories=(applications,),
     )
 
-    assert client.application_path == application
     assert client.config_file == home / relative_config
     assert client.config_format == config_format
 
@@ -66,7 +66,32 @@ def test_resolve_mcp_server_command_requires_executable(tmp_path: Path) -> None:
     missing_python = tmp_path / "python"
 
     with pytest.raises(ClickException, match="Python executable"):
-        cli._resolve_mcp_server_command(missing_python)
+        install.resolve_mcp_server_command(missing_python)
+
+
+def test_install_mcp_client_creates_missing_config_directory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_file = tmp_path / "home" / ".cursor" / "mcp.json"
+    client = install.MCPInstallTarget(
+        display_name="Cursor",
+        config_file=config_file,
+        config_format="json",
+    )
+    monkeypatch.setattr(install, "resolve_mcp_client", lambda _target: client)
+    monkeypatch.setattr(
+        install,
+        "resolve_mcp_server_command",
+        lambda: ("/venv/bin/python", ["-m", "second_brain.mcp_server.server"]),
+    )
+
+    installed_client = install.install_mcp_client("cursor")
+
+    assert installed_client == client
+    assert config_file.is_file()
+    assert stat.S_IMODE(config_file.stat().st_mode) == 0o600
+    assert stat.S_IMODE(config_file.parent.stat().st_mode) & 0o077 == 0
 
 
 def test_write_json_mcp_config_preserves_other_settings(tmp_path: Path) -> None:
@@ -86,7 +111,7 @@ def test_write_json_mcp_config_preserves_other_settings(tmp_path: Path) -> None:
         )
     )
 
-    cli._write_json_mcp_config(
+    install.write_json_mcp_config(
         config_file,
         command="/venv/bin/python",
         arguments=["-m", "second_brain.mcp_server.server"],
@@ -107,13 +132,44 @@ def test_write_json_mcp_config_does_not_replace_malformed_file(tmp_path: Path) -
     config_file.write_text(malformed)
 
     with pytest.raises(ClickException, match="Cannot parse existing"):
-        cli._write_json_mcp_config(
+        install.write_json_mcp_config(
             config_file,
             command="/venv/bin/python",
             arguments=["-m", "second_brain.mcp_server.server"],
         )
 
     assert config_file.read_text() == malformed
+
+
+def test_write_json_mcp_config_creates_private_file(tmp_path: Path) -> None:
+    config_file = tmp_path / ".cursor" / "mcp.json"
+    config_file.parent.mkdir()
+
+    install.write_json_mcp_config(
+        config_file,
+        command="/venv/bin/python",
+        arguments=["-m", "second_brain.mcp_server.server"],
+    )
+
+    assert config_file.is_file()
+    assert stat.S_IMODE(config_file.stat().st_mode) == 0o600
+
+
+def test_write_json_mcp_config_rejects_symlink(tmp_path: Path) -> None:
+    target = tmp_path / "managed.json"
+    target.write_text('{"managed": true}')
+    config_file = tmp_path / "mcp.json"
+    config_file.symlink_to(target)
+
+    with pytest.raises(ClickException, match="symbolic link"):
+        install.write_json_mcp_config(
+            config_file,
+            command="/venv/bin/python",
+            arguments=["-m", "second_brain.mcp_server.server"],
+        )
+
+    assert target.read_text() == '{"managed": true}'
+    assert config_file.is_symlink()
 
 
 def test_write_codex_mcp_config_preserves_other_settings_and_comments(tmp_path: Path) -> None:
@@ -125,7 +181,7 @@ def test_write_codex_mcp_config_preserves_other_settings_and_comments(tmp_path: 
         'command = "/usr/bin/other"\n'
     )
 
-    cli._write_codex_mcp_config(
+    install.write_codex_mcp_config(
         config_file,
         command="/venv/bin/python",
         arguments=["-m", "second_brain.mcp_server.server"],
@@ -148,7 +204,7 @@ def test_write_codex_mcp_config_does_not_replace_malformed_file(tmp_path: Path) 
     config_file.write_text(malformed)
 
     with pytest.raises(ClickException, match="Cannot parse existing"):
-        cli._write_codex_mcp_config(
+        install.write_codex_mcp_config(
             config_file,
             command="/venv/bin/python",
             arguments=["-m", "second_brain.mcp_server.server"],
