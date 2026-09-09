@@ -1,6 +1,6 @@
 # Querying over MCP
 
-Second Brain ships an MCP server that connects the compiled wiki to a tool-using assistant like Claude Desktop or Cursor, so you can ask questions of your notes in plain language instead of opening and searching files yourself. The server runs on your machine and reads only your local vault.
+Second Brain ships an MCP server that connects the compiled wiki to Claude Desktop, ChatGPT Desktop, or Cursor, so you can ask questions of your notes in plain language instead of opening and searching files yourself. The server runs on your machine and reads only your local vault.
 
 What makes this more than search is that the wiki is a *graph*, not a pile of pages (see [wiki structure](wiki-structure.md#pages-are-a-flat-relational-graph)). Pages are joined by typed links (ex: one concept is a prerequisite for another, two are related, a third is only mentioned) and the server lets an assistant walk those links, not just match words against them. The tools fall into four groups: finding pages, following the graph between them, tracing a page back to the sources it was built from, and capturing new material into the pipeline.
 
@@ -9,10 +9,15 @@ What makes this more than search is that the wiki is a *graph*, not a pile of pa
 In the GUI's Settings a one-click button connects each supported assistant. Alternatively, you can install the MCP from terminal:
 
 ```bash
-uv run second-brain mcp install --target claude-desktop   # or: cursor
+uv run second-brain mcp install --target claude-desktop
+uv run second-brain mcp install --target chatgpt-desktop
+uv run second-brain mcp install --target cursor
 ```
 
-> Either way, restart the assistant afterwards so it picks up the new server.
+The installer requires the target application to be installed. It preserves unrelated
+settings in the application's existing configuration and creates the configuration
+directory only after finding the application. Restart the assistant afterwards so it
+picks up the new server.
 
 ## Finding pages
 

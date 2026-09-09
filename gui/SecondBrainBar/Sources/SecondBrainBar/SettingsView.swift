@@ -15,6 +15,7 @@ struct SettingsView: View {
     @State private var scheduleEnabled = false
     @State private var watched: [WatchedFolder] = []
     @State private var connectStatus: [String: ConnectStatus] = [:]
+    @State private var connectError: String?
     @State private var apiKey = ""
     @State private var loadedKey = ""
     @State private var costCap = ""
@@ -196,16 +197,28 @@ struct SettingsView: View {
         }
 
         SettingsGroup(title: "MCP") {
-            HStack(spacing: 8) {
-                ConnectButton(title: "Claude Desktop",
-                              status: connectStatus["claude-desktop"] ?? .idle) {
-                    connect("claude-desktop")
+            VStack(alignment: .leading, spacing: 7) {
+                HStack(spacing: 8) {
+                    ConnectButton(title: "Claude Desktop",
+                                  status: connectStatus["claude-desktop"] ?? .idle) {
+                        connect("claude-desktop")
+                    }
+                    ConnectButton(title: "ChatGPT",
+                                  status: connectStatus["chatgpt-desktop"] ?? .idle) {
+                        connect("chatgpt-desktop")
+                    }
+                    ConnectButton(title: "Cursor",
+                                  status: connectStatus["cursor"] ?? .idle) {
+                        connect("cursor")
+                    }
+                    Spacer(minLength: 0)
                 }
-                ConnectButton(title: "Cursor",
-                              status: connectStatus["cursor"] ?? .idle) {
-                    connect("cursor")
+                if let connectError {
+                    Text(connectError)
+                        .font(Theme.Font.meta(10))
+                        .foregroundStyle(Theme.Colors.danger)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
-                Spacer(minLength: 0)
             }
         }
 
@@ -354,7 +367,7 @@ struct SettingsView: View {
         watched = SourcesStore.load(config)
         loadedKey = EnvStore.readKey(config, keyName: settings.llmProvider.envKeyName)
         apiKey = loadedKey
-        for target in ["claude-desktop", "cursor"] {
+        for target in ["claude-desktop", "chatgpt-desktop", "cursor"] {
             connectStatus[target] = PipelineRunner.isMCPConfigured(target) ? .done : .idle
         }
         probeOllama()
@@ -402,21 +415,17 @@ struct SettingsView: View {
             return
         }
         connectStatus[target] = .working
+        connectError = nil
         DispatchQueue.global(qos: .userInitiated).async {
-            let succeeded = PipelineRunner.runManagedSync(
+            let commandResult = PipelineRunner.runManagedResult(
                 repoDir: repo, command: "mcp install --target \(target)"
             )
             DispatchQueue.main.async {
-                if succeeded {
+                if commandResult.succeeded {
                     connectStatus[target] = .done  // stays done: the server is configured
                 } else {
                     connectStatus[target] = .failed
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
-                        if connectStatus[target] == .failed {
-                            connectStatus[target] =
-                                PipelineRunner.isMCPConfigured(target) ? .done : .idle
-                        }
-                    }
+                    connectError = commandResult.message ?? "Could not configure the MCP server."
                 }
             }
         }
@@ -572,8 +581,8 @@ private struct ConnectButton: View {
         }
     }
 
-    // Connected state is carried by the green check + tint, so the label
-    // keeps the client name (both buttons must fit the popover width).
+    // Connected state is carried by the green check and tint, leaving the
+    // short label available to identify the client.
     private var label: String {
         switch status {
         case .working: return "Connecting"

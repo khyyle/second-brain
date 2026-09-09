@@ -40,7 +40,7 @@ If a source can't be compiled cleanly (e.g., the agent runs away without finishi
 
 The wiki is plain Markdown under `~/second-brain/wiki/`, so the natural way to read it is to open that folder as an Obsidian vault. "Reveal" in the status line opens the vault in Finder.
 
-For asking questions instead of browsing, you can hand the wiki to an assistant like Claude Desktop or Cursor over MCP. See [Querying over MCP](mcp.md) for what it does and how to set it up.
+For asking questions instead of browsing, you can hand the wiki to Claude Desktop, ChatGPT Desktop, or Cursor over MCP. See [Querying over MCP](mcp.md) for what it does and how to set it up.
 
 ## Settings
 

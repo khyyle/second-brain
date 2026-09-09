@@ -1,4 +1,4 @@
-"""MCP server — exposes wiki tools to Claude Desktop and Cursor."""
+"""MCP server that exposes wiki tools to supported desktop assistants."""
 
 from __future__ import annotations
 

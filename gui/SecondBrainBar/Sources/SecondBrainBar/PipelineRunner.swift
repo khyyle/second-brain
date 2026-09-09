@@ -53,13 +53,27 @@ enum PipelineRunner {
         switch target {
         case "claude-desktop":
             path = home.appending(path: "Library/Application Support/Claude/claude_desktop_config.json")
+        case "chatgpt-desktop":
+            path = home.appending(path: ".codex/config.toml")
         case "cursor":
             path = home.appending(path: ".cursor/mcp.json")
         default:
             return false
         }
-        guard let data = try? Data(contentsOf: path),
-              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+
+        guard let data = try? Data(contentsOf: path) else { return false }
+        if target == "chatgpt-desktop" {
+            guard let document = String(data: data, encoding: .utf8) else { return false }
+            let sectionNames = [
+                "[mcp_servers.second-brain]",
+                "[mcp_servers.\"second-brain\"]",
+            ]
+            return document.split(separator: "\n").contains {
+                sectionNames.contains($0.trimmingCharacters(in: .whitespaces))
+            }
+        }
+
+        guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let servers = obj["mcpServers"] as? [String: Any]
         else { return false }
         return servers["second-brain"] != nil
@@ -104,13 +118,32 @@ enum PipelineRunner {
     /// whether it exited cleanly. Call off the main thread; used so the MCP
     /// "Connect" buttons reflect the real result instead of guessing.
     static func runManagedSync(repoDir: URL, command: String) -> Bool {
+        runManagedResult(repoDir: repoDir, command: command).succeeded
+    }
+
+    struct ManagedCommandResult {
+        let succeeded: Bool
+        let message: String?
+    }
+
+    /// Run a management subcommand and retain diagnostics for an interactive caller.
+    static func runManagedResult(repoDir: URL, command: String) -> ManagedCommandResult {
         let process = managedProcess(repoDir: repoDir, command: command)
+        let output = Pipe()
+        process.standardOutput = output
+        process.standardError = output
         do {
             try process.run()
+            let data = output.fileHandleForReading.readDataToEndOfFile()
             process.waitUntilExit()
-            return process.terminationStatus == 0
+            let message = String(decoding: data, as: UTF8.self)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            return ManagedCommandResult(
+                succeeded: process.terminationStatus == 0,
+                message: message.isEmpty ? nil : message
+            )
         } catch {
-            return false
+            return ManagedCommandResult(succeeded: false, message: error.localizedDescription)
         }
     }
 

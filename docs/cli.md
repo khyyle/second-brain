@@ -38,7 +38,9 @@ uv run second-brain recompile <raw-path>...
 Connect the wiki to an assistant over MCP:
 
 ```bash
-uv run second-brain mcp install --target claude-desktop   # or: cursor
+uv run second-brain mcp install --target claude-desktop
+uv run second-brain mcp install --target chatgpt-desktop
+uv run second-brain mcp install --target cursor
 ```
 
 Run the whole pipeline unattended on a schedule (8am, 2pm, and 8pm by default) on watched directories:
