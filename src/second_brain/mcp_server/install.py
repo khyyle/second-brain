@@ -6,7 +6,6 @@ import json
 import os
 import sys
 import tempfile
-from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -16,7 +15,6 @@ import tomlkit
 from tomlkit.exceptions import ParseError
 
 MCP_SERVER_NAME = "second-brain"
-MCP_SERVER_MODULE = "second_brain.mcp_server.server"
 
 
 @dataclass(frozen=True)
@@ -28,12 +26,7 @@ class MCPInstallTarget:
     config_format: Literal["json", "toml"]
 
 
-def resolve_mcp_client(
-    target: str,
-    *,
-    home: Path | None = None,
-    application_directories: Sequence[Path] | None = None,
-) -> MCPInstallTarget:
+def resolve_mcp_client(target: str) -> MCPInstallTarget:
     """
     Resolve an installed desktop client and its native MCP configuration.
 
@@ -41,10 +34,6 @@ def resolve_mcp_client(
     ----------
     target: str
         CLI identifier for the desktop client.
-    home: Path | None
-        Home directory override, primarily for isolated tests.
-    application_directories: Sequence[Path] | None
-        macOS application directories to search.
 
     Returns
     -------
@@ -56,7 +45,7 @@ def resolve_mcp_client(
     click.ClickException
         If the target is unsupported or its application is not installed.
     """
-    home_directory = home or Path.home()
+    home_directory = Path.home()
     if target == "claude-desktop":
         display_name = "Claude Desktop"
         application_name = "Claude.app"
@@ -81,7 +70,7 @@ def resolve_mcp_client(
     else:
         raise click.ClickException(f"Unsupported MCP target: {target}")
 
-    search_directories = application_directories or (
+    search_directories = (
         Path("/Applications"),
         home_directory / "Applications",
     )
@@ -99,14 +88,9 @@ def resolve_mcp_client(
     )
 
 
-def resolve_mcp_server_command(executable: Path | None = None) -> tuple[str, list[str]]:
+def resolve_mcp_server_command() -> tuple[str, list[str]]:
     """
-    Resolve the Python command used to launch the local MCP server.
-
-    Parameters
-    ----------
-    executable: Path | None
-        Python executable override. Defaults to the interpreter running the CLI.
+    Resolve the generated CLI command used to launch the local MCP server.
 
     Returns
     -------
@@ -116,16 +100,20 @@ def resolve_mcp_server_command(executable: Path | None = None) -> tuple[str, lis
     Raises
     ------
     click.ClickException
-        If the Python executable does not exist or cannot be executed.
+        If the generated CLI executable does not exist or cannot be executed.
     """
-    candidate = executable or Path(sys.executable)
+    interpreter = Path(sys.executable)
     try:
-        python_path = candidate.expanduser().resolve(strict=True)
-    except OSError as exc:
-        raise click.ClickException(f"Python executable was not found: {candidate}") from exc
-    if not python_path.is_file() or not os.access(python_path, os.X_OK):
-        raise click.ClickException(f"Python executable is not runnable: {python_path}")
-    return str(python_path), ["-m", MCP_SERVER_MODULE]
+        command_path = interpreter.expanduser().absolute().with_name(MCP_SERVER_NAME)
+    except (OSError, RuntimeError) as exc:
+        raise click.ClickException(
+            f"Could not locate the Second Brain executable beside {interpreter}"
+        ) from exc
+    if not command_path.exists():
+        raise click.ClickException(f"Second Brain executable was not found: {command_path}")
+    if not command_path.is_file() or not os.access(command_path, os.X_OK):
+        raise click.ClickException(f"Second Brain executable is not runnable: {command_path}")
+    return str(command_path), ["mcp", "serve"]
 
 
 def _validate_config_path(path: Path) -> None:
