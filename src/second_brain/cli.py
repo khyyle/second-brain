@@ -4,15 +4,35 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import sys
+import tempfile
+from collections.abc import Sequence
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 import click
+import tomlkit
+from tomlkit.exceptions import ParseError
 
 from second_brain.config import Config, load_config
 from second_brain.ingestion.manifest import Manifest
 
 logger = logging.getLogger(__name__)
+
+MCP_SERVER_NAME = "second-brain"
+MCP_SERVER_MODULE = "second_brain.mcp_server.server"
+
+
+@dataclass(frozen=True)
+class MCPClient:
+    """An installed MCP client and its native configuration file."""
+
+    display_name: str
+    application_path: Path
+    config_file: Path
+    config_format: Literal["json", "toml"]
 
 
 def _setup_logging(verbose: bool) -> None:
@@ -846,46 +866,232 @@ def mcp_serve(ctx: click.Context) -> None:
     serve()
 
 
+def _resolve_mcp_client(
+    target: str,
+    *,
+    home: Path | None = None,
+    application_directories: Sequence[Path] | None = None,
+) -> MCPClient:
+    """
+    Resolve an installed desktop client and its native MCP configuration.
+
+    Parameters
+    ----------
+    target: str
+        CLI identifier for the desktop client.
+    home: Path | None
+        Home directory override, primarily for isolated tests.
+    application_directories: Sequence[Path] | None
+        macOS application directories to search.
+
+    Returns
+    -------
+    MCPClient
+        Installed application path and its MCP configuration details.
+
+    Raises
+    ------
+    click.ClickException
+        If the target is unsupported or its application is not installed.
+    """
+    home_directory = home or Path.home()
+    client_definitions: dict[str, tuple[str, str, Path, Literal["json", "toml"]]] = {
+        "claude-desktop": (
+            "Claude Desktop",
+            "Claude.app",
+            home_directory
+            / "Library"
+            / "Application Support"
+            / "Claude"
+            / "claude_desktop_config.json",
+            "json",
+        ),
+        "cursor": (
+            "Cursor",
+            "Cursor.app",
+            home_directory / ".cursor" / "mcp.json",
+            "json",
+        ),
+        "chatgpt-desktop": (
+            "ChatGPT Desktop",
+            "ChatGPT.app",
+            home_directory / ".codex" / "config.toml",
+            "toml",
+        ),
+    }
+    try:
+        display_name, application_name, config_file, config_format = client_definitions[target]
+    except KeyError as exc:
+        raise click.ClickException(f"Unsupported MCP target: {target}") from exc
+
+    search_directories = application_directories or (
+        Path("/Applications"),
+        home_directory / "Applications",
+    )
+    application_path = next(
+        (
+            directory / application_name
+            for directory in search_directories
+            if (directory / application_name).is_dir()
+        ),
+        None,
+    )
+    if application_path is None:
+        searched = ", ".join(str(directory / application_name) for directory in search_directories)
+        raise click.ClickException(
+            f"{display_name} is not installed. Expected to find it at: {searched}"
+        )
+
+    return MCPClient(
+        display_name=display_name,
+        application_path=application_path,
+        config_file=config_file,
+        config_format=config_format,
+    )
+
+
+def _resolve_mcp_server_command(executable: Path | None = None) -> tuple[str, list[str]]:
+    """
+    Resolve the Python command used to launch the local MCP server.
+
+    Parameters
+    ----------
+    executable: Path | None
+        Python executable override. Defaults to the interpreter running the CLI.
+
+    Returns
+    -------
+    tuple[str, list[str]]
+        Absolute executable path and module arguments.
+
+    Raises
+    ------
+    click.ClickException
+        If the Python executable does not exist or cannot be executed.
+    """
+    candidate = executable or Path(sys.executable)
+    try:
+        python_path = candidate.expanduser().resolve(strict=True)
+    except OSError as exc:
+        raise click.ClickException(f"Python executable was not found: {candidate}") from exc
+    if not python_path.is_file() or not os.access(python_path, os.X_OK):
+        raise click.ClickException(f"Python executable is not runnable: {python_path}")
+    return str(python_path), ["-m", MCP_SERVER_MODULE]
+
+
+def _atomic_write_text(path: Path, content: str) -> None:
+    """Replace a configuration file without exposing a partially written file."""
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+        dir=path.parent,
+        text=True,
+    )
+    temporary_path = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as temporary_file:
+            temporary_file.write(content)
+        os.chmod(temporary_path, 0o600)
+        os.replace(temporary_path, path)
+    except OSError as exc:
+        temporary_path.unlink(missing_ok=True)
+        raise click.ClickException(f"Could not update MCP configuration {path}: {exc}") from exc
+
+
+def _write_json_mcp_config(
+    config_file: Path,
+    *,
+    command: str,
+    arguments: list[str],
+) -> None:
+    """Add the server to a Claude or Cursor JSON configuration."""
+    document: dict[str, object] = {}
+    if config_file.exists():
+        try:
+            parsed = json.loads(config_file.read_text())
+        except (OSError, json.JSONDecodeError) as exc:
+            raise click.ClickException(
+                f"Cannot parse existing MCP configuration {config_file}: {exc}"
+            ) from exc
+        if not isinstance(parsed, dict):
+            raise click.ClickException(
+                f"Cannot parse existing MCP configuration {config_file}: root must be an object"
+            )
+        document = parsed
+
+    servers = document.setdefault("mcpServers", {})
+    if not isinstance(servers, dict):
+        raise click.ClickException(
+            f"Cannot update MCP configuration {config_file}: mcpServers must be an object"
+        )
+    servers[MCP_SERVER_NAME] = {"command": command, "args": arguments}
+    _atomic_write_text(config_file, json.dumps(document, indent=2) + "\n")
+
+
+def _write_codex_mcp_config(
+    config_file: Path,
+    *,
+    command: str,
+    arguments: list[str],
+) -> None:
+    """Add the server to the TOML configuration shared by ChatGPT and Codex."""
+    if config_file.exists():
+        try:
+            document = tomlkit.parse(config_file.read_text())
+        except (OSError, ParseError) as exc:
+            raise click.ClickException(
+                f"Cannot parse existing Codex configuration {config_file}: {exc}"
+            ) from exc
+    else:
+        document = tomlkit.document()
+
+    if "mcp_servers" not in document:
+        document["mcp_servers"] = tomlkit.table()
+    servers = document["mcp_servers"]
+    if not isinstance(servers, dict):
+        raise click.ClickException(
+            f"Cannot update Codex configuration {config_file}: mcp_servers must be a table"
+        )
+
+    server = tomlkit.table()
+    server["command"] = command
+    server["args"] = arguments
+    servers[MCP_SERVER_NAME] = server
+    _atomic_write_text(config_file, tomlkit.dumps(document))
+
+
 @mcp.command(name="install")
 @click.option(
     "--target",
-    type=click.Choice(["claude-desktop", "cursor"]),
+    type=click.Choice(["claude-desktop", "chatgpt-desktop", "cursor"]),
     required=True,
     help="Target application",
 )
 @click.pass_context
 def mcp_install(ctx: click.Context, target: str) -> None:
     """Configure MCP server for a target application."""
-    python_path = sys.executable
-    module_path = "second_brain.mcp_server.server"
+    del ctx
+    client = _resolve_mcp_client(target)
+    command, arguments = _resolve_mcp_server_command()
 
-    mcp_config = {
-        "mcpServers": {
-            "second-brain": {
-                "command": python_path,
-                "args": ["-m", module_path],
-            }
-        }
-    }
-
-    if target == "claude-desktop":
-        config_dir = Path.home() / "Library" / "Application Support" / "Claude"
-        config_file = config_dir / "claude_desktop_config.json"
+    if client.config_format == "toml":
+        _write_codex_mcp_config(
+            client.config_file,
+            command=command,
+            arguments=arguments,
+        )
     else:
-        config_dir = Path.home() / ".cursor"
-        config_file = config_dir / "mcp.json"
+        _write_json_mcp_config(
+            client.config_file,
+            command=command,
+            arguments=arguments,
+        )
 
-    config_dir.mkdir(parents=True, exist_ok=True)
-
-    existing = {}
-    if config_file.exists():
-        existing = json.loads(config_file.read_text())
-
-    existing.setdefault("mcpServers", {})
-    existing["mcpServers"]["second-brain"] = mcp_config["mcpServers"]["second-brain"]
-    config_file.write_text(json.dumps(existing, indent=2))
-
-    click.echo(f"Configured MCP server in {config_file}")
+    click.echo(
+        f"Configured MCP server for {client.display_name} in {client.config_file}. "
+        f"Restart {client.display_name} to connect."
+    )
 
 
 @main.command()
