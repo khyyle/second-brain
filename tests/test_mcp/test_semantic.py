@@ -29,11 +29,6 @@ def _fake_embed(text: str, config: SearchConfig, role: EmbeddingRole) -> list[fl
     return [0.0, 0.0, 1.0]
 
 
-@pytest.fixture
-def semantic_config() -> SearchConfig:
-    return SearchConfig(embedding_dimensions=3, semantic_enabled=True)
-
-
 @pytest.fixture(autouse=True)
 def _mock_embeddings(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(embeddings_mod, "embed_text", _fake_embed)
@@ -62,21 +57,19 @@ def _index_sample(index: SearchIndex) -> None:
     )
 
 
-def test_semantic_enabled_when_configured(tmp_path: Path, semantic_config: SearchConfig) -> None:
-    index = SearchIndex(tmp_path / "s.db", semantic_config)
-    assert index.semantic_enabled is True
+def test_semantic_enabled_when_configured(search_index: SearchIndex) -> None:
+    assert search_index.semantic_enabled is True
 
 
-def test_semantic_search_returns_nearest(tmp_path: Path, semantic_config: SearchConfig) -> None:
-    index = SearchIndex(tmp_path / "s.db", semantic_config)
-    _index_sample(index)
-    index.embed_pending()
+def test_semantic_search_returns_nearest(search_index: SearchIndex) -> None:
+    _index_sample(search_index)
+    search_index.embed_pending()
 
-    hits = index.semantic_search("gradient optimization", limit=1)
+    hits = search_index.semantic_search("gradient optimization", limit=1)
     assert len(hits) == 1
     assert hits[0].stem == "gradient-descent"
 
-    hits2 = index.semantic_search("penguin", limit=1)
+    hits2 = search_index.semantic_search("penguin", limit=1)
     assert hits2[0].stem == "penguins"
 
 
@@ -112,32 +105,25 @@ def test_semantic_disabled_without_config(tmp_path: Path) -> None:
 
 
 def test_semantic_returns_empty_when_embeddings_unavailable(
-    tmp_path: Path, semantic_config: SearchConfig, monkeypatch: pytest.MonkeyPatch
+    search_index: SearchIndex, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    index = SearchIndex(tmp_path / "s.db", semantic_config)
-    _index_sample(index)
+    _index_sample(search_index)
     # Simulate Ollama going away: embed_text now returns None.
     monkeypatch.setattr(embeddings_mod, "embed_text", lambda text, config, role: None)
-    assert index.semantic_search("gradient") == []
+    assert search_index.semantic_search("gradient") == []
 
 
-def test_keyword_search_still_works_with_semantic_on(
-    tmp_path: Path, semantic_config: SearchConfig
-) -> None:
-    index = SearchIndex(tmp_path / "s.db", semantic_config)
-    _index_sample(index)
-    hits = index.search("penguin")
+def test_keyword_search_still_works_with_semantic_on(search_index: SearchIndex) -> None:
+    _index_sample(search_index)
+    hits = search_index.search("penguin")
     assert any(h.stem == "penguins" for h in hits)
 
 
-def test_near_duplicate_pairs_finds_only_close_pages(
-    tmp_path: Path, semantic_config: SearchConfig
-) -> None:
-    index = SearchIndex(tmp_path / "s.db", semantic_config)
-    _index_sample(index)
+def test_near_duplicate_pairs_finds_only_close_pages(search_index: SearchIndex) -> None:
+    _index_sample(search_index)
     # A near-copy of the gradient page: its fake embedding matches "gradient"
     # exactly, while the penguin page points in an orthogonal direction.
-    index.index_page(
+    search_index.index_page(
         stem="gradient-descent-2",
         title="Gradient methods",
         content="gradient stepping toward minima",
@@ -147,21 +133,18 @@ def test_near_duplicate_pairs_finds_only_close_pages(
         word_count=4,
         path="concepts/gradient-descent-2.md",
     )
-    index.embed_pending()
+    search_index.embed_pending()
 
-    pairs = index.near_duplicate_pairs(min_similarity=0.95)
+    pairs = search_index.near_duplicate_pairs(min_similarity=0.95)
 
     assert [(a, b) for a, b, _ in pairs] == [("gradient-descent", "gradient-descent-2")]
     assert pairs[0][2] >= 0.95
 
 
-def test_near_duplicate_pairs_ignores_cross_type_matches(
-    tmp_path: Path, semantic_config: SearchConfig
-) -> None:
-    index = SearchIndex(tmp_path / "s.db", semantic_config)
+def test_near_duplicate_pairs_ignores_cross_type_matches(search_index: SearchIndex) -> None:
     # A concept and a problem that embed identically: high similarity, but a
     # problem drilling a concept is intentional, not a duplicate.
-    index.index_page(
+    search_index.index_page(
         stem="gradient-descent",
         title="Gradient Descent",
         content="gradient based optimization method",
@@ -171,7 +154,7 @@ def test_near_duplicate_pairs_ignores_cross_type_matches(
         word_count=4,
         path="concepts/gradient-descent.md",
     )
-    index.index_page(
+    search_index.index_page(
         stem="gradient-descent-drill",
         title="Gradient Descent drill",
         content="gradient based optimization method",
@@ -181,9 +164,9 @@ def test_near_duplicate_pairs_ignores_cross_type_matches(
         word_count=4,
         path="problems/gradient-descent-drill.md",
     )
-    index.embed_pending()
+    search_index.embed_pending()
 
-    assert index.near_duplicate_pairs(min_similarity=0.95) == []
+    assert search_index.near_duplicate_pairs(min_similarity=0.95) == []
 
 
 def test_near_duplicate_pairs_empty_without_semantic(tmp_path: Path) -> None:
@@ -191,12 +174,9 @@ def test_near_duplicate_pairs_empty_without_semantic(tmp_path: Path) -> None:
     assert index.near_duplicate_pairs() == []
 
 
-def test_near_duplicate_pairs_excludes_dismissed(
-    tmp_path: Path, semantic_config: SearchConfig
-) -> None:
-    index = SearchIndex(tmp_path / "s.db", semantic_config)
-    _index_sample(index)
-    index.index_page(
+def test_near_duplicate_pairs_excludes_dismissed(search_index: SearchIndex) -> None:
+    _index_sample(search_index)
+    search_index.index_page(
         stem="gradient-descent-2",
         title="Gradient methods",
         content="gradient stepping toward minima",
@@ -206,9 +186,9 @@ def test_near_duplicate_pairs_excludes_dismissed(
         word_count=4,
         path="concepts/gradient-descent-2.md",
     )
-    index.embed_pending()
+    search_index.embed_pending()
 
-    pairs = index.near_duplicate_pairs(
+    pairs = search_index.near_duplicate_pairs(
         min_similarity=0.95,
         exclude={("gradient-descent", "gradient-descent-2")},
     )

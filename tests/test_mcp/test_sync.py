@@ -19,11 +19,6 @@ _BASE_MTIME = 1_700_000_000.0
 
 
 @pytest.fixture
-def semantic_config() -> SearchConfig:
-    return SearchConfig(embedding_dimensions=3, semantic_enabled=True)
-
-
-@pytest.fixture
 def embed_calls(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     """Patch the embedder to record each call, proving when work happens."""
     calls: list[str] = []
@@ -34,6 +29,16 @@ def embed_calls(monkeypatch: pytest.MonkeyPatch) -> list[str]:
 
     monkeypatch.setattr(embeddings_mod, "embed_text", _record)
     return calls
+
+
+@pytest.fixture(autouse=True)
+def _mock_default_embeddings(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Ensure all tests in this module have a 3-d mock embedder by default."""
+
+    def _default_embed(text: str, config: SearchConfig, role: EmbeddingRole) -> list[float]:
+        return [0.1, 0.2, 0.3]
+
+    monkeypatch.setattr(embeddings_mod, "embed_text", _default_embed)
 
 
 def _write(wiki_dir: Path, stem: str, body: str, mtime: float) -> Path:
@@ -61,9 +66,7 @@ def test_sync_indexes_all_on_fresh_index(
     assert {p["stem"] for p in index.list_pages()} == {"alpha", "beta"}
 
 
-def test_sync_skips_unchanged_pages(
-    tmp_path: Path, semantic_config: SearchConfig, embed_calls: list[str]
-) -> None:
+def test_sync_skips_unchanged_pages(tmp_path: Path, semantic_config: SearchConfig) -> None:
     wiki = tmp_path / "wiki"
     _write(wiki, "alpha", "alpha about cats", _BASE_MTIME)
     index = SearchIndex(tmp_path / "s.db", semantic_config)
@@ -72,9 +75,7 @@ def test_sync_skips_unchanged_pages(
     assert index.sync_from_wiki(wiki) == 0
 
 
-def test_sync_reindexes_changed_content(
-    tmp_path: Path, semantic_config: SearchConfig, embed_calls: list[str]
-) -> None:
+def test_sync_reindexes_changed_content(tmp_path: Path, semantic_config: SearchConfig) -> None:
     wiki = tmp_path / "wiki"
     _write(wiki, "alpha", "alpha about cats", _BASE_MTIME)
     _write(wiki, "beta", "beta about dogs", _BASE_MTIME)
@@ -87,7 +88,7 @@ def test_sync_reindexes_changed_content(
 
 
 def test_sync_skips_identical_content_with_new_mtime(
-    tmp_path: Path, semantic_config: SearchConfig, embed_calls: list[str]
+    tmp_path: Path, semantic_config: SearchConfig
 ) -> None:
     wiki = tmp_path / "wiki"
     _write(wiki, "alpha", "alpha about cats", _BASE_MTIME)
@@ -101,9 +102,7 @@ def test_sync_skips_identical_content_with_new_mtime(
     assert index.sync_from_wiki(wiki) == 0
 
 
-def test_sync_picks_up_new_file(
-    tmp_path: Path, semantic_config: SearchConfig, embed_calls: list[str]
-) -> None:
+def test_sync_picks_up_new_file(tmp_path: Path, semantic_config: SearchConfig) -> None:
     wiki = tmp_path / "wiki"
     _write(wiki, "alpha", "alpha about cats", _BASE_MTIME)
     index = SearchIndex(tmp_path / "s.db", semantic_config)
@@ -114,9 +113,7 @@ def test_sync_picks_up_new_file(
     assert {p["stem"] for p in index.list_pages()} == {"alpha", "gamma"}
 
 
-def test_sync_drops_deleted_file(
-    tmp_path: Path, semantic_config: SearchConfig, embed_calls: list[str]
-) -> None:
+def test_sync_drops_deleted_file(tmp_path: Path, semantic_config: SearchConfig) -> None:
     wiki = tmp_path / "wiki"
     _write(wiki, "alpha", "alpha about cats", _BASE_MTIME)
     beta = _write(wiki, "beta", "beta about dogs", _BASE_MTIME)
@@ -188,7 +185,7 @@ def test_embed_pending_stops_when_embedder_unavailable(
 
 
 def test_ensure_synced_picks_up_new_file_without_restart(
-    tmp_path: Path, semantic_config: SearchConfig, embed_calls: list[str]
+    tmp_path: Path, semantic_config: SearchConfig
 ) -> None:
     wiki = tmp_path / "wiki"
     raw = tmp_path / "raw"

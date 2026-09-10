@@ -3,20 +3,10 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-from second_brain.config import SearchConfig
-from second_brain.mcp_server.search import SearchIndex
-from second_brain.mcp_server.tools import WikiTools
-
-
-def _make_tools(tmp_path: Path) -> tuple[WikiTools, Path]:
-    data_dir = tmp_path / "data"
-    raw = data_dir / "raw"
-    wiki = data_dir / "wiki"
-    raw.mkdir(parents=True)
-    wiki.mkdir(parents=True)
-    index = SearchIndex(data_dir / "search.db", SearchConfig(semantic_enabled=False))
-    return WikiTools(wiki, raw, index), data_dir
+if TYPE_CHECKING:
+    from tests.test_mcp.conftest import WikiToolsHarness
 
 
 def _write_page(wiki: Path, stem: str, source_ref: str) -> None:
@@ -28,32 +18,29 @@ def _write_page(wiki: Path, stem: str, source_ref: str) -> None:
     )
 
 
-def test_get_sources_resolves_data_dir_relative_path(tmp_path: Path) -> None:
-    tools, data_dir = _make_tools(tmp_path)
-    source = data_dir / "raw" / "documents" / "swaps and etfs.md"
+def test_get_sources_resolves_data_dir_relative_path(wiki_harness: WikiToolsHarness) -> None:
+    source = wiki_harness.raw_dir / "documents" / "swaps and etfs.md"
     source.parent.mkdir(parents=True, exist_ok=True)
     source.write_text("SWAP NOTES", encoding="utf-8")
     # Frontmatter stores the path relative to the data dir, with raw/ prefix.
-    _write_page(tools._wiki, "equity-swaps", "raw/documents/swaps and etfs.md")
+    _write_page(wiki_harness.wiki_dir, "equity-swaps", "raw/documents/swaps and etfs.md")
 
-    out = tools.get_sources("equity-swaps")
+    out = wiki_harness.tools.get_sources("equity-swaps")
     assert "SWAP NOTES" in out
     assert "source file not found" not in out
 
 
-def test_get_sources_falls_back_to_basename(tmp_path: Path) -> None:
-    tools, data_dir = _make_tools(tmp_path)
-    source = data_dir / "raw" / "chatgpt" / "deep-dive-123.md"
+def test_get_sources_falls_back_to_basename(wiki_harness: WikiToolsHarness) -> None:
+    source = wiki_harness.raw_dir / "chatgpt" / "deep-dive-123.md"
     source.parent.mkdir(parents=True, exist_ok=True)
     source.write_text("CHAT NOTES", encoding="utf-8")
     # Frontmatter records only the bare filename.
-    _write_page(tools._wiki, "topic", "deep-dive-123.md")
+    _write_page(wiki_harness.wiki_dir, "topic", "deep-dive-123.md")
 
-    out = tools.get_sources("topic")
+    out = wiki_harness.tools.get_sources("topic")
     assert "CHAT NOTES" in out
 
 
-def test_get_sources_reports_missing(tmp_path: Path) -> None:
-    tools, _ = _make_tools(tmp_path)
-    _write_page(tools._wiki, "topic", "raw/documents/nope.md")
-    assert "source file not found" in tools.get_sources("topic")
+def test_get_sources_reports_missing(wiki_harness: WikiToolsHarness) -> None:
+    _write_page(wiki_harness.wiki_dir, "topic", "raw/documents/nope.md")
+    assert "source file not found" in wiki_harness.tools.get_sources("topic")

@@ -49,8 +49,7 @@ def test_resolve_mcp_client_uses_native_config(
     config_format: str,
 ) -> None:
     home = tmp_path / "home"
-    applications = tmp_path / "Applications"
-    application = applications / application_name
+    application = home / "Applications" / application_name
     application.mkdir(parents=True)
     monkeypatch.setenv("HOME", str(home))
 
