@@ -14,6 +14,7 @@ from second_brain.clustering import (
 )
 from second_brain.clustering import sources as sources_mod
 from second_brain.config import ClusteringConfig, SearchConfig
+from second_brain.mcp_server.embeddings import EmbeddingRole
 
 
 def _write(raw_dir: Path, rel: str, text: str) -> None:
@@ -48,7 +49,13 @@ def test_cluster_sources_groups_by_embedding(
         "alpha beta": [0.98, 0.02],
         "zeta zeta": [0.0, 1.0],
     }
-    monkeypatch.setattr(sources_mod, "embed_text", lambda text, config: vectors[text])
+    roles: list[EmbeddingRole] = []
+
+    def fake_embed(text: str, config: SearchConfig, role: EmbeddingRole) -> list[float]:
+        roles.append(role)
+        return vectors[text]
+
+    monkeypatch.setattr(sources_mod, "embed_text", fake_embed)
 
     clusters = cluster_sources(
         paths, raw, SearchConfig(), ThresholdClusterer(threshold=0.9), signature_chars=100
@@ -58,6 +65,7 @@ def test_cluster_sources_groups_by_embedding(
     assert any(sorted(c) == ["chatgpt/a.md", "chatgpt/b.md"] for c in clusters)
     assert ["chatgpt/c.md"] in clusters
     assert sorted(p for c in clusters for p in c) == sorted(paths)
+    assert roles == ["clustering"] * len(paths)
 
 
 def test_embed_failure_becomes_singleton_not_dropped(
@@ -72,7 +80,7 @@ def test_embed_failure_becomes_singleton_not_dropped(
     monkeypatch.setattr(
         sources_mod,
         "embed_text",
-        lambda text, config: [1.0, 0.0] if "alpha" in text else None,
+        lambda text, config, role: [1.0, 0.0] if "alpha" in text else None,
     )
 
     clusters = cluster_sources(paths, raw, SearchConfig(), ThresholdClusterer(threshold=0.5))
@@ -90,7 +98,7 @@ def test_scoped_clustering_clusters_only_in_scope_lanes(
         _write(raw, rel, rel)
 
     # Identical vectors so any in-scope pair would cluster if eligible.
-    monkeypatch.setattr(sources_mod, "embed_text", lambda text, config: [1.0, 0.0])
+    monkeypatch.setattr(sources_mod, "embed_text", lambda text, config, role: [1.0, 0.0])
 
     clusters = cluster_scoped_sources(
         paths, raw, SearchConfig(), ThresholdClusterer(threshold=0.5), ("chatgpt",)

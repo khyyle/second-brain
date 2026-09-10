@@ -58,7 +58,7 @@ def embed_sources(
         except OSError as exc:
             logger.warning("Could not read %s for clustering: %s", rel, exc)
             continue
-        vector = embed_text(text[:signature_chars], search_config)
+        vector = embed_text(text[:signature_chars], search_config, role="clustering")
         if vector is None:
             continue
         embedded.append(rel)

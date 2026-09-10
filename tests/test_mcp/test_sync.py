@@ -9,6 +9,7 @@ import pytest
 
 from second_brain.config import SearchConfig
 from second_brain.mcp_server import embeddings as embeddings_mod
+from second_brain.mcp_server.embeddings import EmbeddingRole
 from second_brain.mcp_server.search import SearchIndex
 from second_brain.mcp_server.tools import WikiTools
 
@@ -27,7 +28,7 @@ def embed_calls(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     """Patch the embedder to record each call, proving when work happens."""
     calls: list[str] = []
 
-    def _record(text: str, config: SearchConfig) -> list[float]:
+    def _record(text: str, config: SearchConfig, role: EmbeddingRole) -> list[float]:
         calls.append(text)
         return [0.1, 0.2, 0.3]
 
@@ -177,7 +178,7 @@ def test_embed_pending_stops_when_embedder_unavailable(
     index = SearchIndex(tmp_path / "s.db", semantic_config)
     index.sync_from_wiki(wiki)
 
-    monkeypatch.setattr(embeddings_mod, "embed_text", lambda text, config: None)
+    monkeypatch.setattr(embeddings_mod, "embed_text", lambda text, config, role: None)
     assert index.embed_pending() == 0
     # Page stays pending; a later pass with a working embedder will retry.
     assert index.semantic_search("cats") == []

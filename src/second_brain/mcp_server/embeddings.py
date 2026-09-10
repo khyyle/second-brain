@@ -1,10 +1,9 @@
-"""
-Text embeddings via Ollama, for an optional semantic search layer.
-"""
+"""Text embeddings via Ollama for semantic retrieval and source clustering."""
 
 from __future__ import annotations
 
 import logging
+from typing import Literal
 
 import httpx
 
@@ -20,7 +19,14 @@ EMBED_CHUNK_CHARS = 4000
 EMBED_MAX_CHUNKS = 12
 
 
-def _embed_chunk(text: str, config: SearchConfig) -> list[float] | None:
+EmbeddingRole = Literal["search_document", "search_query", "clustering"]
+
+
+def _embed_chunk(
+    text: str,
+    config: SearchConfig,
+    role: EmbeddingRole,
+) -> list[float] | None:
     """
     Embed a single in-range chunk via Ollama.
 
@@ -30,6 +36,8 @@ def _embed_chunk(text: str, config: SearchConfig) -> list[float] | None:
         A chunk small enough to fit the embedder's context window.
     config: SearchConfig
         Embedding model and Ollama host settings.
+    role: EmbeddingRole
+        Intended role of the vector in downstream comparisons.
 
     Returns
     -------
@@ -40,7 +48,10 @@ def _embed_chunk(text: str, config: SearchConfig) -> list[float] | None:
     try:
         response = httpx.post(
             f"{config.ollama_host}/api/embeddings",
-            json={"model": config.embedding_model, "prompt": text},
+            json={
+                "model": config.embedding_model,
+                "prompt": f"{role}: {text}",
+            },
             timeout=EMBED_TIMEOUT_SECONDS,
         )
         response.raise_for_status()
@@ -54,7 +65,11 @@ def _embed_chunk(text: str, config: SearchConfig) -> list[float] | None:
     return [float(value) for value in embedding]
 
 
-def embed_text(text: str, config: SearchConfig) -> list[float] | None:
+def embed_text(
+    text: str,
+    config: SearchConfig,
+    role: EmbeddingRole,
+) -> list[float] | None:
     """
     Embed text with the configured Ollama model, chunking long input.
 
@@ -67,6 +82,11 @@ def embed_text(text: str, config: SearchConfig) -> list[float] | None:
         Text to embed. May exceed the model's context window.
     config: SearchConfig
         Embedding model and Ollama host settings.
+    role: EmbeddingRole
+        Intended role of the resulting vector in downstream comparisons.
+        Use "search_document" for indexed wiki pages,
+        "search_query" for retrieval queries,
+        "clustering" for grouping topically related sources
 
     Returns
     -------
@@ -78,7 +98,9 @@ def embed_text(text: str, config: SearchConfig) -> list[float] | None:
         :EMBED_MAX_CHUNKS
     ] or [""]
 
-    vectors = [vec for chunk in chunks if (vec := _embed_chunk(chunk, config)) is not None]
+    vectors = [
+        vector for chunk in chunks if (vector := _embed_chunk(chunk, config, role)) is not None
+    ]
     if not vectors:
         return None
     if len(vectors) == 1:

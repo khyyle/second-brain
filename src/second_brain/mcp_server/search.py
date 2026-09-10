@@ -335,7 +335,11 @@ class SearchIndex:
 
         embedded_count = 0
         for row in pending:
-            vector = embed_text(f"{row['title']}\n\n{row['content']}", self._search_config)
+            vector = embed_text(
+                f"{row['title']}\n\n{row['content']}",
+                self._search_config,
+                role="search_document",
+            )
             if vector is None:
                 # Embedder unavailable; leave the rest pending for next pass.
                 break
@@ -445,7 +449,7 @@ class SearchIndex:
 
         from second_brain.mcp_server.embeddings import embed_text
 
-        vector = embed_text(query, self._search_config)
+        vector = embed_text(query, self._search_config, role="search_query")
         if vector is None:
             return []
 

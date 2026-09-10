@@ -8,6 +8,7 @@ import pytest
 
 from second_brain.config import SearchConfig
 from second_brain.mcp_server import embeddings as embeddings_mod
+from second_brain.mcp_server.embeddings import EmbeddingRole
 from second_brain.mcp_server.search import SearchIndex
 
 # Tiny deterministic "embeddings": map keywords to fixed 3-d vectors so
@@ -20,7 +21,7 @@ _VECTORS = {
 }
 
 
-def _fake_embed(text: str, config: SearchConfig) -> list[float] | None:
+def _fake_embed(text: str, config: SearchConfig, role: EmbeddingRole) -> list[float] | None:
     lowered = text.lower()
     for key, vec in _VECTORS.items():
         if key in lowered:
@@ -79,6 +80,31 @@ def test_semantic_search_returns_nearest(tmp_path: Path, semantic_config: Search
     assert hits2[0].stem == "penguins"
 
 
+def test_semantic_search_uses_retrieval_roles(
+    tmp_path: Path,
+    semantic_config: SearchConfig,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    roles: list[EmbeddingRole] = []
+
+    def record_role(text: str, config: SearchConfig, role: EmbeddingRole) -> list[float] | None:
+        roles.append(role)
+        return _fake_embed(text, config, role)
+
+    monkeypatch.setattr(embeddings_mod, "embed_text", record_role)
+    index = SearchIndex(tmp_path / "s.db", semantic_config)
+    _index_sample(index)
+
+    index.embed_pending()
+    index.semantic_search("gradient")
+
+    assert roles == [
+        "search_document",
+        "search_document",
+        "search_query",
+    ]
+
+
 def test_semantic_disabled_without_config(tmp_path: Path) -> None:
     index = SearchIndex(tmp_path / "s.db")  # no SearchConfig -> keyword only
     assert index.semantic_enabled is False
@@ -91,7 +117,7 @@ def test_semantic_returns_empty_when_embeddings_unavailable(
     index = SearchIndex(tmp_path / "s.db", semantic_config)
     _index_sample(index)
     # Simulate Ollama going away: embed_text now returns None.
-    monkeypatch.setattr(embeddings_mod, "embed_text", lambda text, config: None)
+    monkeypatch.setattr(embeddings_mod, "embed_text", lambda text, config, role: None)
     assert index.semantic_search("gradient") == []
 
 
