@@ -163,7 +163,7 @@ class SearchIndex:
             with self._vec_conn() as conn:
                 conn.execute(
                     f"CREATE VIRTUAL TABLE IF NOT EXISTS wiki_vec USING vec0("
-                    f"stem TEXT PRIMARY KEY, embedding FLOAT[{self._dim}])"
+                    f"stem TEXT PRIMARY KEY, embedding FLOAT[{self._dim}] distance_metric=cosine)"
                 )
         except (sqlite3.Error, AttributeError, OSError) as exc:
             logger.warning("Semantic search disabled (sqlite-vec unavailable): %s", exc)
