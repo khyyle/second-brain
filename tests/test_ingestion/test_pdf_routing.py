@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Generator
 from pathlib import Path
 
 import pytest
@@ -55,38 +54,30 @@ class FakeDocling:
         )
 
 
-@pytest.fixture
-def config(tmp_path: Path) -> Config:
-    cfg = Config(data_dir=tmp_path / "second-brain")
-    cfg.ensure_directories()
-    return cfg
-
-
-@pytest.fixture
-def manifest(config: Config) -> Manifest:
-    return Manifest(config.manifest_db_path)
-
-
-@pytest.fixture
-def pdf_path(tmp_path: Path) -> Path:
-    p = tmp_path / "hybrid.pdf"
-    p.write_bytes(b"%PDF-1.4\nstub\n")
-    return p
-
-
-@pytest.fixture(autouse=True)
-def _reset_singletons() -> Generator[None, None, None]:
-    pdf_handler._chandra_parser = None
-    pdf_handler._docling_parser = None
-    pdf_handler._fallback_parser = None
-    yield
-    pdf_handler._chandra_parser = None
-    pdf_handler._docling_parser = None
-    pdf_handler._fallback_parser = None
-
-
 def _rendered(n: int) -> list[RenderedPage]:
     return [RenderedPage(page_number=i + 1, png_bytes=f"png-{i}".encode()) for i in range(n)]
+
+
+def _install_routing_fakes(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    chandra: FakeChandra | FailingChandra | None = None,
+    docling: FakeDocling | None = None,
+    lanes: list[ParseLane] | None = None,
+) -> None:
+    """Install parser stubs and page classification mock for routing tests."""
+    if chandra is not None:
+        monkeypatch.setattr(pdf_handler, "_get_chandra", lambda config=None: chandra)
+        monkeypatch.setattr(
+            pdf_handler,
+            "_render_pdf_pages",
+            lambda _p: chandra.render_pdf_pages(_p),
+        )
+    if docling is not None:
+        monkeypatch.setattr(pdf_handler, "_get_docling", lambda: docling)
+    if lanes is not None:
+        monkeypatch.setattr(pdf_handler, "classify_pdf_pages", lambda _p: lanes)
+    monkeypatch.setattr(pdf_handler, "check_parser_available", lambda _lane: None)
 
 
 def test_hybrid_merges_docling_and_chandra_in_page_order(
@@ -100,18 +91,11 @@ def test_hybrid_merges_docling_and_chandra_in_page_order(
     fake_chandra = FakeChandra(pages)
     fake_docling = FakeDocling(typed_pages=[2])
 
-    monkeypatch.setattr(pdf_handler, "_get_chandra", lambda config=None: fake_chandra)
-    monkeypatch.setattr(pdf_handler, "_get_docling", lambda: fake_docling)
-    monkeypatch.setattr(pdf_handler, "check_parser_available", lambda _lane: None)
-    monkeypatch.setattr(
-        pdf_handler,
-        "_render_pdf_pages",
-        lambda _p: pdf_handler._get_chandra().render_pdf_pages(_p),
-    )
-    monkeypatch.setattr(
-        pdf_handler,
-        "classify_pdf_pages",
-        lambda _p: [ParseLane.CHANDRA, ParseLane.DOCLING, ParseLane.CHANDRA],
+    _install_routing_fakes(
+        monkeypatch,
+        chandra=fake_chandra,
+        docling=fake_docling,
+        lanes=[ParseLane.CHANDRA, ParseLane.DOCLING, ParseLane.CHANDRA],
     )
 
     ingest = process_pdf_sync(pdf_path, config.raw_dir / "documents", config, manifest=manifest)
@@ -135,18 +119,11 @@ def test_all_typed_uses_docling_whole_doc(
     fake_chandra = FakeChandra(_rendered(2))
     fake_docling = FakeDocling(typed_pages=[1, 2])
 
-    monkeypatch.setattr(pdf_handler, "_get_chandra", lambda config=None: fake_chandra)
-    monkeypatch.setattr(pdf_handler, "_get_docling", lambda: fake_docling)
-    monkeypatch.setattr(pdf_handler, "check_parser_available", lambda _lane: None)
-    monkeypatch.setattr(
-        pdf_handler,
-        "_render_pdf_pages",
-        lambda _p: pdf_handler._get_chandra().render_pdf_pages(_p),
-    )
-    monkeypatch.setattr(
-        pdf_handler,
-        "classify_pdf_pages",
-        lambda _p: [ParseLane.DOCLING, ParseLane.DOCLING],
+    _install_routing_fakes(
+        monkeypatch,
+        chandra=fake_chandra,
+        docling=fake_docling,
+        lanes=[ParseLane.DOCLING, ParseLane.DOCLING],
     )
 
     ingest = process_pdf_sync(pdf_path, config.raw_dir / "documents", config, manifest=manifest)
@@ -167,18 +144,11 @@ def test_all_handwritten_uses_chandra_with_cache(
     fake_chandra = FakeChandra(pages)
     fake_docling = FakeDocling(typed_pages=[])
 
-    monkeypatch.setattr(pdf_handler, "_get_chandra", lambda config=None: fake_chandra)
-    monkeypatch.setattr(pdf_handler, "_get_docling", lambda: fake_docling)
-    monkeypatch.setattr(pdf_handler, "check_parser_available", lambda _lane: None)
-    monkeypatch.setattr(
-        pdf_handler,
-        "_render_pdf_pages",
-        lambda _p: pdf_handler._get_chandra().render_pdf_pages(_p),
-    )
-    monkeypatch.setattr(
-        pdf_handler,
-        "classify_pdf_pages",
-        lambda _p: [ParseLane.CHANDRA] * 3,
+    _install_routing_fakes(
+        monkeypatch,
+        chandra=fake_chandra,
+        docling=fake_docling,
+        lanes=[ParseLane.CHANDRA] * 3,
     )
 
     ingest = process_pdf_sync(pdf_path, config.raw_dir / "documents", config, manifest=manifest)
@@ -221,14 +191,11 @@ def test_failed_page_raises_and_is_not_cached(
     pages = _rendered(2)
     failing = FailingChandra(pages)
 
-    monkeypatch.setattr(pdf_handler, "_get_chandra", lambda config=None: failing)
-    monkeypatch.setattr(pdf_handler, "check_parser_available", lambda _lane: None)
-    monkeypatch.setattr(
-        pdf_handler,
-        "_render_pdf_pages",
-        lambda _p: pdf_handler._get_chandra().render_pdf_pages(_p),
+    _install_routing_fakes(
+        monkeypatch,
+        chandra=failing,
+        lanes=[ParseLane.CHANDRA] * 2,
     )
-    monkeypatch.setattr(pdf_handler, "classify_pdf_pages", lambda _p: [ParseLane.CHANDRA] * 2)
 
     with pytest.raises(PageParseError):
         process_pdf_sync(pdf_path, config.raw_dir / "documents", config, manifest=manifest)
@@ -247,21 +214,14 @@ def test_hybrid_reuses_chandra_page_cache(
     """Second hybrid run with unchanged handwritten pages does no OCR."""
     pages = _rendered(2)
     fake_docling = FakeDocling(typed_pages=[1])
-    monkeypatch.setattr(pdf_handler, "_get_docling", lambda: fake_docling)
-    monkeypatch.setattr(pdf_handler, "check_parser_available", lambda _lane: None)
-    monkeypatch.setattr(
-        pdf_handler,
-        "_render_pdf_pages",
-        lambda _p: pdf_handler._get_chandra().render_pdf_pages(_p),
-    )
-    monkeypatch.setattr(
-        pdf_handler,
-        "classify_pdf_pages",
-        lambda _p: [ParseLane.DOCLING, ParseLane.CHANDRA],
-    )
-
     first_chandra = FakeChandra(pages)
-    monkeypatch.setattr(pdf_handler, "_get_chandra", lambda config=None: first_chandra)
+
+    _install_routing_fakes(
+        monkeypatch,
+        chandra=first_chandra,
+        docling=fake_docling,
+        lanes=[ParseLane.DOCLING, ParseLane.CHANDRA],
+    )
     process_pdf_sync(pdf_path, config.raw_dir / "documents", config, manifest=manifest)
     assert sum(len(b) for b in first_chandra.parsed) == 1  # page 2 OCR'd once
 

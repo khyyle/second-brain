@@ -18,9 +18,9 @@ def _write(raw_dir: Path, rel: str, text: str) -> None:
     path.write_text(text, encoding="utf-8")
 
 
-def test_triage_only_touches_scoped_lanes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    config = Config(data_dir=tmp_path)
-    config.ensure_directories()
+def test_triage_only_touches_scoped_lanes(
+    config: Config, manifest: Manifest, monkeypatch: pytest.MonkeyPatch
+) -> None:
     _write(config.raw_dir, "chatgpt/chat.md", "chat body " * 100)
     _write(config.raw_dir, "documents/doc.md", "doc body " * 100)
 
@@ -30,18 +30,18 @@ def test_triage_only_touches_scoped_lanes(tmp_path: Path, monkeypatch: pytest.Mo
         lambda path, cfg: TriageResult(decision=TriageDecision.WORTHWHILE, confidence=0.9),
     )
 
-    counts = pipeline_mod.triage_pending(config, Manifest(config.manifest_db_path))
+    counts = pipeline_mod.triage_pending(config, manifest)
 
-    decisions = Manifest(config.manifest_db_path).get_triage_decisions()
+    decisions = manifest.get_triage_decisions()
     assert "chatgpt/chat.md" in decisions  # in-scope lane is triaged
     assert "documents/doc.md" not in decisions  # out-of-scope lane gets no row
     assert counts["worthwhile"] == 1  # only the chat is counted
 
 
-def test_triage_skips_a_vanished_source(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_triage_skips_a_vanished_source(
+    config: Config, manifest: Manifest, monkeypatch: pytest.MonkeyPatch
+) -> None:
     # A source deleted mid-run must be skipped, not crash the whole pass.
-    config = Config(data_dir=tmp_path)
-    config.ensure_directories()
     _write(config.raw_dir, "chatgpt/present.md", "body " * 100)
     _write(config.raw_dir, "chatgpt/vanished.md", "body " * 100)
 
@@ -52,21 +52,19 @@ def test_triage_skips_a_vanished_source(tmp_path: Path, monkeypatch: pytest.Monk
 
     monkeypatch.setattr(pipeline_mod, "triage_file", fake_triage)
 
-    counts = pipeline_mod.triage_pending(config, Manifest(config.manifest_db_path))
+    counts = pipeline_mod.triage_pending(config, manifest)
 
-    decisions = Manifest(config.manifest_db_path).get_triage_decisions()
+    decisions = manifest.get_triage_decisions()
     assert "chatgpt/present.md" in decisions  # the good one still recorded
     assert "chatgpt/vanished.md" not in decisions  # skipped, not crashed
     assert counts["worthwhile"] == 1
 
 
 def test_untriaged_documents_still_compile_via_fail_open(
-    tmp_path: Path,
+    config: Config, manifest: Manifest
 ) -> None:
     # A document with no triage decision must remain compilable.
-    config = Config(data_dir=tmp_path)
-    config.ensure_directories()
     _write(config.raw_dir, "documents/doc.md", "doc body")
 
-    kept = pipeline_mod.worthwhile_sources(Manifest(config.manifest_db_path), ["documents/doc.md"])
+    kept = pipeline_mod.worthwhile_sources(manifest, ["documents/doc.md"])
     assert kept == ["documents/doc.md"]

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
 from second_brain.clustering.preview import CLUSTERS_FILENAME
 from second_brain.config import Config
@@ -18,10 +17,8 @@ def _seed(config: Config, *names: str) -> None:
         (raw / name).write_text("body " * 50, encoding="utf-8")
 
 
-def test_compute_state_lists_staged_sources(tmp_path: Path) -> None:
-    config = Config(data_dir=tmp_path / "sb")
+def test_compute_state_lists_staged_sources(config: Config, manifest: Manifest) -> None:
     _seed(config, "a.md", "b.md")
-    manifest = Manifest(config.manifest_db_path)
 
     state = compute_state(config, manifest)
 
@@ -32,10 +29,8 @@ def test_compute_state_lists_staged_sources(tmp_path: Path) -> None:
     assert state["costs"] and all(cost >= 0 for cost in state["costs"].values())
 
 
-def test_compute_state_excludes_skipped(tmp_path: Path) -> None:
-    config = Config(data_dir=tmp_path / "sb")
+def test_compute_state_excludes_skipped(config: Config, manifest: Manifest) -> None:
     _seed(config, "a.md", "b.md")
-    manifest = Manifest(config.manifest_db_path)
     manifest.record_triage("documents/b.md", "skip", confidence=1.0, reason="manual")
 
     state = compute_state(config, manifest)
@@ -43,10 +38,8 @@ def test_compute_state_excludes_skipped(tmp_path: Path) -> None:
     assert [s["rel"] for s in state["staged"]] == ["documents/a.md"]
 
 
-def test_compute_state_flags_drifted_preview(tmp_path: Path) -> None:
-    config = Config(data_dir=tmp_path / "sb")
+def test_compute_state_flags_drifted_preview(config: Config, manifest: Manifest) -> None:
     _seed(config, "a.md", "b.md")
-    manifest = Manifest(config.manifest_db_path)
     # A preview that covers only one of the two staged sources is stale.
     artifact = {
         "groups": [{"id": "g", "title": "a", "members": [{"rel": "documents/a.md", "bytes": 1}]}]

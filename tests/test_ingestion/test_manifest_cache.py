@@ -11,12 +11,6 @@ from second_brain.ingestion.manifest import Manifest
 
 
 @pytest.fixture
-def manifest(tmp_path: Path) -> Manifest:
-    """Fresh manifest backed by a temp SQLite file."""
-    return Manifest(tmp_path / "manifest.db")
-
-
-@pytest.fixture
 def sample_file(tmp_path: Path) -> Path:
     """A real on-disk file so SHA-256 computation has something to read."""
     p = tmp_path / "sample.pdf"

@@ -8,7 +8,6 @@ hashing them, looking up the cache, and assembling the final result.
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Generator
 from pathlib import Path
 
 import pytest
@@ -34,39 +33,6 @@ class FakeChandraParser:
     def parse_pages(self, pages: list[RenderedPage]) -> list[str]:
         self.parse_pages_calls.append(list(pages))
         return [f"page-{p.page_number}" for p in pages]
-
-
-@pytest.fixture
-def config(tmp_path: Path) -> Config:
-    """Config rooted under tmp_path so writes are isolated per test."""
-    cfg = Config(data_dir=tmp_path / "second-brain")
-    cfg.ensure_directories()
-    return cfg
-
-
-@pytest.fixture
-def manifest(config: Config) -> Manifest:
-    return Manifest(config.manifest_db_path)
-
-
-@pytest.fixture
-def pdf_path(tmp_path: Path) -> Path:
-    """Empty file standing in for a PDF — never parsed by the real parser."""
-    p = tmp_path / "notebook.pdf"
-    p.write_bytes(b"%PDF-1.4\nstub\n")
-    return p
-
-
-@pytest.fixture(autouse=True)
-def _reset_singletons() -> Generator[None, None, None]:
-    """Ensure no parser singleton leaks across tests."""
-    pdf_handler._chandra_parser = None
-    pdf_handler._docling_parser = None
-    pdf_handler._fallback_parser = None
-    yield
-    pdf_handler._chandra_parser = None
-    pdf_handler._docling_parser = None
-    pdf_handler._fallback_parser = None
 
 
 def _install_fake_chandra(
