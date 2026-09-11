@@ -12,15 +12,15 @@ from second_brain.mcp_server.tools import WikiTools
 
 
 @pytest.fixture
-def semantic_config() -> SearchConfig:
-    """3-dimensional semantic search config for deterministic testing."""
-    return SearchConfig(embedding_dimensions=3, semantic_enabled=True)
+def search_config() -> SearchConfig:
+    """3-dimensional search config for deterministic testing."""
+    return SearchConfig(embedding_dimensions=3)
 
 
 @pytest.fixture
-def search_index(tmp_path: Path, semantic_config: SearchConfig) -> SearchIndex:
+def search_index(tmp_path: Path, search_config: SearchConfig) -> SearchIndex:
     """Fresh SearchIndex with 3-d vectors in a temporary directory."""
-    return SearchIndex(tmp_path / "search.db", semantic_config)
+    return SearchIndex(tmp_path / "search.db", search_config)
 
 
 @dataclass(frozen=True)

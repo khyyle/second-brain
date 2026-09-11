@@ -19,11 +19,6 @@ from second_brain.mcp_server.embeddings import (
 )
 
 
-@pytest.fixture
-def search_config() -> SearchConfig:
-    return SearchConfig(embedding_dimensions=3)
-
-
 def _patch_chunk(
     monkeypatch: pytest.MonkeyPatch, vector: list[float]
 ) -> list[tuple[str, EmbeddingRole]]:

@@ -75,7 +75,7 @@ def test_semantic_search_returns_nearest(search_index: SearchIndex) -> None:
 
 def test_semantic_search_uses_retrieval_roles(
     tmp_path: Path,
-    semantic_config: SearchConfig,
+    search_config: SearchConfig,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     roles: list[EmbeddingRole] = []
@@ -85,7 +85,7 @@ def test_semantic_search_uses_retrieval_roles(
         return _fake_embed(text, config, role)
 
     monkeypatch.setattr(embeddings_mod, "embed_text", record_role)
-    index = SearchIndex(tmp_path / "s.db", semantic_config)
+    index = SearchIndex(tmp_path / "s.db", search_config)
     _index_sample(index)
 
     index.embed_pending()

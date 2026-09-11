@@ -201,8 +201,7 @@ def test_failed_page_raises_and_is_not_cached(
         process_pdf_sync(pdf_path, config.raw_dir / "documents", config, manifest=manifest)
 
     assert not list((config.raw_dir / "documents").glob("*.md"))
-    for page in pages:
-        assert manifest.get_cached_page(pdf_handler._hash_bytes(page.png_bytes)) is None
+    assert manifest.page_cache_size() == 0
 
 
 def test_hybrid_reuses_chandra_page_cache(

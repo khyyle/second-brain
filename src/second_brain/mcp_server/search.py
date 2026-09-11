@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from second_brain.config import SearchConfig
+from second_brain.mcp_server import embeddings
 from second_brain.wiki.structure import LINK_KINDS, extract_typed_edges
 
 logger = logging.getLogger(__name__)
@@ -319,8 +320,6 @@ class SearchIndex:
 
         from sqlite_vec import serialize_float32
 
-        from second_brain.mcp_server.embeddings import embed_text
-
         query = (
             "SELECT m.stem, m.title, m.content_hash, f.content "
             "FROM wiki_meta m JOIN wiki_fts f ON f.stem = m.stem "
@@ -335,7 +334,7 @@ class SearchIndex:
 
         embedded_count = 0
         for row in pending:
-            vector = embed_text(
+            vector = embeddings.embed_text(
                 f"{row['title']}\n\n{row['content']}",
                 self._search_config,
                 role="search_document",
@@ -447,9 +446,7 @@ class SearchIndex:
 
         from sqlite_vec import serialize_float32
 
-        from second_brain.mcp_server.embeddings import embed_text
-
-        vector = embed_text(query, self._search_config, role="search_query")
+        vector = embeddings.embed_text(query, self._search_config, role="search_query")
         if vector is None:
             return []
 
