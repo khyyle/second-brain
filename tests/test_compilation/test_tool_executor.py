@@ -245,6 +245,31 @@ def test_glob_lists_raw_sources(tmp_path: Path) -> None:
     assert out == "raw/chatgpt/a.md"
 
 
+def test_resolve_rejects_path_traversal_outside_wiki(tmp_path: Path) -> None:
+    executor, wiki, _raw = _executor(tmp_path)
+    secret_file = tmp_path / "secret.txt"
+    secret_file.write_text("classified", encoding="utf-8")
+
+    read_out = executor.execute("read_file", {"path": "../../secret.txt"})
+    assert "Path escapes wiki directory" in read_out
+
+    edit_out = executor.execute(
+        "edit_file",
+        {"path": "../../secret.txt", "old_string": "classified", "new_string": "tampered"},
+    )
+    assert "Path escapes wiki directory" in edit_out
+    assert secret_file.read_text(encoding="utf-8") == "classified"
+
+
+def test_resolve_rejects_path_traversal_outside_raw(tmp_path: Path) -> None:
+    executor, _wiki, _raw = _executor(tmp_path)
+    secret_file = tmp_path / "secret.txt"
+    secret_file.write_text("classified", encoding="utf-8")
+
+    read_out = executor.execute("read_file", {"path": "raw/../../secret.txt"})
+    assert "Path escapes raw directory" in read_out
+
+
 class _FakeToolUse:
     type = "tool_use"
 
