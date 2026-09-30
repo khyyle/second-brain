@@ -1,50 +1,50 @@
 # Using the app
 
-Second Brain runs as a menu bar app: click the icon and a small window drops down. It is a thin frontend over the files in your vault at `~/second-brain/`, not a store of its own.
+Second Brain runs as a menu bar app: click the icon and a small window drops down. From here you can:
+- **Ingest files**: drag and drop or select files to *stage* them for building
+- **Build the wiki**: compile *staged* files into the wiki
+- **Manage domains**: edit, delete, and merge tags used to denote the topic of a page
+- **Review wiki health**: track unwritten concepts, unlinked pages, duplicates, and formatting issues
 
 ## Getting material in
 
-Two kinds of material go in, and they go in differently on purpose.
+Two kinds of sources can be ingested:
 
-1. Documents (PDFs, Markdown, plain text, LaTeX) go on the drop zone at the top. Drop a file or a folder onto it, or click it to browse. Dropping copies a file in and starts parsing it locally. None of this costs anything.
+1. Documents (PDFs, Markdown, plain text, LaTeX) go on the drop zone at the top of the Ingest tab. Drop a file or a folder onto it, or click it to browse. You can also drop files anywhere on the window from the other tabs. Dropping copies a file in and starts parsing it locally. None of this costs anything.
 
 2. Chat history can be added by clicking the "Import ChatGPT export" button just under the drop zone. The app supports individual `conversation-*.json` files or a full data export folder. If you provide the full folder, the app extracts only the conversation files it needs.
 
 ## The tabs
 
-The first three tabs follow your material through the pipeline; the last two are about the wiki it produces.
+**Ingest** turns raw source files into Markdown, staging them for compilation into the actual wiki. Files that fail to parse stay behind so you can retry or remove them. Ingestion runs locally and is free.
 
-**Ingest** is where parsing happens. A file appears here while it is being turned into Markdown, with a spinner and a running clock; once parsed, it leaves this tab. Anything that fails to parse stays behind with a Retry. Hovering a row reveals a remove action, which moves the file to the Trash. This stage is mechanical and free.
+**Chats** is a review desk for imported ChatGPT conversations. Chat history is noisy, so a small local model sorts each conversation into kept, review, or skip before anything reaches the build (see [architecture](architecture.md)). Conversations the model was unsure about wait in "Needs review" for your call, while "Recent" lets you flip past decisions or restore a chat you set aside. 
 
-**Chats** is the review desk for imported conversations. Chat history is noisy, so a small local model sorts each conversation into worthwhile, review, or skip as it comes in (see [architecture doc](architecture.md) for more details). A "Needs review" list shows the conversations the model was unsure about, each with Keep and Skip. Below it, "Recent" shows what was already decided. You can flip any of these decisions, skip something that slipped through, or restore something you set aside. It is highly recommended that you prune chats for redundancy, whether through this review, manually, or through an agent of your choice (just tell an agent of your choice to prune `~/second-brain/drops/chatgpt/`). Only ingested *chats* show up here.
+It is highly recommended that you prune chats for redundancy avoid paying to compile overlapping material, whether through this review, manually, or through an agent of your choice (just tell an agent of your choice to prune `~/second-brain/drops/chatgpt/` to your preferences).
 
-**Build** is where the wiki gets made, and the only tab tied to spending money. It lists what is staged: everything ingested and kept, ready to compile, with a rough cost estimate. Hovering a staged row reveals a remove action, which takes the source out of the pipeline entirely (see [deletion](lifecycle.md#deletion) for what each kind of removal keeps). Below that is a log of pages already built.
+**Build** is where staged sources are compiled into wiki pages using a cloud model. It shows what is ready to build with an estimated cost, along with a log of recently built pages. Removing a staged source takes it out of the pipeline entirely (see [deletion](lifecycle.md#deletion)).
 
-**Domains** manages the wiki's vocabulary of subject areas. Each domain is a broad area tagged in page frontmatter; the tab lists them with a page count, and you can rename, merge, or delete one — the change rewrites every affected page. Domains are grown by the build, so this tab fills in as the wiki does.
+**Domains** curates the broad subject tags used in page frontmatter. Renaming, merging, or deleting a domain rewrites every affected page's frontmatter so tag vocabulary stays consistent across the wiki.
 
-**Overview** shows the compiled wiki in two parts. *Improve your wiki* surfaces growth opportunities: concepts [referenced but not written](wiki-structure.md#gaps-and-orphans) (ranked by how many pages want them), pages nothing links to yet, and possible duplicates. Hover a pair to merge one into the other (after moving any prose worth keeping into the survivor) or to dismiss the suggestion. *Health* flags defects like oversized or stub pages and missing frontmatter.
+**Overview** surfaces structural opportunities for wiki improvement and defect pages.
 
 ## Building the wiki
 
-A build reads your staged sources and writes wiki pages with a cloud model agent. The number on the Build tab is a rough estimate based on known input/output costs. Once a build is running, the real cost ticks in the status line.
-
-Before building a large pile of chats, it is worth grouping them first. Many conversations cover the same ground, and compiling each alone pays to write near-duplicate pages. "Group" (it appears on the Build tab once chats are staged) bundles related conversations so a topic compiles into one page instead of many. Grouping is local and free, and it shows its progress as it runs.
-
-Once a grouping exists, the Build tab shows it. Each cluster is an expandable row: open it to see the conversations inside, split it back apart if the grouping reached too far, or pop a single conversation out to compile on its own. Conversations that didn't cluster with anything sit behind a collapsible "ungrouped" count, since each just becomes its own page. Stage or remove sources after grouping and the grouping no longer matches what is staged. The tab then falls back to the plain staged list; click Regroup to cluster the updated set.
+A build reads your staged sources and writes wiki pages with a cloud model agent. The number on the Build tab is a rough estimate based on known input/output costs. Once a build is running, the real cost will increment in the status line.
 
 When the plan looks right, "Build wiki" compiles it. You can "Stop" mid-build: pages finished so far are kept, and the conversation in progress is rolled back cleanly so the next build redoes it from scratch.
 
-If a source can't be compiled cleanly (e.g., the agent runs away without finishing, or the source is too large for the model to read in one pass)  it is rolled back and set aside instead of left half-written showing a "Set aside" badge with the reason. Failed sources can be recompiled via the retry button which marks them ready for compilation again. Sources that are too large to compiled cannot be retried and must be split into smaller, more digestible files first.
+If a source can't be compiled cleanly (e.g., the agent fails to finish compilation, or the source is too large for the model to read in one pass), it will be set aside with its relevant wiki edits rolled back. Failed sources are marked "Set aside" along with the reason, and can be recompiled via a retry button. Retried files will be marked ready for the next compilation pass. Importantly, sources that are too large to compile *cannot be retried* and must be split into smaller files first.
 
 ## Reading what you built
 
-The wiki is plain Markdown under `~/second-brain/wiki/`, so the natural way to read it is to open that folder as an Obsidian vault. "Reveal" in the status line opens the vault in Finder.
+The wiki is stored in plain Markdown under `~/second-brain/wiki/` and opens directly as an Obsidian vault for visualization and traversal.
 
 For asking questions instead of browsing, you can hand the wiki to Claude Desktop, ChatGPT Desktop, or Cursor over MCP. See [Querying over MCP](mcp.md) for what it does and how to set it up.
 
 ## Settings
 
-The gear opens Settings. Here you can choose the compilation provider and its model, set that provider's API key, set a per-build spend cap, check that Ollama is running, tune triage, choose the folders to watch, and set scheduling. You will need to set the selected provider's API key here before you can start building the wiki.
+You must set your compilation provider's API key in Settings before you can build the wiki. Settings also holds the compilation model, a per-build spend cap, triage tuning, and watched folders.
 
 ### Running on a schedule
 

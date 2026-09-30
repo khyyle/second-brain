@@ -61,7 +61,7 @@ Everything in the right column can be regenerated from the left. Deleting it cos
 | --- | --- |
 | `manifest` | per-source ingestion status, content hash, parse lane |
 | `compiled` | which raw paths have been turned into pages |
-| `triage` | the worthwhile / review / skip verdicts |
+| `triage` | the kept / review / skip verdicts |
 | `page_cache` | per-PDF-page OCR cache, keyed by image hash |
 
 `search.db`: *wiki-derived index* that rebuilds from `wiki/` at any time

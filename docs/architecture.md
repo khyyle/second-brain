@@ -27,7 +27,7 @@ A SQLite manifest records what has been ingested so unchanged files are skipped 
 
 ### Triage
 
-Bulk chat history is noisy. Conversations can be small talk, one-off lookups, or abandoned tangents, so compilation might be wasted on pages worth nothing. During ingestion (before anything reaches the paid compilation step), a small local model (Gemma, via Ollama) reads each new chat and labels it worthwhile, review, or skip.
+Bulk chat history is noisy. Conversations can be small talk, one-off lookups, or abandoned tangents, so compilation might be wasted on pages worth nothing. During ingestion (before anything reaches the paid compilation step), a small local model (Gemma, via Ollama) reads each new chat and labels it kept, review, or skip.
 
 Triage only looks at the lanes named in `triage.sources`, which is just ChatGPT by default. A document you dropped yourself never goes through triage at all: dropping it is the curation, so it carries no verdict and flows straight to the build. Chats marked review are copied into `~/second-brain/inbox/` for a manual pass.
 
@@ -35,7 +35,7 @@ Triage is built to never block the pipeline. If Ollama is off, or a chat comes b
 
 ### Compile
 
-Building the wiki is the only stage that calls a hosted model, so it is also where the money goes. Two things happen here: planning, then synthesis.
+Building the wiki is the only stage that calls a hosted model and thus costs money. Two things happen here: planning, then synthesis.
 
 Planning is optional and exists to fight redundancy. Years of chats might circle the same topics (e.g. multiple conversations talking about gradient descent); compiling each of these on their own is likely to be wasteful and result in overlapping pages that would hinder the quality of the wiki. Thus, a clustering step groups related chats first so a topic can become one page instead of many. It embeds each staged chat locally and groups them. Like triage, clustering only touches the lanes in `clustering.sources` (ChatGPT by default). You can preview a grouping before spending anything, adjust it in the app, and the build honors the plan you reviewed (see [using the app](using-the-app.md#building-the-wiki)). For unattended runs, `clustering.enabled` lets a scheduled build cluster on its own without a human previewing first.
 
