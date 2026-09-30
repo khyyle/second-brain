@@ -35,6 +35,9 @@ final class PipelineStore: ObservableObject {
 
     var staged: [StagedSource] { state?.staged ?? [] }
     var builtCount: Int { state?.builtCount ?? 0 }
+    var needsReviewCount: Int { state?.needsReviewCount ?? 0 }
+    var skippedCount: Int { state?.skippedCount ?? 0 }
+    var stateStamp: String { state?.generatedAt ?? "" }
     var stale: Bool { state?.stale ?? false }
     var hasState: Bool { state != nil }
 

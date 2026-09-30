@@ -12,13 +12,5 @@ struct TriageRow: Identifiable, Hashable {
         case worthwhile
         case review
         case skip
-
-        var label: String {
-            switch self {
-            case .worthwhile: return "kept"
-            case .review:     return "review"
-            case .skip:       return "skipped"
-            }
-        }
     }
 }

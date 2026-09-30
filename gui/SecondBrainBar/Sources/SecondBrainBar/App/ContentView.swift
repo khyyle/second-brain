@@ -1,13 +1,12 @@
 import SwiftUI
 
 /// Which pipeline stage the shared scroll area is showing, left to right: the
-/// daily pipeline actions (ingest, build) lead, the occasional ChatGPT import
-/// follows, and the two wiki-state views (domains, overview) close it out —
-/// overview last, as the growth opportunities and health of the compiled wiki.
+/// daily pipeline actions (ingest, build) lead, and the two wiki-state views
+/// (domains, overview) close it out, overview last, as the growth
+/// opportunities and health of the compiled wiki.
 private enum Tab: String, CaseIterable, Identifiable {
     case ingest = "Ingest"
     case build = "Build"
-    case chats = "Chats"
     case domains = "Domains"
     case overview = "Overview"
     var id: String { rawValue }
@@ -120,26 +119,48 @@ struct ContentView: View {
 
     private func tabSegment(_ t: Tab) -> some View {
         let selected = tab == t
-        return Text(t.rawValue)
-            .font(Theme.Font.body(11.5, weight: selected ? .semibold : .regular))
-            .foregroundStyle(selected ? Theme.Colors.textPrimary : Theme.Colors.textSecondary)
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 5)
-            .background(
-                ZStack {
-                    if selected {
-                        RoundedRectangle(cornerRadius: 6, style: .continuous)
-                            .fill(Theme.Colors.surfaceHover)
-                            .matchedGeometryEffect(id: "tabSelection", in: tabNamespace)
-                    }
-                }
-            )
-            .contentShape(Rectangle())
-            .onTapGesture {
-                withAnimation(.spring(response: 0.28, dampingFraction: 0.82)) {
-                    tab = t
+        let badge = badgeCount(for: t)
+        return HStack(spacing: 4) {
+            Text(t.rawValue)
+                .font(Theme.Font.body(11.5, weight: selected ? .semibold : .regular))
+                .foregroundStyle(selected ? Theme.Colors.textPrimary : Theme.Colors.textSecondary)
+            if let count = badge {
+                Text("\(count)")
+                    .font(Theme.Font.meta(9).weight(.semibold))
+                    .foregroundStyle(Theme.Colors.accentAmber)
+                    .padding(.horizontal, 5).padding(.vertical, 1)
+                    .background(Capsule().fill(Theme.Colors.accentAmber.opacity(0.16)))
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 5)
+        .background(
+            ZStack {
+                if selected {
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(Theme.Colors.surfaceHover)
+                        .matchedGeometryEffect(id: "tabSelection", in: tabNamespace)
                 }
             }
+        )
+        .contentShape(Rectangle())
+        .onTapGesture {
+            withAnimation(.spring(response: 0.28, dampingFraction: 0.82)) {
+                tab = t
+            }
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(badge.map { "\(t.rawValue), \($0) chats need review" } ?? t.rawValue)
+    }
+
+    private func badgeCount(for tab: Tab) -> Int? {
+        switch tab {
+        case .ingest:
+            let count = store.needsReviewCount
+            return count > 0 ? count : nil
+        case .build, .domains, .overview:
+            return nil
+        }
     }
 
     @ViewBuilder
@@ -155,7 +176,6 @@ struct ContentView: View {
                 )
                 case .domains: DomainsTab(config: config)
                 case .overview: OverviewTab(config: config)
-                case .chats:   ChatsTab(config: config)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .topLeading)

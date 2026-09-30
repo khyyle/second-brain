@@ -6,6 +6,8 @@ struct StagedRow: View {
     let sizeText: String
     var deferReason: String? = nil
     var onRetry: (() -> Void)? = nil
+    var isChat: Bool = false
+    var onSkip: (() -> Void)? = nil
     let onOpen: () -> Void
     let onRemove: () -> Void
     @State private var hovering = false
@@ -24,6 +26,11 @@ struct StagedRow: View {
                 .foregroundStyle(Theme.Colors.textPrimary)
                 .lineLimit(1).truncationMode(.middle)
                 .openableTitle(cleanName(name))
+            if isChat {
+                Text("chat")
+                    .font(Theme.Font.meta(9.5))
+                    .foregroundStyle(Theme.Colors.textTertiary)
+            }
             if let deferReason {
                 deferBadge(deferReason)
             }
@@ -38,6 +45,12 @@ struct StagedRow: View {
                         HoverIcon(systemName: "arrow.clockwise",
                                   help: "Try again on the next build",
                                   action: onRetry)
+                            .disabled(store.locked)
+                    }
+                    if let onSkip {
+                        HoverIcon(systemName: "minus.circle",
+                                  help: "Skip this chat",
+                                  action: onSkip)
                             .disabled(store.locked)
                     }
                     HoverIcon(systemName: "xmark.circle.fill",

@@ -38,7 +38,7 @@ Both caches are disposable. The page cache can always be rebuilt by re-OCR, and 
 Removal happens in two places: hovering a row in the app reveals its remove action, and the CLI's `forget-drop` and `forget`. What a removal means depends on how far the source has traveled:
 
 - **Remove a file that is still ingesting** (an Ingest row, or `second-brain forget-drop <path>`). The file in `drops/` is trashed and nothing remembers it was ever added.
-- **Skip a chat** (Skip on a Chats row). The conversation leaves the build corpus but its verdict is remembered, so re-importing the same export keeps it skipped instead of resurfacing it for review. A skip is recoverable until the next build: **Keep** on the skipped row re-stages it, while a completed build makes the removal permanent (the verdict stays).
+- **Skip a chat** (Skip on a review row or a staged chat). The conversation leaves the build corpus but its verdict is remembered, so re-importing the same export keeps it skipped instead of resurfacing it for review. A skip, yours or the triage model's, is recoverable until the next build: **Keep** on the skipped row re-stages it, while a build that compiles everything staged makes the removal permanent (the verdict stays).
 - **Remove a staged source** (a Build row, or `second-brain forget <raw-path>`). This forgets the source entirely: its Markdown in `raw/` is trashed and every record of it is cleared with it, so a re-import would treat it as new.
 
 Skipping and removing both take a source out of the build. The difference is memory: a skip keeps the verdict and can be undone, while removal forgets immediately. Either way the related records are cleared together, so a removed source never leaves a dangling compiled marker behind.

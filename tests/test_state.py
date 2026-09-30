@@ -49,3 +49,27 @@ def test_compute_state_flags_drifted_preview(config: Config, manifest: Manifest)
     state = compute_state(config, manifest)
 
     assert state["stale"] is True
+
+
+def test_compute_state_counts_needs_review(config: Config, manifest: Manifest) -> None:
+    _seed(config, "present.md")
+    manifest.record_triage("documents/present.md", "review", confidence=1.0, reason="unsure")
+    manifest.record_triage("documents/missing.md", "review", confidence=1.0, reason="unsure")
+
+    state = compute_state(config, manifest)
+
+    assert state["needs_review"] == 1
+
+
+def test_compute_state_counts_skipped(config: Config, manifest: Manifest) -> None:
+    _seed(config, "in_raw.md")
+    skipped = config.raw_dir / ".skipped" / "documents"
+    skipped.mkdir(parents=True, exist_ok=True)
+    (skipped / "in_skipped.md").write_text("body " * 50, encoding="utf-8")
+    manifest.record_triage("documents/in_raw.md", "skip", confidence=1.0, reason="manual")
+    manifest.record_triage("documents/in_skipped.md", "skip", confidence=1.0, reason="manual")
+    manifest.record_triage("documents/gone.md", "skip", confidence=1.0, reason="manual")
+
+    state = compute_state(config, manifest)
+
+    assert state["skipped"] == 1

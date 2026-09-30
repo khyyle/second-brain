@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 import os
-import shutil
 import subprocess
 import threading
 from enum import Enum
@@ -26,6 +25,7 @@ from second_brain.compilation.agent import (
 from second_brain.config import Config
 from second_brain.ingestion.manifest import Manifest
 from second_brain.llm_providers import resolve_profile
+from second_brain.triage.skipped import purge_skipped
 from second_brain.wiki.structure import rebuild_structure
 
 logger = logging.getLogger(__name__)
@@ -59,33 +59,6 @@ class RunResult(NamedTuple):
     cost: float
     outcome: RunOutcome
     reason: str = ""
-
-
-# Holding folder under raw/ for skipped sources: kept out of the build
-# but recoverable until a build finalizes the curation.
-SKIPPED_DIRNAME = ".skipped"
-
-
-def _purge_skipped(raw_dir: Path) -> None:
-    """Permanently remove the skipped-source holding folder.
-
-    Skip moves a source into ``raw/.skipped/`` so it can be un-skipped; a
-    completed build finalizes those decisions, so the folder is cleared to
-    reclaim disk. The skip verdicts stay in the manifest, so a later
-    re-import of the same export is still recognized as skipped.
-
-    Parameters
-    ----------
-    raw_dir: Path
-        The raw output directory containing the holding folder.
-    """
-    skipped_dir = raw_dir / SKIPPED_DIRNAME
-    if not skipped_dir.exists():
-        return
-    try:
-        shutil.rmtree(skipped_dir)
-    except OSError as e:
-        logger.warning("Could not purge skipped folder: %s", e)
 
 
 def _split_oversized(clusters: list[list[str]], max_size: int) -> list[list[str]]:
@@ -319,12 +292,10 @@ def run_compilation(
         heartbeat = threading.Thread(target=_keepalive, daemon=True)
         heartbeat.start()
         cost_cap = config.compilation.max_cost_per_build_usd
-        was_stopped = False
         try:
             for index, unit in enumerate(work_units):
                 if stop_requested(config.data_dir):
                     logger.info("Stop requested — halting before group %d/%d", index + 1, total)
-                    was_stopped = True
                     break
                 if cost_cap > 0 and cumulative_cost >= cost_cap:
                     logger.info(
@@ -397,7 +368,6 @@ def run_compilation(
                 _git_restore(wiki_dir)
                 if result.outcome is RunOutcome.STOPPED:
                     logger.info("Stopped during %s — rolled back partial work", ", ".join(unit))
-                    was_stopped = True
                     break
                 elif result.outcome is RunOutcome.COST_CAPPED:
                     logger.info(
@@ -419,11 +389,10 @@ def run_compilation(
             clear_status(config.data_dir)
         logger.info("Compiled %d sources for ~$%.2f", compiled_count, cumulative_cost)
 
-        # A finished build finalizes the user's curation, so reclaim the
-        # skipped-source holding folder and consume the cluster preview. A
-        # user-stopped build leaves them, since the decisions aren't final.
-        if not was_stopped:
-            _purge_skipped(raw_dir)
+        # Only a build that compiled every staged source finalizes the user's
+        # curation; anything less leaves decisions open for the next attempt.
+        if compiled_count == sum(len(unit) for unit in work_units):
+            purge_skipped(raw_dir)
             from second_brain.clustering.preview import clear_preview
 
             clear_preview(config.data_dir)

@@ -1,20 +1,26 @@
 import Foundation
 
 /// The derived state the Python side writes to `.state.json`: the authoritative
-/// staged set, per-model build cost, count of built pages, and whether a
-/// reviewed grouping has drifted from staging. The app renders this rather than
-/// recomputing it.
+/// staged set, per-model build cost, count of built pages, needs-review and
+/// skipped counts, and whether a reviewed grouping has drifted from staging.
+/// The app renders this rather than recomputing it.
 struct AppState: Decodable {
     let staged: [StagedSource]
     let builtCount: Int
     let costs: [String: Double]
     let stale: Bool
+    let needsReviewCount: Int
+    let skippedCount: Int
+    let generatedAt: String
 
     private enum CodingKeys: String, CodingKey {
         case staged
         case stale
         case costs
         case builtCount = "built_count"
+        case needsReviewCount = "needs_review"
+        case skippedCount = "skipped"
+        case generatedAt = "generated_at"
     }
 
     private struct RawStaged: Decodable {
@@ -34,6 +40,9 @@ struct AppState: Decodable {
         builtCount = try container.decode(Int.self, forKey: .builtCount)
         costs = try container.decode([String: Double].self, forKey: .costs)
         stale = try container.decode(Bool.self, forKey: .stale)
+        needsReviewCount = try container.decodeIfPresent(Int.self, forKey: .needsReviewCount) ?? 0
+        skippedCount = try container.decodeIfPresent(Int.self, forKey: .skippedCount) ?? 0
+        generatedAt = try container.decodeIfPresent(String.self, forKey: .generatedAt) ?? ""
     }
 
     static func load(from url: URL) -> AppState? {

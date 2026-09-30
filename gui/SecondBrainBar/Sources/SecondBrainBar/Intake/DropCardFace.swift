@@ -108,7 +108,7 @@ struct DropCardFace: View {
 
     private var detail: String? {
         switch state {
-        case .added: return nil
+        case .added(let files): return files.exportDescription
         case .failed(let failure): return failure.detail ?? hint
         case .idle, .accepting, .rejecting, .adding: return hint
         }
