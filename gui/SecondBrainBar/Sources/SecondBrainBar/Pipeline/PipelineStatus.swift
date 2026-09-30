@@ -48,10 +48,3 @@ struct PipelineStatus {
         )
     }
 }
-
-/// Format an elapsed duration compactly: "8s", "1m 23s".
-func formatElapsed(_ seconds: TimeInterval) -> String {
-    let s = Int(seconds)
-    if s < 60 { return "\(s)s" }
-    return "\(s / 60)m \(s % 60)s"
-}

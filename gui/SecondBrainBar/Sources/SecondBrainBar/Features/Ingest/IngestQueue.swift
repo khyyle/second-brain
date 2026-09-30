@@ -24,23 +24,9 @@ struct QueueItem: Identifiable, Hashable {
     }
 }
 
-/// A raw source that has been ingested and passed triage but is not yet
-/// compiled into the wiki.
-struct StagedSource: Identifiable, Hashable {
-    let id: String          // path relative to raw/
-    let displayName: String
-    let bytes: Int64
-    var deferReason: String? = nil
-
-    var sizeText: String {
-        ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
-    }
-}
-
 /// Reads the ingest queue from the filesystem + manifest. Kept off the
-/// SwiftUI types so views stay declarative. The staged set, cost, and built
-/// count come from the pipeline-authored state file (see AppState).
-enum VaultData {
+/// SwiftUI types so views stay declarative.
+enum IngestQueue {
     private static let supported: Set<String> = ["pdf", "md", "txt", "tex", "json"]
 
     /// Files staged in `drops/` that are not yet completed.

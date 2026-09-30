@@ -41,3 +41,16 @@ struct AppState: Decodable {
         return try? JSONDecoder().decode(AppState.self, from: data)
     }
 }
+
+/// A raw source that has been ingested and passed triage but is not yet
+/// compiled into the wiki.
+struct StagedSource: Identifiable, Hashable {
+    let id: String          // path relative to raw/
+    let displayName: String
+    let bytes: Int64
+    var deferReason: String? = nil
+
+    var sizeText: String {
+        ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
+    }
+}

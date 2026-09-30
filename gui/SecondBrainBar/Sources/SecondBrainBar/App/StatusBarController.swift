@@ -1,24 +1,9 @@
 import SwiftUI
 import AppKit
 
-extension Notification.Name {
-    /// Posted when the menu-bar panel is brought to the front. The panel is
-    /// reused across opens, so views that read from disk listen for this to
-    /// refresh, since `.onAppear` only fires on the panel's first show.
-    static let panelDidShow = Notification.Name("SecondBrainPanelDidShow")
-}
-
-/// Menu bar entry point.
-
-@main
-struct SecondBrainBarApp: App {
-    @NSApplicationDelegateAdaptor(StatusBarController.self) private var controller
-
-    var body: some Scene {
-        Settings { EmptyView() }
-    }
-}
-
+/// The app delegate. It owns the menu bar icon, the floating panel, and the
+/// menus, and routes files arriving from drops, the watcher, and ⌘O into the
+/// shared intake.
 @MainActor
 final class StatusBarController: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private let config = AppConfig.default

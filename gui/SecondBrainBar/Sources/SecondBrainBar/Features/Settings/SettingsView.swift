@@ -98,12 +98,12 @@ struct SettingsView: View {
             help: "The cloud model that writes your wiki pages on a build."
         ) {
             fieldLabel("Provider")
-            SegControl(
+            SegmentedPicker(
                 options: LLMProvider.allCases.map { ($0.displayName, $0) },
                 selection: providerBinding
             )
             if settings.llmProvider.models.count > 1 {
-                Row("Model") {
+                SettingsRow("Model") {
                     Picker("", selection: modelBinding) {
                         ForEach(settings.llmProvider.models, id: \.id) { model in
                             Text(model.label).tag(model.id)
@@ -133,7 +133,7 @@ struct SettingsView: View {
                 .font(Theme.Font.meta(9.5))
                 .foregroundStyle(Theme.Colors.success)
             }
-            Row("Spend cap per build",
+            SettingsRow("Spend cap per build",
                 help: "When a build's estimated cost surpasses this limit, "
                     + "wiki compilation will be stopped, rolling back any partially "
                     + "completed pages."
@@ -171,11 +171,11 @@ struct SettingsView: View {
             help: "Filters imported ChatGPT conversations before building. Other "
                 + "sources are not triaged."
         ) {
-            Row("Filter ChatGPT imports") {
+            SettingsRow("Filter ChatGPT imports") {
                 Toggle("", isOn: $settings.triageEnabled)
                     .labelsHidden().toggleStyle(.switch).tint(Theme.Colors.accent)
             }
-            Row("Style",
+            SettingsRow("Style",
                 help: "How triage determines chats worth keeping. "
                     + "Technical favors conceptual knowledge; project-heavy "
                     + "favors things you're building; skip-heavy keeps only "
@@ -225,7 +225,7 @@ struct SettingsView: View {
         }
 
         SettingsGroup(title: "Automation") {
-            Row("Run automatically",
+            SettingsRow("Run automatically",
                 help: "Runs ingest and build in the background. If your computer "
                     + "is asleep background tasks will complete "
                     + "on the next wake.") {
@@ -252,7 +252,7 @@ struct SettingsView: View {
                 .fixedSize(horizontal: false, vertical: true)
         } else {
             ForEach($watched) { $folder in
-                WatchedRow(folder: $folder) {
+                WatchedFolderRow(folder: $folder) {
                     watched.removeAll { $0.id == folder.id }
                 }
             }
@@ -261,8 +261,8 @@ struct SettingsView: View {
     }
 
     /// Caption above a full-width control (segmented control, text field).
-    /// Distinct from `subhead` (a sub-section divider) and `Row` (label with a
-    /// trailing control), so the three tiers stay visually consistent.
+    /// Distinct from `subhead` (a sub-section divider) and `SettingsRow` (label
+    /// with a trailing control), so the three tiers stay visually consistent.
     @ViewBuilder
     private func fieldLabel(_ text: String) -> some View {
         Text(text)
@@ -272,7 +272,7 @@ struct SettingsView: View {
 
     @ViewBuilder
     private var ollamaRow: some View {
-        Row("Status") {
+        SettingsRow("Status") {
             let (text, color): (String, Color) = {
                 if checkingOllama { return ("Checking…", Theme.Colors.textTertiary) }
                 guard let health = ollamaHealth else {
@@ -443,293 +443,6 @@ struct SettingsView: View {
         watched.append(
             WatchedFolder(name: name, path: folderURL.path, enabled: true,
                           file_types: SourcesStore.defaultFileTypes)
-        )
-    }
-}
-
-// MARK: - Building blocks
-
-/// Titled card. The optional "?" beside the title is for groups whose title
-/// names a single non-obvious concept; per-
-/// field help lives on the `Row` instead.
-private struct SettingsGroup<Content: View>: View {
-    let title: String
-    var help: String? = nil
-    @ViewBuilder let content: Content
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            SectionHeader(title: title, help: help)
-            VStack(alignment: .leading, spacing: 9) {
-                content
-            }
-            .padding(11)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(
-                RoundedRectangle(cornerRadius: Theme.Metric.cornerSmall, style: .continuous)
-                    .fill(Theme.Colors.surface.opacity(0.5))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: Theme.Metric.cornerSmall, style: .continuous)
-                    .strokeBorder(Theme.Colors.stroke, lineWidth: 1)
-            )
-        }
-    }
-}
-
-/// A label (with optional field-level "?") on the left and a trailing control.
-private struct Row<Control: View>: View {
-    let label: String
-    var help: String? = nil
-    @ViewBuilder let control: Control
-
-    init(_ label: String, help: String? = nil, @ViewBuilder control: () -> Control) {
-        self.label = label
-        self.help = help
-        self.control = control()
-    }
-
-    var body: some View {
-        HStack(spacing: 5) {
-            Text(label)
-                .font(Theme.Font.body(11.5))
-                .foregroundStyle(Theme.Colors.textPrimary)
-            if let help { HelpButton(text: help) }
-            Spacer(minLength: 8)
-            control
-        }
-    }
-}
-
-/// One watched-folder row: name + abbreviated path, an enabled switch, and
-/// a remove button.
-private struct WatchedRow: View {
-    @Binding var folder: WatchedFolder
-    let onRemove: () -> Void
-
-    var body: some View {
-        HStack(spacing: 8) {
-            VStack(alignment: .leading, spacing: 1) {
-                Text(folder.name)
-                    .font(Theme.Font.body(11.5))
-                    .foregroundStyle(Theme.Colors.textPrimary)
-                    .lineLimit(1).truncationMode(.middle)
-                Text(prettyPath(folder.path))
-                    .font(Theme.Font.meta(9.5))
-                    .foregroundStyle(Theme.Colors.textTertiary)
-                    .lineLimit(1).truncationMode(.middle)
-            }
-            Spacer(minLength: 6)
-            Button(action: onRemove) {
-                Image(systemName: "xmark.circle.fill")
-                    .font(.system(size: 11))
-                    .foregroundStyle(Theme.Colors.textTertiary)
-            }
-            .buttonStyle(.plain)
-            .help("Stop watching this folder")
-        }
-    }
-
-    private func prettyPath(_ path: String) -> String {
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
-        return path.hasPrefix(home) ? "~" + path.dropFirst(home.count) : path
-    }
-}
-
-enum ConnectStatus { case idle, working, done, failed }
-
-/// Small bordered action that reflects the real result of `mcp install`:
-/// a spinner while it runs, then a check or an error for a few seconds.
-private struct ConnectButton: View {
-    let title: String
-    let status: ConnectStatus
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            HStack(spacing: 4) {
-                icon
-                Text(label).font(Theme.Font.body(10.5))
-            }
-            .foregroundStyle(tint)
-            .padding(.horizontal, 9).padding(.vertical, 4)
-            .background(
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .fill(Theme.Colors.background)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .strokeBorder(Theme.Colors.stroke, lineWidth: 1)
-            )
-        }
-        .buttonStyle(.plain)
-        .disabled(status == .working)
-    }
-
-    @ViewBuilder
-    private var icon: some View {
-        switch status {
-        case .working:
-            ProgressView().controlSize(.small).scaleEffect(0.6).frame(width: 10, height: 10)
-        case .done:
-            Image(systemName: "checkmark").font(.system(size: 9, weight: .semibold))
-        case .failed:
-            Image(systemName: "exclamationmark.triangle").font(.system(size: 9, weight: .semibold))
-        case .idle:
-            Image(systemName: "link").font(.system(size: 9, weight: .semibold))
-        }
-    }
-
-    // Connected state is carried by the green check and tint, leaving the
-    // short label available to identify the client.
-    private var label: String {
-        switch status {
-        case .working: return "Connecting"
-        case .failed:  return "Failed"
-        case .done, .idle: return title
-        }
-    }
-
-    private var tint: Color {
-        switch status {
-        case .done:   return Theme.Colors.success
-        case .failed: return Theme.Colors.danger
-        default:      return Theme.Colors.textPrimary
-        }
-    }
-}
-
-/// Editable list of run times (whole hours, 24h). Add / remove rows and
-/// pick each hour from a menu -- no free-text parsing.
-private struct ScheduleEditor: View {
-    @Binding var hours: [Int]
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 7) {
-            ForEach(hours, id: \.self) { h in
-                ScheduleTimeRow(
-                    hour: h,
-                    onChange: { change(from: h, to: $0) },
-                    onRemove: { hours.removeAll { $0 == h } }
-                )
-            }
-
-            TextAction(title: "Add time", icon: "plus", restTint: Theme.Colors.accent, action: add)
-        }
-    }
-
-    private func change(from old: Int, to new: Int) {
-        var set = Set(hours)
-        set.remove(old)
-        set.insert(new)
-        hours = set.sorted()
-    }
-
-    private func add() {
-        // Default to the next upcoming local hour
-        let currentHour = Calendar.current.component(.hour, from: Date())
-        let upcoming = (1...24).map { (currentHour + $0) % 24 }
-        let candidate = upcoming.first { !hours.contains($0) } ?? currentHour
-        hours = Set(hours).union([candidate]).sorted()
-    }
-}
-
-/// Format a whole-hour slot in the user's local clock 
-private func formatHour(_ hour: Int, withZone: Bool) -> String {
-    let date = Calendar.current.date(bySettingHour: hour, minute: 0, second: 0, of: Date()) ?? Date()
-    var style = Date.FormatStyle.dateTime
-        .hour(.defaultDigits(amPM: .abbreviated))
-        .minute(.twoDigits)
-    if withZone {
-        style = style.timeZone(.specificName(.short))
-    }
-    return date.formatted(style)
-}
-
-/// One scheduled time: a pill showing the time in local AM/PM plus zone that
-/// opens an hour picker, and a remove button. Both reuse the app's shared
-/// button primitives, so they highlight on hover like every other control.
-private struct ScheduleTimeRow: View {
-    let hour: Int
-    let onChange: (Int) -> Void
-    let onRemove: () -> Void
-    @State private var picking = false
-
-    var body: some View {
-        HStack(spacing: 8) {
-            Button { picking = true } label: {
-                HStack(spacing: 5) {
-                    Image(systemName: "clock")
-                    Text(formatHour(hour, withZone: true))
-                }
-            }
-            .buttonStyle(PillButton(.neutral))
-            .help("Change this time")
-            .popover(isPresented: $picking, arrowEdge: .bottom) {
-                HourPicker(selected: hour) { onChange($0); picking = false }
-            }
-
-            Spacer(minLength: 6)
-
-            HoverIcon(systemName: "xmark.circle.fill", help: "Remove this time", action: onRemove)
-        }
-    }
-}
-
-/// Hour picker shown in the schedule pill's popover: two columns, AM then PM,
-/// so all 24 slots stay visible at once without scrolling.
-private struct HourPicker: View {
-    let selected: Int
-    let onPick: (Int) -> Void
-
-    var body: some View {
-        HStack(alignment: .top, spacing: 10) {
-            column(0..<12)
-            column(12..<24)
-        }
-        .padding(10)
-    }
-
-    private func column(_ hours: Range<Int>) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            ForEach(hours, id: \.self) { hour in
-                TextAction(
-                    title: formatHour(hour, withZone: false),
-                    restTint: hour == selected ? Theme.Colors.accent : Theme.Colors.textSecondary
-                ) { onPick(hour) }
-                .frame(width: 72, alignment: .leading)
-            }
-        }
-    }
-}
-
-/// Compact two-or-more option segmented control in the popover theme.
-private struct SegControl<Value: Equatable>: View {
-    let options: [(String, Value)]
-    @Binding var selection: Value
-
-    var body: some View {
-        HStack(spacing: 2) {
-            ForEach(options.indices, id: \.self) { i in
-                let opt = options[i]
-                let selected = opt.1 == selection
-                Text(opt.0)
-                    .font(Theme.Font.body(11.5, weight: selected ? .semibold : .regular))
-                    .foregroundStyle(selected ? Theme.Colors.textPrimary : Theme.Colors.textSecondary)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 5)
-                    .background(
-                        RoundedRectangle(cornerRadius: 6, style: .continuous)
-                            .fill(selected ? Theme.Colors.surfaceHover : .clear)
-                    )
-                    .contentShape(Rectangle())
-                    .onTapGesture { selection = opt.1 }
-            }
-        }
-        .padding(3)
-        .background(
-            RoundedRectangle(cornerRadius: 9, style: .continuous)
-                .fill(Theme.Colors.background)
         )
     }
 }

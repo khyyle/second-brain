@@ -20,6 +20,27 @@ For development you can run it attached to the terminal instead:
 swift run
 ```
 
+## Source layout
+
+Files are located under `Sources/SecondBrainBar/`, organized by feature and role:
+
+| Directory | Responsibility |
+| --- | --- |
+| `App/` | Application lifecycle, menu bar item, and root window presentation. |
+| `Features/` | Primary user-facing screens and their private views and readers, organized by domain. |
+| `Intake/` | File capture, drag-and-drop handling, system open dialogs, and folder monitoring. |
+| `Pipeline/` | Backend communication: running the Python process, reading and updating its records, and tracking live status. |
+| `Configuration/` | User settings, local environment storage, vault path resolution, and model profiles. |
+| `Shared/` | Cross-cutting visual theme, custom controls, view modifiers, and utilities. |
+
+Directory conventions:
+
+- Each file is named after its primary type. Small helpers used only by that type stay private in the same file. The exceptions are files grouping related data models (such as `ClusterPlan.swift`) and free utility functions (such as `Formatting.swift`).
+- Feature code stays inside its feature directory. If another feature needs the same code, move it into `Shared/`, `Pipeline/`, or `Configuration/`.
+- Pipeline output models stay in `Pipeline/` even if only a single screen renders them. This prevents pipeline readers from depending on UI feature code.
+- Dependencies point inward. `App/` and `Features/` call into foundational layers (`Pipeline/`, `Configuration/`, `Intake/`, `Shared/`), but foundational layers never import or reference types from `Features/` or `App/`.
+- Name extensions on system types using the `Type+Feature.swift` convention, such as `View+OnPanelShow.swift`.
+
 ## How it locates the pipeline
 
 - **Vault:** `~/second-brain`, matching the `data_dir` default in `config/config.yaml`.
