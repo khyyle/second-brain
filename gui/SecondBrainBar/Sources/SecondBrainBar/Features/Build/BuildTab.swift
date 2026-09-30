@@ -11,6 +11,8 @@ struct BuildTab: View {
     @State private var overrides = ClusterOverrides.empty
     @State private var showAllClusters = false
     @State private var showSingletons = false
+    @State private var showSkipped = false
+    @State private var skippedRows: [TriageRow] = []
     @State private var entries: [BuildLogEntry] = []
     @State private var loaded = false
     @State private var compilationModel = "claude-sonnet-4-6"
@@ -42,12 +44,16 @@ struct BuildTab: View {
                 canBuild: canBuild
             )
             stagedSection
+            skippedSection
             SectionHeader(title: "Recent")
             recentSection
         }
         .onAppear(perform: refresh)
         .onPanelShow(refresh)
         .onReceive(Timer.publish(every: 1, on: .main, in: .common).autoconnect()) { _ in refresh() }
+        .onChange(of: store.stateStamp) { _ in
+            if showSkipped { refreshSkipped() }
+        }
     }
 
     @ViewBuilder
@@ -113,9 +119,33 @@ struct BuildTab: View {
                     sizeText: source.sizeText,
                     deferReason: source.deferReason,
                     onRetry: retryable ? { retry(source.id) } : nil,
+                    isChat: isConversation(source.id),
+                    onSkip: isConversation(source.id) ? { skip(source.id) } : nil,
                     onOpen: { openRaw(source.id) },
                     onRemove: { remove(source.id) }
                 )
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var skippedSection: some View {
+        if store.skippedCount > 0 {
+            InlineToggleRow(
+                collapsedLabel: "+ \(store.skippedCount) skipped",
+                isExpanded: showSkipped
+            ) {
+                showSkipped.toggle()
+                if showSkipped { refreshSkipped() }
+            }
+            if showSkipped {
+                PaginatedList(items: skippedRows) { row in
+                    SkippedRow(
+                        row: row,
+                        onOpen: { openSkipped(row) },
+                        onKeep: { unskip(row) }
+                    )
+                }
             }
         }
     }
@@ -148,6 +178,22 @@ struct BuildTab: View {
         loaded = true
     }
 
+    private func refreshSkipped() {
+        let fileManager = FileManager.default
+        skippedRows = ManifestReader(dbPath: config.manifestDB)
+            .triageDecisions()
+            .filter { row in
+                guard row.decision == .skip else { return false }
+                return fileManager.fileExists(
+                    atPath: ManifestMutator.skippedURL(config, row.id).path
+                )
+            }
+    }
+
+    private func isConversation(_ rel: String) -> Bool {
+        ExportProvider.allCases.contains { rel.hasPrefix($0.lane + "/") }
+    }
+
     private func previewGrouping() {
         guard let repo = config.repoDir else { return }
         PipelineRunner.runManaged(repoDir: repo, command: "preview-clusters")
@@ -160,6 +206,18 @@ struct BuildTab: View {
     private func remove(_ rawRel: String) {
         ManifestMutator.removeStagedSource(config: config, rawRel: rawRel)
         refresh()
+    }
+
+    private func skip(_ rawRel: String) {
+        ManifestMutator.skipSource(config: config, rawRel: rawRel)
+        refresh()
+        if showSkipped { refreshSkipped() }
+    }
+
+    private func unskip(_ row: TriageRow) {
+        ManifestMutator.unskipSource(config: config, rawRel: row.id)
+        refresh()
+        if showSkipped { refreshSkipped() }
     }
 
     /// Requeue a set-aside source. Single-quoted because raw paths carry
@@ -175,6 +233,10 @@ struct BuildTab: View {
 
     private func openRaw(_ rawRel: String) {
         openInDefaultApp(config.rawRoot.appending(path: rawRel))
+    }
+
+    private func openSkipped(_ row: TriageRow) {
+        openInDefaultApp(ManifestMutator.skippedURL(config, row.id))
     }
 
     private func open(_ entry: BuildLogEntry) {

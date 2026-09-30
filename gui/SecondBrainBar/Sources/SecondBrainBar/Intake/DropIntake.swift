@@ -6,6 +6,7 @@ import UniformTypeIdentifiers
 struct AddedFiles: Equatable, Identifiable {
     let id = UUID()
     let count: Int
+    var exportDescription: String? = nil
 }
 
 /// The app's way in for files. It copies dropped or picked files into the drop
@@ -21,12 +22,6 @@ final class DropIntake: ObservableObject {
         var detail: String? = nil
     }
 
-    /// A conversation export found in a drop, offered for one-click import.
-    struct DetectedExport {
-        let provider: ExportProvider
-        let files: [URL]
-    }
-
     /// Whether files are being dragged over the window, and if so whether they
     /// will be taken.
     enum Drag {
@@ -40,7 +35,6 @@ final class DropIntake: ObservableObject {
     @Published private(set) var failure: Failure?
     @Published private(set) var isAdding = false
     @Published private(set) var addingIsSlow = false
-    @Published private(set) var pendingExport: DetectedExport?
     /// Counts every batch of files handed in by drop or picker, so the window
     /// can bring the Ingest tab forward to show them arriving.
     @Published private(set) var submissionCount = 0
@@ -96,34 +90,9 @@ final class DropIntake: ObservableObject {
     func presentAddFilesPanel() {
         guard acceptsFiles else { return }
         let panel = makePanel(prompt: "Add", message: "Choose files or folders to add to Second Brain")
-        panel.allowedContentTypes = DropStaging.documentExtensions.compactMap { UTType(filenameExtension: $0) }
+        panel.allowedContentTypes = DropStaging.documentExtensions.union(["json"])
+            .compactMap { UTType(filenameExtension: $0) }
         if panel.runModal() == .OK { add(panel.urls) }
-    }
-
-    func presentImportPanel() {
-        let panel = makePanel(
-            prompt: "Import",
-            message: "Choose a ChatGPT export: its conversations.json file or the unzipped export folder"
-        )
-        panel.allowedContentTypes = [.json]
-        guard panel.runModal() == .OK else { return }
-        let selection = panel.urls
-        beginAdding()
-        DispatchQueue.global(qos: .userInitiated).async {
-            let files = ExportProvider.chatgpt.exportFiles(in: selection)
-            DispatchQueue.main.async { [weak self] in
-                guard let self else { return }
-                if files.isEmpty {
-                    self.endAdding()
-                    self.fail(Failure(
-                        title: "Not a ChatGPT export",
-                        detail: "Choose conversations.json or the export folder"
-                    ))
-                } else {
-                    self.copyExport(.chatgpt, files: files)
-                }
-            }
-        }
     }
 
     /// A file/folder open panel. The app is a menu-bar accessory, so it must
@@ -142,57 +111,79 @@ final class DropIntake: ObservableObject {
 
     // MARK: - Adding
 
-    /// Copy document files into the documents lane, and if the selection also
-    /// holds a conversation export, surface it for one-click import rather
-    /// than dropping it silently.
+    /// Copy document files into the documents lane. A conversation export found
+    /// in the selection waits for confirmation that names it and its conversation
+    /// count, then goes to its provider's lane. A folder holding an export
+    /// contributes only the export; its attachments are not staged as documents.
     func add(_ urls: [URL]) {
         guard !urls.isEmpty else { return }
         submissionCount += 1
         beginAdding()
         let config = config
         DispatchQueue.global(qos: .userInitiated).async {
-            let result = DropStaging.stageDocuments(urls, config: config)
-            let export = ExportProvider.detect(in: urls).map {
-                DetectedExport(provider: $0, files: $0.exportFiles(in: urls))
-            }
+            let export = ExportProvider.detect(in: urls)
+            let exportFolderPaths = Set(export?.files.map { $0.deletingLastPathComponent().path } ?? [])
+            let result = DropStaging.stageDocuments(
+                urls.filter { !exportFolderPaths.contains($0.path) }, config: config
+            )
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
-                self.endAdding()
-                self.pendingExport = export
-                if result.added > 0 {
-                    self.confirm(count: result.added)
-                } else if export != nil {
-                    self.clearFailure()
-                } else if result.failed {
-                    self.fail(Failure(title: "Couldn't copy the files", detail: "Try again"))
+                if let export, self.confirmImport(of: export) {
+                    self.copyExport(export, documentsAdded: result.added)
                 } else {
-                    self.fail(Failure(title: "No supported files found"))
+                    self.endAdding()
+                    self.reportDocuments(result, declinedExport: export != nil)
                 }
             }
         }
     }
 
-    func importPending() {
-        guard let pending = pendingExport else { return }
-        pendingExport = nil
-        copyExport(pending.provider, files: pending.files)
-    }
-
-    private func copyExport(_ provider: ExportProvider, files: [URL]) {
-        beginAdding()
+    private func copyExport(_ export: DetectedExport, documentsAdded: Int) {
         let config = config
         DispatchQueue.global(qos: .userInitiated).async {
-            let added = DropStaging.importExport(provider, files: files, config: config)
+            let exportCopied = DropStaging.importExport(export.provider, files: export.files, config: config)
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
                 self.endAdding()
-                if added > 0 {
-                    self.confirm(count: added)
+                if exportCopied > 0 {
+                    self.confirm(
+                        count: documentsAdded + exportCopied,
+                        exportDescription: "\(export.provider.displayName) export: \(export.sourceName)"
+                    )
+                } else if documentsAdded > 0 {
+                    self.confirm(count: documentsAdded)
                 } else {
                     self.fail(Failure(title: "Couldn't import the export", detail: "Try again"))
                 }
             }
         }
+    }
+
+    /// A declined export is the person's choice, so it isn't reported as a
+    /// failure even when nothing else was added.
+    private func reportDocuments(_ result: (added: Int, failed: Bool), declinedExport: Bool) {
+        if result.added > 0 {
+            confirm(count: result.added)
+        } else if declinedExport {
+            return
+        } else if result.failed {
+            fail(Failure(title: "Couldn't copy the files", detail: "Try again"))
+        } else {
+            fail(Failure(title: "No supported files found"))
+        }
+    }
+
+    /// The app is a menu-bar accessory, so it must activate first or the alert
+    /// opens behind everything.
+    private func confirmImport(of export: DetectedExport) -> Bool {
+        NSApp.activate(ignoringOtherApps: true)
+        let count = export.conversationCount
+        let unit = count == 1 ? "conversation" : "conversations"
+        let alert = NSAlert()
+        alert.messageText = "Import \(count) \(unit) from \(export.sourceName)?"
+        alert.addButton(withTitle: "Import")
+        alert.addButton(withTitle: "Cancel")
+        return alert.runModal() == .alertFirstButtonReturn
     }
 
     // MARK: - Outcomes
@@ -212,10 +203,10 @@ final class DropIntake: ObservableObject {
         addingIsSlow = false
     }
 
-    private func confirm(count: Int) {
+    private func confirm(count: Int, exportDescription: String? = nil) {
         clearFailure()
         addedDismissal?.cancel()
-        added = AddedFiles(count: count)
+        added = AddedFiles(count: count, exportDescription: exportDescription)
         playPing()
         let dismissal = DispatchWorkItem { [weak self] in self?.added = nil }
         addedDismissal = dismissal

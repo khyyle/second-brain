@@ -18,6 +18,18 @@ struct StagedHeader: View {
         store.isGrouping || store.isCompiling
     }
 
+    private var helpText: String {
+        var text = "Sources that go into the wiki on the next build."
+        if canPreview {
+            text += " 'Group' bundles related conversations to avoid creating duplicate Second Brain entries."
+        }
+        if store.skippedCount > 0 {
+            text += " Skipped chats can be restored until the next build."
+        }
+        text += " The cost is a rough upper bound."
+        return text
+    }
+
     var body: some View {
         HStack(alignment: .center, spacing: 8) {
             VStack(alignment: .leading, spacing: 2) {
@@ -25,9 +37,7 @@ struct StagedHeader: View {
                     Text("Staged for build")
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(Theme.Colors.textTertiary)
-                    HelpButton(text: "Sources that go into the wiki on the next build. 'Group' (chats only) "
-                        + "bundles related conversations to avoid creating duplicate Second Brain entries. "
-                        + "The cost is a rough upper bound.")
+                    HelpButton(text: helpText)
                 }
                 if !running, sourceCount > 0 {
                     costLine

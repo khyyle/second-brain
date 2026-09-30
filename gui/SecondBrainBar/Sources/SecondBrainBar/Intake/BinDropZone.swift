@@ -2,12 +2,10 @@ import SwiftUI
 
 /// The drop zone, styled as a card that highlights on hover or drag.
 ///
-/// The card takes documents (PDFs, notes, folders of them). Conversation
-/// exports are a separate, rare action behind an explicit "Import" affordance
-/// beneath the card, because their formats are provider-specific and a
-/// misrouted multi-gigabyte export is an expensive mistake. If an export is
-/// dropped on the card anyway, it isn't silently mishandled: the import
-/// affordance turns into a one-click prompt for it.
+/// The card takes documents and conversation exports. An export is recognized
+/// by its contents and imported after a confirmation that names it and says how
+/// many conversations it holds, because sorting that many conversations ties up
+/// the pipeline for a long time.
 ///
 /// The whole window accepts drops (see `DropContainerView`); the card is where
 /// their outcome shows: whether dragged files will be accepted, a check and
@@ -16,29 +14,25 @@ struct BinDropZone: View {
     let bin: Bin
     @EnvironmentObject private var intake: DropIntake
     @State private var isHovering = false
-    @State private var importHovering = false
     @State private var shakeProgress: CGFloat = 0
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        VStack(spacing: 7) {
-            DropCardFace(
-                state: state,
-                idleTitle: bin.displayName,
-                hint: bin.hint,
-                isHovering: isHovering
-            )
-            .frame(height: Theme.Metric.zoneHeight)
-            .contentShape(Rectangle())
-            .onTapGesture { intake.presentAddFilesPanel() }
-            .onHover { isHovering = $0 }
-            .help("Drop files or a folder here, or click to browse (⌘O)")
-            .modifier(Shake(progress: shakeProgress))
-            .onChange(of: intake.failure) { failure in
-                guard failure != nil, !reduceMotion else { return }
-                withAnimation(.easeOut(duration: 0.3)) { shakeProgress += 1 }
-            }
-            importRow
+        DropCardFace(
+            state: state,
+            idleTitle: bin.displayName,
+            hint: bin.hint,
+            isHovering: isHovering
+        )
+        .frame(height: Theme.Metric.zoneHeight)
+        .contentShape(Rectangle())
+        .onTapGesture { intake.presentAddFilesPanel() }
+        .onHover { isHovering = $0 }
+        .help("Drop files or a folder here, or click to browse (⌘O)")
+        .modifier(Shake(progress: shakeProgress))
+        .onChange(of: intake.failure) { failure in
+            guard failure != nil, !reduceMotion else { return }
+            withAnimation(.easeOut(duration: 0.3)) { shakeProgress += 1 }
         }
     }
 
@@ -56,54 +50,6 @@ struct BinDropZone: View {
         if let added = intake.added { return .added(added) }
         if let failure = intake.failure { return .failed(failure) }
         return .idle
-    }
-
-    /// Deliberate "Import ChatGPT export…", which becomes a one-click prompt
-    /// when an export was just dropped on the card by mistake.
-    @ViewBuilder
-    private var importRow: some View {
-        if let pending = intake.pendingExport {
-            HStack(spacing: 6) {
-                Image(systemName: "questionmark.circle")
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(Theme.Colors.accentAmber)
-                Text("Looks like a \(pending.provider.displayName) export")
-                    .font(Theme.Font.meta(10.5))
-                    .foregroundStyle(Theme.Colors.textSecondary)
-                    .lineLimit(1).truncationMode(.tail)
-                Spacer(minLength: 6)
-                Button { intake.importPending() } label: {
-                    Text("Import")
-                        .font(Theme.Font.meta(10).weight(.medium))
-                        .foregroundStyle(Theme.Colors.accent)
-                        .padding(.horizontal, 8).padding(.vertical, 3)
-                        .background(Capsule().fill(Theme.Colors.accent.opacity(0.16)))
-                }
-                .buttonStyle(.plain)
-            }
-            .padding(.horizontal, 2)
-        } else {
-            HStack(spacing: 0) {
-                Spacer(minLength: 0)
-                Button { intake.presentImportPanel() } label: {
-                    HStack(spacing: 4) {
-                        Image(systemName: "square.and.arrow.down")
-                            .font(.system(size: 9, weight: .semibold))
-                        Text("Import ChatGPT export")
-                            .font(Theme.Font.meta(10))
-                    }
-                    .foregroundStyle(importHovering ? Theme.Colors.textSecondary : Theme.Colors.textTertiary)
-                    .padding(.horizontal, 7).padding(.vertical, 3)
-                    .background(
-                        RoundedRectangle(cornerRadius: 6, style: .continuous)
-                            .fill(importHovering ? Theme.Colors.surfaceHover : Color.clear)
-                    )
-                }
-                .buttonStyle(.plain)
-                .onHover { importHovering = $0 }
-                Spacer(minLength: 0)
-            }
-        }
     }
 }
 

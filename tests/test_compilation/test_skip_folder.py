@@ -1,4 +1,4 @@
-"""The skipped-source holding folder is excluded from builds and purged."""
+"""The skipped-source holding folder is excluded from builds."""
 
 from __future__ import annotations
 
@@ -18,17 +18,3 @@ def test_find_new_sources_ignores_skipped(config: Config, manifest: Manifest) ->
 
     assert "documents/keep.md" in sources
     assert all(".skipped" not in source for source in sources)
-
-
-def test_purge_skipped_removes_folder(config: Config) -> None:
-    skipped = config.raw_dir / ".skipped" / "chatgpt"
-    skipped.mkdir(parents=True, exist_ok=True)
-    (skipped / "junk.md").write_text("y", encoding="utf-8")
-
-    compiler._purge_skipped(config.raw_dir)
-
-    assert not (config.raw_dir / ".skipped").exists()
-
-
-def test_purge_skipped_noop_when_absent(config: Config) -> None:
-    compiler._purge_skipped(config.raw_dir)  # must not raise

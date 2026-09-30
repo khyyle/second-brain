@@ -1,5 +1,19 @@
 import Foundation
 
+/// A conversation export recognized in a drop or picker selection.
+struct DetectedExport {
+    let provider: ExportProvider
+    let files: [URL]
+    let conversationCount: Int
+
+    /// The file name, or a count when a split export spans several files.
+    var sourceName: String {
+        files.count == 1
+            ? files[0].lastPathComponent
+            : "\(files.count) files"
+    }
+}
+
 /// A conversation-export source the app can import, such as ChatGPT.
 ///
 /// Each provider validates its own export by content (so a rename can't
@@ -27,26 +41,29 @@ enum ExportProvider: String, CaseIterable, Identifiable {
         }
     }
 
-    /// Whether a single JSON file is this provider's export.
-    func matches(_ url: URL) -> Bool {
+    /// Conversation count when a single JSON file is this provider's export;
+    /// nil otherwise.
+    func conversationCount(in url: URL) -> Int? {
         guard url.pathExtension.lowercased() == "json",
               let data = try? Data(contentsOf: url),
               let top = try? JSONSerialization.jsonObject(with: data)
-        else { return false }
+        else { return nil }
         switch self {
         case .chatgpt:
             guard let conversations = top as? [[String: Any]],
-                  let first = conversations.first else { return false }
-            return first["mapping"] is [String: Any]
+                  let first = conversations.first,
+                  first["mapping"] is [String: Any] else { return nil }
+            return conversations.count
         }
     }
 
-    /// The export files to import from a user's selection: a matching file
+    /// The export to import from a user's selection: a matching file
     /// directly, or the matching `conversations*.json` shards inside a
     /// selected export folder (ignoring the bundled attachments/metadata).
-    func exportFiles(in selection: [URL]) -> [URL] {
+    func detect(in selection: [URL]) -> DetectedExport? {
         let fileManager = FileManager.default
         var found: [URL] = []
+        var totalConversations = 0
         for url in selection {
             var isDirectory: ObjCBool = false
             guard fileManager.fileExists(atPath: url.path, isDirectory: &isDirectory) else { continue }
@@ -54,19 +71,26 @@ enum ExportProvider: String, CaseIterable, Identifiable {
                 let entries = (try? fileManager.contentsOfDirectory(
                     at: url, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]
                 )) ?? []
-                found += entries.filter {
-                    $0.lastPathComponent.lowercased().hasPrefix("conversations") && matches($0)
+                for entry in entries {
+                    guard entry.lastPathComponent.lowercased().hasPrefix("conversations"),
+                          let count = conversationCount(in: entry) else { continue }
+                    found.append(entry)
+                    totalConversations += count
                 }
-            } else if matches(url) {
+            } else if let count = conversationCount(in: url) {
                 found.append(url)
+                totalConversations += count
             }
         }
-        return found
+        guard !found.isEmpty else { return nil }
+        return DetectedExport(provider: self, files: found, conversationCount: totalConversations)
     }
 
-    /// The first provider that recognizes any file in a selection, used to
-    /// catch an export mistakenly dropped on the documents zone.
-    static func detect(in selection: [URL]) -> ExportProvider? {
-        allCases.first { !$0.exportFiles(in: selection).isEmpty }
+    /// The first provider that recognizes an export in the selection.
+    static func detect(in selection: [URL]) -> DetectedExport? {
+        for provider in allCases {
+            if let detected = provider.detect(in: selection) { return detected }
+        }
+        return nil
     }
 }

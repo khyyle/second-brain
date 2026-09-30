@@ -12,17 +12,17 @@ Two kinds of sources can be ingested:
 
 1. Documents (PDFs, Markdown, plain text, LaTeX) go on the drop zone at the top of the Ingest tab. Drop a file or a folder onto it, or click it to browse. You can also drop files anywhere on the window from the other tabs. Dropping copies a file in and starts parsing it locally. None of this costs anything.
 
-2. Chat history can be added by clicking the "Import ChatGPT export" button just under the drop zone. The app supports individual `conversation-*.json` files or a full data export folder. If you provide the full folder, the app extracts only the conversation files it needs.
+2. Chat history can be added by dropping a ChatGPT export on the same drop zone. The app supports individual `conversation-*.json` files or a full data export folder. If you provide the full folder, the app extracts only the conversation files it needs.
 
 ## The tabs
 
 **Ingest** turns raw source files into Markdown, staging them for compilation into the actual wiki. Files that fail to parse stay behind so you can retry or remove them. Ingestion runs locally and is free.
 
-**Chats** is a review desk for imported ChatGPT conversations. Chat history is noisy, so a small local model sorts each conversation into kept, review, or skip before anything reaches the build (see [architecture](architecture.md)). Conversations the model was unsure about wait in "Needs review" for your call, while "Recent" lets you flip past decisions or restore a chat you set aside. 
+Imported ChatGPT conversations get one more pass. Chat history is noisy, so a small local model sorts each conversation into kept, review, or skip before anything reaches the build (see [architecture](architecture.md)). Conversations the model was unsure about wait in "Needs review" at the top of the Ingest tab for your call, and a count on the tab shows how many are waiting.
 
 It is highly recommended that you prune chats for redundancy avoid paying to compile overlapping material, whether through this review, manually, or through an agent of your choice (just tell an agent of your choice to prune `~/second-brain/drops/chatgpt/` to your preferences).
 
-**Build** is where staged sources are compiled into wiki pages using a cloud model. It shows what is ready to build with an estimated cost, along with a log of recently built pages. Removing a staged source takes it out of the pipeline entirely (see [deletion](lifecycle.md#deletion)).
+**Build** is where staged sources are compiled into wiki pages using a cloud model. It shows what is ready to build with an estimated cost, along with a log of recently built pages. A kept chat can still be skipped from the staged list, and skipped chats can be restored from the "skipped" row beneath it until the next build. Removing a staged source takes it out of the pipeline entirely (see [deletion](lifecycle.md#deletion)).
 
 **Domains** curates the broad subject tags used in page frontmatter. Renaming, merging, or deleting a domain rewrites every affected page's frontmatter so tag vocabulary stays consistent across the wiki.
 

@@ -309,6 +309,53 @@ def test_prompt_too_long_rejection_defers_not_retries(
     assert set(manifest.get_deferred_sources()) == {"a.md"}
 
 
+def test_full_build_purges_skipped_holding(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A build that compiles every staged source clears the holding folder."""
+    config = _build_config(tmp_path)
+    manifest = Manifest(config.manifest_db_path)
+    skipped = config.raw_dir / ".skipped" / "chatgpt"
+    skipped.mkdir(parents=True, exist_ok=True)
+    (skipped / "junk.md").write_text("y", encoding="utf-8")
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setattr(compiler, "find_new_sources", lambda *_: ["a.md"])
+    monkeypatch.setattr(compiler, "rebuild_structure", lambda *_: {})
+    monkeypatch.setattr(compiler, "_git_commit", lambda *_: None)
+    monkeypatch.setattr(
+        compiler, "_run_agent", lambda *_a, **_k: RunResult(0.1, RunOutcome.COMPLETED)
+    )
+
+    compiler.run_compilation(config, manifest)
+
+    assert not (config.raw_dir / ".skipped").exists()
+
+
+def test_incomplete_build_keeps_skipped_holding(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A failed unit leaves the holding folder for the next attempt."""
+    config = _build_config(tmp_path)
+    manifest = Manifest(config.manifest_db_path)
+    skipped = config.raw_dir / ".skipped" / "chatgpt"
+    skipped.mkdir(parents=True, exist_ok=True)
+    (skipped / "junk.md").write_text("y", encoding="utf-8")
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setattr(compiler, "find_new_sources", lambda *_: ["a.md"])
+    monkeypatch.setattr(compiler, "rebuild_structure", lambda *_: {})
+    monkeypatch.setattr(compiler, "_git_commit", lambda *_: None)
+    monkeypatch.setattr(compiler, "_git_restore", lambda *_: None)
+    monkeypatch.setattr(
+        compiler, "_run_agent", lambda *_a, **_k: RunResult(0.0, RunOutcome.FAILED)
+    )
+
+    compiler.run_compilation(config, manifest)
+
+    assert (config.raw_dir / ".skipped" / "chatgpt" / "junk.md").is_file()
+
+
 def test_iteration_allowance_scales_with_source_size(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

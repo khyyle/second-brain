@@ -2,8 +2,8 @@
 
 The pipeline and the GUI mutation commands write this file after they change
 the manifest or the cluster preview; the app reads it instead of recomputing
-the staged set, build cost, and stale flag itself. Mirrors the ``.status.json``
-heartbeat pattern, for slower-changing state.
+the staged set, build cost, stale flag, and review and skipped counts itself.
+Mirrors the ``.status.json`` heartbeat pattern, for slower-changing state.
 """
 
 from __future__ import annotations
@@ -24,6 +24,7 @@ from second_brain.compilation.compiler import find_new_sources
 from second_brain.config import Config
 from second_brain.ingestion.manifest import Manifest
 from second_brain.triage.pipeline import worthwhile_sources
+from second_brain.triage.skipped import SKIPPED_DIRNAME
 from second_brain.wiki.structure import CONTENT_DIRS
 
 logger = logging.getLogger(__name__)
@@ -74,6 +75,18 @@ def _built_count(wiki_dir: Path) -> int:
     return count
 
 
+def _triage_counts(raw_dir: Path, decisions: dict[str, str]) -> tuple[int, int]:
+    """Count review files in raw/ and skip files in the holding folder."""
+    needs_review = 0
+    skipped = 0
+    for rel, decision in decisions.items():
+        if decision == "review" and (raw_dir / rel).exists():
+            needs_review += 1
+        elif decision == "skip" and (raw_dir / SKIPPED_DIRNAME / rel).exists():
+            skipped += 1
+    return needs_review, skipped
+
+
 def compute_state(config: Config, manifest: Manifest) -> dict:
     """
     Build the authoritative derived state the app renders.
@@ -89,7 +102,8 @@ def compute_state(config: Config, manifest: Manifest) -> dict:
     -------
     dict
         The staged sources with sizes, the count of built pages, per-model
-        build cost, and whether a reviewed grouping has drifted from staging.
+        build cost, needs-review and skipped counts, and whether a reviewed
+        grouping has drifted from staging.
     """
     queue = worthwhile_sources(manifest, find_new_sources(config, manifest))
     work_units = reconcile_work_units(config.data_dir, queue) or [[rel] for rel in queue]
@@ -98,12 +112,15 @@ def compute_state(config: Config, manifest: Manifest) -> dict:
     staged = _staged_with_sizes(config.raw_dir, queue) + _deferred_entries(
         config.raw_dir, manifest.get_deferred_sources()
     )
+    needs_review, skipped = _triage_counts(config.raw_dir, manifest.get_triage_decisions())
     return {
         "generated_at": datetime.now(UTC).isoformat(),
         "staged": staged,
         "built_count": _built_count(config.wiki_dir),
         "costs": _build_costs(config.raw_dir, work_units),
         "stale": stale,
+        "needs_review": needs_review,
+        "skipped": skipped,
     }
 
 

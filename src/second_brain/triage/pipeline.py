@@ -16,6 +16,7 @@ from second_brain.config import Config
 from second_brain.ingestion.manifest import Manifest
 from second_brain.status import clear_status, now_iso, write_status
 from second_brain.triage.gemma import TriageDecision, triage_file
+from second_brain.triage.skipped import move_skips_to_holding
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +67,7 @@ def triage_pending(config: Config, manifest: Manifest) -> dict[str, int]:
     """Triage every untriaged source in a scoped lane and record decisions.
 
     Review-tier sources are also copied into the inbox for a manual pass.
+    Skipped sources are moved into the holding folder under ``raw/``.
     Writes a status heartbeat so an external reader can show triage
     progress. Safe to call repeatedly: already-decided files are skipped.
 
@@ -86,44 +88,48 @@ def triage_pending(config: Config, manifest: Manifest) -> dict[str, int]:
 
     pending = _find_untriaged(config, manifest)
     counts = {"worthwhile": 0, "review": 0, "skip": 0}
-    if not pending:
-        return counts
+    if pending:
+        total = len(pending)
+        started = now_iso()
+        review_paths: list[str] = []
+        try:
+            for idx, rel in enumerate(pending):
+                write_status(
+                    config.data_dir,
+                    phase="triage",
+                    current=idx,
+                    total=total,
+                    started_at=started,
+                )
+                try:
+                    result = triage_file(config.raw_dir / rel, config.triage)
+                except OSError as exc:
+                    # A source can vanish mid-run (e.g. un-ingested in the app),
+                    # so skip it rather than letting one missing file abort the
+                    # whole triage pass and stall every later source.
+                    logger.warning("Skipping triage for %s: %s", rel, exc)
+                    continue
+                manifest.record_triage(
+                    rel, result.decision.value, result.confidence, result.reason
+                )
+                counts[result.decision.value] += 1
+                if result.decision == TriageDecision.REVIEW:
+                    review_paths.append(rel)
+        finally:
+            clear_status(config.data_dir)
 
-    total = len(pending)
-    started = now_iso()
-    review_paths: list[str] = []
-    try:
-        for idx, rel in enumerate(pending):
-            write_status(
-                config.data_dir,
-                phase="triage",
-                current=idx,
-                total=total,
-                started_at=started,
-            )
-            try:
-                result = triage_file(config.raw_dir / rel, config.triage)
-            except OSError as exc:
-                # A source can vanish mid-run (e.g. un-ingested in the app),
-                # so skip it rather than letting one missing file abort the
-                # whole triage pass and stall every later source.
-                logger.warning("Skipping triage for %s: %s", rel, exc)
-                continue
-            manifest.record_triage(rel, result.decision.value, result.confidence, result.reason)
-            counts[result.decision.value] += 1
-            if result.decision == TriageDecision.REVIEW:
-                review_paths.append(rel)
-    finally:
-        clear_status(config.data_dir)
+        _route_review_to_inbox(config, review_paths)
+        logger.info(
+            "Triage: %d worthwhile, %d review, %d skip (of %d)",
+            counts["worthwhile"],
+            counts["review"],
+            counts["skip"],
+            total,
+        )
 
-    _route_review_to_inbox(config, review_paths)
-    logger.info(
-        "Triage: %d worthwhile, %d review, %d skip (of %d)",
-        counts["worthwhile"],
-        counts["review"],
-        counts["skip"],
-        total,
-    )
+    moved = move_skips_to_holding(config.raw_dir, manifest.get_triage_decisions())
+    if moved:
+        logger.info("Moved %d skipped source(s) into holding folder", moved)
     return counts
 
 
