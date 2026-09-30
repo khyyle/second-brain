@@ -294,22 +294,10 @@ def _ingest_single(
             logger.exception("Failed to ingest %s", file_path)
             click.echo(f"Error processing {file_path.name}: {e}", err=True)
 
-    # drops/ is an ephemeral queue containing copies of files so we delete
-    # after ingestion completes.
     if ingested:
-        _remove_drop_copy(file_path, config)
+        from second_brain.ingestion.watcher import remove_drop_copy
 
-
-def _remove_drop_copy(file_path: Path, config: Config) -> None:
-    """Permanently delete a successfully-ingested file from the drops folder."""
-    try:
-        file_path.relative_to(config.drops_dir)
-    except ValueError:
-        return  # not in drops (e.g. a direct --path ingest); leave it
-    try:
-        file_path.unlink()
-    except OSError as exc:
-        logger.warning("Could not remove drop copy %s: %s", file_path, exc)
+        remove_drop_copy(file_path, config)
 
 
 def _relative_output_dir(file_path: Path, config: Config) -> str:

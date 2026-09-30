@@ -217,6 +217,30 @@ def _is_drop_lane(path: Path, config: Config) -> bool:
         return False
 
 
+def remove_drop_copy(file_path: Path, config: Config) -> None:
+    """Delete a file from the drops queue once its content is in the vault.
+
+    ``drops/`` holds copies the app made, so a copy is removed after it is
+    ingested or found to duplicate content already ingested. Files outside
+    ``drops/``, such as watched-folder originals, are never touched.
+
+    Parameters
+    ----------
+    file_path: Path
+        File that was ingested or recognized as already ingested.
+    config: Config
+        Application configuration, used for the ``drops/`` location.
+    """
+    try:
+        file_path.relative_to(config.drops_dir)
+    except ValueError:
+        return
+    try:
+        file_path.unlink()
+    except OSError as exc:
+        logger.warning("Could not remove drop copy %s: %s", file_path, exc)
+
+
 def _batch_scan(
     config: Config,
     manifest: Manifest,
@@ -261,7 +285,10 @@ def _batch_scan(
             if manifest.needs_processing(file_path, config.raw_dir):
                 work.append((file_path, name))
             else:
+                # A re-dropped copy of ingested content would otherwise sit in
+                # the queue indefinitely and be re-hashed on every scan.
                 manifest.mark_duplicate(file_path, name)
+                remove_drop_copy(file_path, config)
 
     total = len(work)
     processed = 0
