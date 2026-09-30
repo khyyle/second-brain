@@ -15,13 +15,13 @@ private enum Tab: String, CaseIterable, Identifiable {
 
 /// Root popover view.
 ///
-/// Layout (top to bottom): segmented control + live status, drop zone,
-/// one bounded scroll area that switches with the selected tab, and a
-/// footer with vault stats and actions. A successful drop blurs the
-/// content and raises a confirmation overlay.
+/// Layout (top to bottom): the tab bar, the drop zone (Ingest tab only), one
+/// scroll area that switches with the selected tab, and a footer with vault
+/// stats and actions. The window has a fixed height, so tabs without the drop
+/// zone give its space to their list rather than resizing the window. Files
+/// can be dropped on any tab; adding them brings the Ingest tab forward.
 struct ContentView: View {
     let config: AppConfig
-    @StateObject private var feedback = UploadFeedback()
     @State private var tab: Tab = .ingest
     @State private var autoRunner: AutoRunner?
     @State private var showingSettings = false
@@ -30,6 +30,7 @@ struct ContentView: View {
     @State private var showingOllamaAlert = false
     @State private var ollamaHealth: PipelineRunner.OllamaHealth?
     @EnvironmentObject private var store: PipelineStore
+    @EnvironmentObject private var intake: DropIntake
     @Namespace private var tabNamespace
 
     var body: some View {
@@ -44,6 +45,7 @@ struct ContentView: View {
             }
         }
         .frame(width: Theme.Metric.popoverWidth, alignment: .topLeading)
+        .frame(maxHeight: .infinity, alignment: .top)
         .background(Theme.backgroundGradient)
         .preferredColorScheme(.dark)
         .alert("API key required", isPresented: $showingNoKeyAlert) {
@@ -71,29 +73,31 @@ struct ContentView: View {
             if autoRunner == nil { autoRunner = AutoRunner(config: config) }
             probeOllama()
         }
-        .onChange(of: feedback.event) { newValue in
+        .onChange(of: intake.added) { newValue in
             // A successful drop schedules a debounced (free) ingest run.
             if newValue != nil { autoRunner?.schedule() }
+        }
+        .onChange(of: intake.submissionCount) { _ in
+            withAnimation(.spring(response: 0.28, dampingFraction: 0.82)) { tab = .ingest }
+        }
+        .onChange(of: showingSettings) { showing in
+            // Settings would hide a drop's result, and leaving it to show the
+            // result would discard unsaved edits.
+            intake.acceptsFiles = !showing
         }
     }
 
     private var main: some View {
-        ZStack {
-            VStack(alignment: .leading, spacing: 10) {
-                BinDropZone(bin: .inbox, config: config, feedback: feedback)
-                tabBar
-                listArea
-                footer
-            }
-            .padding(14)
-            .blur(radius: feedback.event != nil ? 9 : 0)
-            .animation(.easeInOut(duration: 0.25), value: feedback.event)
-
-            if let event = feedback.event {
-                UploadOverlay(event: event)
+        VStack(alignment: .leading, spacing: 10) {
+            tabBar
+            if tab == .ingest {
+                BinDropZone(bin: .inbox)
                     .transition(.opacity)
             }
+            listArea
+            footer
         }
+        .padding(14)
     }
 
     /// Custom themed segmented control
@@ -157,7 +161,7 @@ struct ContentView: View {
             .frame(maxWidth: .infinity, alignment: .topLeading)
             .padding(6)
         }
-        .frame(height: Theme.Metric.listHeight)
+        .frame(maxHeight: .infinity)
         .background(
             RoundedRectangle(cornerRadius: Theme.Metric.corner, style: .continuous)
                 .fill(Theme.Colors.surface.opacity(0.5))
@@ -166,6 +170,21 @@ struct ContentView: View {
             RoundedRectangle(cornerRadius: Theme.Metric.corner, style: .continuous)
                 .strokeBorder(Theme.Colors.stroke, lineWidth: 1)
         )
+        .overlay { windowDropTarget }
+    }
+
+    /// On tabs without the drop card, a drag over the window needs a visible
+    /// target of its own; it looks like the card so the two read as one.
+    @ViewBuilder
+    private var windowDropTarget: some View {
+        if tab != .ingest && intake.drag != .none {
+            DropCardFace(
+                state: intake.drag == .rejecting ? .rejecting : .accepting,
+                idleTitle: "Drop to add to Second Brain",
+                hint: Bin.inbox.hint
+            )
+            .transition(.opacity.animation(.easeOut(duration: 0.12)))
+        }
     }
 
     private var footer: some View {

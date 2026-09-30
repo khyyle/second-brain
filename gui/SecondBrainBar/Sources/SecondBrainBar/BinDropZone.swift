@@ -1,6 +1,4 @@
 import SwiftUI
-import UniformTypeIdentifiers
-import AppKit
 
 /// The drop zone, styled as a card that highlights on hover or drag.
 ///
@@ -11,74 +9,60 @@ import AppKit
 /// dropped on the card anyway, it isn't silently mishandled: the import
 /// affordance turns into a one-click prompt for it.
 ///
-/// Dropped or picked files are copied (not moved) into the drop folders; the
-/// Python watcher picks them up from there.
+/// The whole window accepts drops (see `DropContainerView`); the card is where
+/// their outcome shows: whether dragged files will be accepted, a check and
+/// count once they are added, and a brief error when nothing could be added.
 struct BinDropZone: View {
     let bin: Bin
-    let config: AppConfig
-    @ObservedObject var feedback: UploadFeedback
-
-    private struct DetectedExport {
-        let provider: ExportProvider
-        let files: [URL]
-    }
-
-    @State private var isTargeted = false
+    @EnvironmentObject private var intake: DropIntake
     @State private var isHovering = false
     @State private var importHovering = false
-    @State private var errorMessage: String?
-    @State private var pendingExport: DetectedExport?
+    @State private var shakeProgress: CGFloat = 0
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         VStack(spacing: 7) {
-            dropCard
+            DropCardFace(
+                state: state,
+                idleTitle: bin.displayName,
+                hint: bin.hint,
+                isHovering: isHovering
+            )
+            .frame(height: Theme.Metric.zoneHeight)
+            .contentShape(Rectangle())
+            .onTapGesture { intake.presentAddFilesPanel() }
+            .onHover { isHovering = $0 }
+            .help("Drop files or a folder here, or click to browse (⌘O)")
+            .modifier(Shake(progress: shakeProgress))
+            .onChange(of: intake.failure) { failure in
+                guard failure != nil, !reduceMotion else { return }
+                withAnimation(.easeOut(duration: 0.3)) { shakeProgress += 1 }
+            }
             importRow
         }
     }
 
-    private var dropCard: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: Theme.Metric.corner, style: .continuous)
-                .fill(fillColor)
-            RoundedRectangle(cornerRadius: Theme.Metric.corner, style: .continuous)
-                .strokeBorder(strokeColor, lineWidth: 1)
-
-            VStack(spacing: 9) {
-                Image(systemName: bin.iconName)
-                    .font(.system(size: 22, weight: .regular))
-                    .foregroundStyle(iconColor)
-                VStack(spacing: 3) {
-                    Text(errorMessage ?? bin.displayName)
-                        .font(Theme.Font.body(12.5, weight: .medium))
-                        .foregroundStyle(errorMessage == nil ? Theme.Colors.textPrimary : Theme.Colors.danger)
-                    if errorMessage == nil {
-                        Text(bin.hint)
-                            .font(Theme.Font.body(10.5))
-                            .foregroundStyle(Theme.Colors.textSecondary)
-                    }
-                }
-                .lineLimit(1)
-                .truncationMode(.middle)
-                .padding(.horizontal, 10)
-            }
+    /// A drag in progress wins over a finished drop's result, so starting a
+    /// new drag always shows whether it will be accepted. A copy still in
+    /// flight keeps the accepting look until it has taken long enough to
+    /// warrant a spinner.
+    private var state: DropCardState {
+        switch intake.drag {
+        case .accepting: return .accepting
+        case .rejecting: return .rejecting
+        case .none: break
         }
-        .frame(height: Theme.Metric.zoneHeight)
-        .contentShape(Rectangle())
-        .onTapGesture { openDocumentPicker() }
-        .onHover { isHovering = $0 }
-        .animation(.easeInOut(duration: 0.14), value: isTargeted)
-        .animation(.easeInOut(duration: 0.14), value: isHovering)
-        .onDrop(of: [.fileURL], isTargeted: $isTargeted) { providers in
-            handleDrop(providers: providers)
-        }
-        .help("Drop files or a folder here, or click to browse")
+        if intake.isAdding { return intake.addingIsSlow ? .adding : .accepting }
+        if let added = intake.added { return .added(added) }
+        if let failure = intake.failure { return .failed(failure) }
+        return .idle
     }
 
     /// Deliberate "Import ChatGPT export…", which becomes a one-click prompt
     /// when an export was just dropped on the card by mistake.
     @ViewBuilder
     private var importRow: some View {
-        if let pending = pendingExport {
+        if let pending = intake.pendingExport {
             HStack(spacing: 6) {
                 Image(systemName: "questionmark.circle")
                     .font(.system(size: 10, weight: .semibold))
@@ -88,7 +72,7 @@ struct BinDropZone: View {
                     .foregroundStyle(Theme.Colors.textSecondary)
                     .lineLimit(1).truncationMode(.tail)
                 Spacer(minLength: 6)
-                Button { importPending() } label: {
+                Button { intake.importPending() } label: {
                     Text("Import")
                         .font(Theme.Font.meta(10).weight(.medium))
                         .foregroundStyle(Theme.Colors.accent)
@@ -101,7 +85,7 @@ struct BinDropZone: View {
         } else {
             HStack(spacing: 0) {
                 Spacer(minLength: 0)
-                Button { openImportPicker() } label: {
+                Button { intake.presentImportPanel() } label: {
                     HStack(spacing: 4) {
                         Image(systemName: "square.and.arrow.down")
                             .font(.system(size: 9, weight: .semibold))
@@ -121,134 +105,196 @@ struct BinDropZone: View {
             }
         }
     }
+}
 
-    private var fillColor: Color {
-        (isTargeted || isHovering) ? Theme.Colors.surfaceHover : Theme.Colors.surface
+/// What a drop target is showing.
+enum DropCardState: Equatable {
+    case idle
+    case accepting
+    case rejecting
+    case adding
+    case added(AddedFiles)
+    case failed(DropIntake.Failure)
+}
+
+/// A drop target's face: icon, title, and a detail line on a surface that
+/// highlights. The Ingest card and the window-wide drop overlay share it, so a
+/// drop target always looks the same.
+///
+/// Titles and icons swap instantly, because crossfading text blurs it and makes
+/// the card feel slow. Only the surface eases, and the added state's check
+/// draws itself in as the single animated confirmation.
+struct DropCardFace: View {
+    let state: DropCardState
+    let idleTitle: String
+    let hint: String
+    var isHovering = false
+
+    private let iconSlotHeight: CGFloat = 26
+
+    var body: some View {
+        ZStack {
+            ZStack {
+                RoundedRectangle(cornerRadius: Theme.Metric.corner, style: .continuous)
+                    .fill(isHighlighted ? Theme.Colors.surfaceHover : Theme.Colors.surface)
+                RoundedRectangle(cornerRadius: Theme.Metric.corner, style: .continuous)
+                    .strokeBorder(strokeColor, lineWidth: 1)
+            }
+            .animation(.easeOut(duration: 0.15), value: state)
+            .animation(.easeOut(duration: 0.14), value: isHovering)
+
+            VStack(spacing: 9) {
+                icon.frame(height: iconSlotHeight)
+                VStack(spacing: 3) {
+                    Text(title)
+                        .font(Theme.Font.body(12.5, weight: .medium))
+                        .foregroundStyle(titleColor)
+                    if let detail {
+                        Text(detail)
+                            .font(Theme.Font.body(10.5))
+                            .foregroundStyle(Theme.Colors.textSecondary)
+                    }
+                }
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .padding(.horizontal, 10)
+            }
+        }
     }
 
-    private var strokeColor: Color {
-        (isTargeted || isHovering) ? Theme.Colors.textTertiary : Theme.Colors.stroke
+    @ViewBuilder
+    private var icon: some View {
+        switch state {
+        case .adding:
+            ProgressView().controlSize(.small)
+        case .added(let files):
+            DrawnCheckmark(color: Theme.Colors.success)
+                .id(files.id)
+        case .idle, .accepting, .rejecting, .failed:
+            Image(systemName: symbolName)
+                .font(.system(size: 22, weight: .regular))
+                .foregroundStyle(iconColor)
+        }
+    }
+
+    private var isHighlighted: Bool {
+        switch state {
+        case .accepting, .adding: return true
+        case .idle: return isHovering
+        case .rejecting, .added, .failed: return false
+        }
+    }
+
+    /// Outcome tint for the icon and border. Each outcome also has its own
+    /// icon and title, so color never carries the state alone.
+    private var outcomeColor: Color? {
+        switch state {
+        case .rejecting, .failed: return Theme.Colors.danger
+        case .added: return Theme.Colors.success
+        case .idle, .accepting, .adding: return nil
+        }
+    }
+
+    private var symbolName: String {
+        switch state {
+        case .rejecting: return "nosign"
+        case .failed: return "exclamationmark.triangle"
+        case .idle, .accepting, .adding, .added: return Bin.inbox.iconName
+        }
+    }
+
+    private var title: String {
+        switch state {
+        case .idle, .accepting: return idleTitle
+        case .rejecting: return "Can't add these files"
+        case .adding: return "Adding files…"
+        case .added(let files): return files.count == 1 ? "Added 1 file" : "Added \(files.count) files"
+        case .failed(let failure): return failure.title
+        }
+    }
+
+    private var detail: String? {
+        switch state {
+        case .added: return nil
+        case .failed(let failure): return failure.detail ?? hint
+        case .idle, .accepting, .rejecting, .adding: return hint
+        }
     }
 
     private var iconColor: Color {
-        (isTargeted || isHovering) ? Theme.Colors.textPrimary : Theme.Colors.textSecondary
+        outcomeColor ?? (isHighlighted ? Theme.Colors.textPrimary : Theme.Colors.textSecondary)
     }
 
-    // MARK: - Pickers
-
-    private func openDocumentPicker() {
-        let panel = makePanel(prompt: "Add", message: "Choose files or folders to add to Second Brain")
-        if panel.runModal() == .OK { stage(urls: panel.urls) }
+    private var titleColor: Color {
+        switch state {
+        case .rejecting, .failed: return Theme.Colors.danger
+        case .idle, .accepting, .adding, .added: return Theme.Colors.textPrimary
+        }
     }
 
-    private func openImportPicker() {
-        let panel = makePanel(
-            prompt: "Import",
-            message: "Choose a ChatGPT export: its conversations.json file or the unzipped export folder"
-        )
-        guard panel.runModal() == .OK else { return }
-        let selection = panel.urls
-        DispatchQueue.global(qos: .userInitiated).async {
-            let files = ExportProvider.chatgpt.exportFiles(in: selection)
-            DispatchQueue.main.async {
-                if files.isEmpty {
-                    errorMessage = "Not a ChatGPT export"
-                } else {
-                    runImport(provider: .chatgpt, files: files)
-                }
+    private var strokeColor: Color {
+        if let outcomeColor { return outcomeColor.opacity(0.6) }
+        return isHighlighted ? Theme.Colors.textTertiary : Theme.Colors.stroke
+    }
+}
+
+/// A check that draws itself in, confirming files were added. With Reduce
+/// Motion on it appears already drawn.
+private struct DrawnCheckmark: View {
+    let color: Color
+    @State private var progress: CGFloat = 0
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    private let diameter: CGFloat = 24
+
+    var body: some View {
+        ZStack {
+            Circle()
+                .strokeBorder(color.opacity(0.5), lineWidth: 1.5)
+            CheckmarkShape()
+                .trim(from: 0, to: progress)
+                .stroke(color, style: StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
+                .padding(diameter * 0.28)
+        }
+        .frame(width: diameter, height: diameter)
+        .onAppear {
+            if reduceMotion {
+                progress = 1
+            } else {
+                withAnimation(.easeOut(duration: 0.25)) { progress = 1 }
             }
         }
     }
+}
 
-    /// A file/folder open panel. The app is a menu-bar accessory, so it must
-    /// activate first or the panel opens behind everything.
-    private func makePanel(prompt: String, message: String) -> NSOpenPanel {
-        let panel = NSOpenPanel()
-        panel.canChooseFiles = true
-        panel.canChooseDirectories = true
-        panel.allowsMultipleSelection = true
-        panel.prompt = prompt
-        panel.message = message
-        panel.level = .modalPanel
-        NSApp.activate(ignoringOtherApps: true)
-        return panel
+private struct CheckmarkShape: Shape {
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        path.move(to: CGPoint(x: rect.minX, y: rect.minY + rect.height * 0.55))
+        path.addLine(to: CGPoint(x: rect.minX + rect.width * 0.38, y: rect.maxY))
+        path.addLine(to: CGPoint(x: rect.maxX, y: rect.minY))
+        return path
+    }
+}
+
+/// A brief horizontal shake, the macOS cue for rejected input. Each whole step
+/// of `progress` plays one shake and comes to rest at zero offset.
+private struct Shake: GeometryEffect {
+    var progress: CGFloat
+    private let travel: CGFloat = 4
+    private let oscillations: CGFloat = 3
+
+    init(progress: CGFloat) {
+        self.progress = progress
     }
 
-    // MARK: - Drop
-
-    private func handleDrop(providers: [NSItemProvider]) -> Bool {
-        let fileProviders = providers.filter {
-            $0.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier)
-        }
-        guard !fileProviders.isEmpty else { return false }
-
-        let group = DispatchGroup()
-        var urls: [URL] = []
-        let lock = NSLock()
-        for provider in fileProviders {
-            group.enter()
-            provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { item, _ in
-                defer { group.leave() }
-                if let url = resolveURL(item) {
-                    lock.lock()
-                    urls.append(url)
-                    lock.unlock()
-                }
-            }
-        }
-        group.notify(queue: .main) { stage(urls: urls) }
-        return true
+    var animatableData: CGFloat {
+        get { progress }
+        set { progress = newValue }
     }
 
-    private func resolveURL(_ item: NSSecureCoding?) -> URL? {
-        if let url = item as? URL { return url }
-        if let data = item as? Data { return URL(dataRepresentation: data, relativeTo: nil) }
-        if let string = item as? String { return URL(string: string) }
-        return nil
-    }
-
-    // MARK: - Staging
-
-    /// Copy document files into the documents lane, and if the drop also
-    /// contained a conversation export, surface it for one-click import
-    /// rather than dropping it silently.
-    private func stage(urls: [URL]) {
-        guard !urls.isEmpty else { return }
-        DispatchQueue.global(qos: .userInitiated).async {
-            let result = DropStaging.stageDocuments(urls, config: config)
-            let detected = ExportProvider.detect(in: urls)
-            let export = detected.map { DetectedExport(provider: $0, files: $0.exportFiles(in: urls)) }
-            DispatchQueue.main.async {
-                pendingExport = export
-                if result.added > 0 {
-                    errorMessage = nil
-                    feedback.confirm(count: result.added)
-                } else if export != nil {
-                    errorMessage = nil
-                } else {
-                    errorMessage = result.failed ? "Copy failed" : "No supported files found"
-                }
-            }
-        }
-    }
-
-    private func importPending() {
-        guard let pending = pendingExport else { return }
-        pendingExport = nil
-        runImport(provider: pending.provider, files: pending.files)
-    }
-
-    private func runImport(provider: ExportProvider, files: [URL]) {
-        DispatchQueue.global(qos: .userInitiated).async {
-            let added = DropStaging.importExport(provider, files: files, config: config)
-            DispatchQueue.main.async {
-                if added > 0 {
-                    errorMessage = nil
-                    feedback.confirm(count: added)
-                } else {
-                    errorMessage = "Import failed"
-                }
-            }
-        }
+    func effectValue(size: CGSize) -> ProjectionTransform {
+        let offset = travel * sin(progress * .pi * 2 * oscillations)
+        return ProjectionTransform(CGAffineTransform(translationX: offset, y: 0))
     }
 }

@@ -15,7 +15,7 @@ enum Bin: String, CaseIterable, Identifiable {
 
     var hint: String {
         switch self {
-        case .inbox: return "or click to browse"
+        case .inbox: return ".pdf, .md, .txt, .tex"
         }
     }
 

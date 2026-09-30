@@ -19,11 +19,13 @@ struct SecondBrainBarApp: App {
     }
 }
 
-final class StatusBarController: NSObject, NSApplicationDelegate {
+@MainActor
+final class StatusBarController: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private let config = AppConfig.default
     private var statusItem: NSStatusItem!
     private var panel: NSPanel?
     private var store: PipelineStore?
+    private lazy var intake = DropIntake(config: config)
     private let autoRunner = AutoRunner(config: AppConfig.default)
     private var dropWatcher: DropWatcher?
 
@@ -106,14 +108,18 @@ final class StatusBarController: NSObject, NSApplicationDelegate {
         NotificationCenter.default.post(name: .panelDidShow, object: nil)
     }
 
+    /// The status item's menu is the only menu people see: the app runs without
+    /// a menu bar, so commands worth discovering are listed here.
     private func showStatusMenu() {
         let menu = NSMenu()
+        menu.addItem(addFilesItem())
+        menu.addItem(.separator())
         menu.addItem(
             withTitle: "Quit Second Brain",
             action: #selector(NSApplication.terminate(_:)),
             keyEquivalent: "q"
         )
-        
+
         statusItem.menu = menu
         statusItem.button?.performClick(nil)
         statusItem.menu = nil
@@ -132,6 +138,14 @@ final class StatusBarController: NSObject, NSApplicationDelegate {
         appItem.submenu = appMenu
         mainMenu.addItem(appItem)
 
+        // Never shown (the app has no menu bar), but it's what makes ⌘O work
+        // while the panel is in front.
+        let fileItem = NSMenuItem()
+        let fileMenu = NSMenu(title: "File")
+        fileMenu.addItem(addFilesItem())
+        fileItem.submenu = fileMenu
+        mainMenu.addItem(fileItem)
+
         let editItem = NSMenuItem()
         let editMenu = NSMenu(title: "Edit")
         editMenu.addItem(withTitle: "Undo", action: Selector(("undo:")), keyEquivalent: "z")
@@ -149,11 +163,30 @@ final class StatusBarController: NSObject, NSApplicationDelegate {
         NSApp.mainMenu = mainMenu
     }
 
+    private func addFilesItem() -> NSMenuItem {
+        let item = NSMenuItem(title: "Add Files…", action: #selector(addFiles), keyEquivalent: "o")
+        item.target = self
+        return item
+    }
+
+    /// Bring the panel forward first, so the files are seen arriving on the
+    /// Ingest tab once they are picked.
+    @objc private func addFiles() {
+        showPanel()
+        intake.presentAddFilesPanel()
+    }
+
+    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        menuItem.action == #selector(addFiles) ? intake.acceptsFiles : true
+    }
+
     private func makePanel() -> NSPanel {
         let store = PipelineStore(config: config)
         self.store = store
-        let hosting = NSHostingController(
-            rootView: ContentView(config: config).environmentObject(store)
+        let hosting = NSHostingView(
+            rootView: ContentView(config: config)
+                .environmentObject(store)
+                .environmentObject(intake)
         )
         hosting.sizingOptions = []
 
@@ -163,7 +196,7 @@ final class StatusBarController: NSObject, NSApplicationDelegate {
             backing: .buffered,
             defer: false
         )
-        panel.contentViewController = hosting
+        panel.contentView = DropContainerView(content: hosting, intake: intake)
         panel.setContentSize(NSSize(width: Theme.Metric.popoverWidth, height: 420))
         panel.title = ""
         panel.titleVisibility = .hidden

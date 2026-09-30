@@ -47,7 +47,6 @@ enum Theme {
         static let corner: CGFloat       = 10
         static let cornerSmall: CGFloat  = 7
         static let zoneHeight: CGFloat   = 78
-        static let listHeight: CGFloat   = 208
     }
 
     /// Subtle top-lit gradient that gives the popover depth without
