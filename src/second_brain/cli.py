@@ -907,7 +907,7 @@ def health(ctx: click.Context, as_json: bool) -> None:
     config: Config = ctx.obj["config"]
 
     from second_brain.mcp_server.search import SearchIndex
-    from second_brain.wiki.health import run_health_check
+    from second_brain.wiki.health import MERGE_THRESHOLD, SPLIT_THRESHOLD, run_health_check
 
     search = SearchIndex(config.search_db_path, config.search)
     dismissed = Manifest(config.manifest_db_path).get_dismissed_duplicates()
@@ -948,19 +948,19 @@ def health(ctx: click.Context, as_json: bool) -> None:
             ),
             (
                 "oversized_pages",
-                "Oversized pages",
+                f"Over {SPLIT_THRESHOLD:,} words",
                 "health",
                 [{"text": f"{s} ({w:,} words)", "page": s} for s, w in report.oversized_pages],
             ),
             (
                 "undersized_pages",
-                "Stub pages",
+                f"Under {MERGE_THRESHOLD:,} words",
                 "health",
                 [{"text": f"{s} ({w:,} words)", "page": s} for s, w in report.undersized_pages],
             ),
             (
                 "missing_frontmatter",
-                "Missing frontmatter",
+                "Missing a title, type, or domain",
                 "health",
                 [{"text": m, "page": m.split(":", 1)[0]} for m in report.missing_frontmatter],
             ),
@@ -986,7 +986,7 @@ def health(ctx: click.Context, as_json: bool) -> None:
     if report.orphan_pages:
         click.echo(f"\nNot linked from any page: {', '.join(report.orphan_pages[:10])}")
     if report.oversized_pages:
-        click.echo("\nOversized pages:")
+        click.echo(f"\nOver {SPLIT_THRESHOLD:,} words:")
         for stem, wc in report.oversized_pages:
             click.echo(f"  {stem}: {wc} words")
 

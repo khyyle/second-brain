@@ -4,8 +4,7 @@ import AppKit
 /// In-popover settings panel. Scalar knobs are written straight into
 /// `config.yaml`; watched folders go to the GUI-owned `sources.json`;
 /// scheduling and MCP wiring shell out to the CLI so the choices take
-/// effect. Help "?" buttons sit beside individual non-obvious fields,
-/// never as a section summary.
+/// effect. Help "?" buttons sit beside non-obvious fields and groups.
 struct SettingsView: View {
     let config: AppConfig
     let onClose: () -> Void
@@ -84,7 +83,7 @@ struct SettingsView: View {
             Text("Config not found")
                 .font(Theme.Font.body(12, weight: .semibold))
                 .foregroundStyle(Theme.Colors.textPrimary)
-            Text("Run the installer so the app can locate config.yaml.")
+            Text("Run the installer again so the app can find its settings.")
                 .font(Theme.Font.body(11.5))
                 .foregroundStyle(Theme.Colors.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -95,10 +94,8 @@ struct SettingsView: View {
     @ViewBuilder
     private var groups: some View {
         SettingsGroup(
-            title: "Wiki compilation",
-            help: "The cloud model that builds the wiki. Anthropic runs Claude; "
-                + "DeepSeek is cheaper. Each provider uses its own API key, stored "
-                + "locally in .env."
+            title: "Build",
+            help: "The cloud model that writes your wiki pages on a build."
         ) {
             fieldLabel("Provider")
             SegControl(
@@ -137,9 +134,10 @@ struct SettingsView: View {
                 .foregroundStyle(Theme.Colors.success)
             }
             Row("Spend cap per build",
-                help: "Stops the build before the next document once a run's estimated "
-                    + "cost crosses it. Finished pages are kept and the rest staged. "
-                    + "Leave blank for no limit.") {
+                help: "When a build's estimated cost surpasses this limit, "
+                    + "wiki compilation will be stopped, rolling back any partially "
+                    + "completed pages."
+            ) {
                 HStack(spacing: 3) {
                     Text("$")
                         .font(Theme.Font.meta(11))
@@ -171,17 +169,17 @@ struct SettingsView: View {
         SettingsGroup(
             title: "Triage",
             help: "Filters imported ChatGPT conversations before building. Other "
-                + "sources are never triaged and pass straight through."
+                + "sources are not triaged."
         ) {
             Row("Filter ChatGPT imports") {
                 Toggle("", isOn: $settings.triageEnabled)
                     .labelsHidden().toggleStyle(.switch).tint(Theme.Colors.accent)
             }
             Row("Style",
-                help: "How readily triage keeps versus skips a chat. "
-                    + "Technical favors STEM and code, Project-heavy "
-                    + "favors project notes, Skip-heavy and Lenient "
-                    + "shift the bar down and up.") {
+                help: "How triage determines chats worth keeping. "
+                    + "Technical favors conceptual knowledge; project-heavy "
+                    + "favors things you're building; skip-heavy keeps only "
+                    + "the strongest chats; lenient keeps almost everything.") {
                 Picker("", selection: $settings.triageProfile) {
                     ForEach(PipelineSettings.profiles, id: \.self) { p in
                         Text(profileLabels[p] ?? p).tag(p)
@@ -196,7 +194,11 @@ struct SettingsView: View {
             }
         }
 
-        SettingsGroup(title: "MCP") {
+        SettingsGroup(
+            title: "MCP",
+            help: "Install the second-brain MCP, enabling "
+                + "agents to search and read your wiki."
+        ) {
             VStack(alignment: .leading, spacing: 7) {
                 HStack(spacing: 8) {
                     ConnectButton(title: "Claude Desktop",
@@ -224,9 +226,9 @@ struct SettingsView: View {
 
         SettingsGroup(title: "Automation") {
             Row("Run automatically",
-                help: "Runs ingest and build in the background at the times below, "
-                    + "via macOS launchd. If your computer is asleep at a scheduled "
-                    + "time the run happens on next wake.") {
+                help: "Runs ingest and build in the background. If your computer "
+                    + "is asleep background tasks will complete "
+                    + "on the next wake.") {
                 Toggle("", isOn: $scheduleEnabled)
                     .labelsHidden().toggleStyle(.switch).tint(Theme.Colors.accent)
             }
@@ -241,13 +243,10 @@ struct SettingsView: View {
     @ViewBuilder
     private var watchedFolders: some View {
         subhead("Watched folders",
-                help: "Extra folders swept on each scheduled run, on top of the "
-                    + "files you drop into the app. Unlike a drop they aren't "
-                    + "ingested the moment a file lands; the next scheduled run "
-                    + "picks them up. Large handwritten folders can be slow "
-                    + "depending on the Handwriting setting.")
+                help: "Folders to be ingested, excluding already-processed "
+                    + "contents, on a scheduled run.")
         if watched.isEmpty {
-            Text("No watched folders. Your drop folders are always ingested.")
+            Text("No watched folders.")
                 .font(Theme.Font.body(11))
                 .foregroundStyle(Theme.Colors.textTertiary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -451,7 +450,7 @@ struct SettingsView: View {
 // MARK: - Building blocks
 
 /// Titled card. The optional "?" beside the title is for groups whose title
-/// names a single non-obvious concept (Handwriting, Watched folders); per-
+/// names a single non-obvious concept; per-
 /// field help lives on the `Row` instead.
 private struct SettingsGroup<Content: View>: View {
     let title: String
@@ -665,7 +664,7 @@ private struct ScheduleTimeRow: View {
                 }
             }
             .buttonStyle(PillButton(.neutral))
-            .help("Click to change this time")
+            .help("Change this time")
             .popover(isPresented: $picking, arrowEdge: .bottom) {
                 HourPicker(selected: hour) { onChange($0); picking = false }
             }

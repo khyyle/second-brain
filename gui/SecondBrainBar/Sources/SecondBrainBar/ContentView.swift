@@ -52,21 +52,20 @@ struct ContentView: View {
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("Building the wiki uses Claude, which needs an API key. "
-                + "Add it in Settings and it's saved locally to your .env file.")
+            Text("Building the wiki needs an API key for your selected provider. "
+                + "Add one in Settings.")
         }
         .alert("A run is already in progress", isPresented: $showingBusyAlert) {
             Button("OK", role: .cancel) {}
         } message: {
-            Text("Second Brain is already ingesting or building. Wait for the "
-                + "current run to finish, then build again.")
+            Text("Second Brain is already ingesting or building. Try again when it finishes.")
         }
         .alert("Ollama is required", isPresented: $showingOllamaAlert) {
             Button("OK", role: .cancel) {}
         } message: {
             Text(ollamaHealth?.message
-                ?? "Second Brain needs Ollama running with its local models for "
-                + "triage and search. Start Ollama and pull the models, then build again.")
+                ?? "Building needs Ollama running with its models downloaded. "
+                + "Start Ollama, then try again.")
         }
         .onAppear {
             if autoRunner == nil { autoRunner = AutoRunner(config: config) }
@@ -174,7 +173,7 @@ struct ContentView: View {
             FooterStatus()
                 .layoutPriority(1)
             Spacer(minLength: 6)
-            TextAction(title: "Reveal", help: "Reveal vault in Finder") {
+            TextAction(title: "Reveal", help: "Show the Second Brain folder in Finder") {
                 PipelineRunner.revealInFinder(config.vaultRoot)
             }
             IconAction(systemName: "gearshape", help: "Settings") {

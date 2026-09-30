@@ -144,7 +144,7 @@ struct BinDropZone: View {
     private func openImportPicker() {
         let panel = makePanel(
             prompt: "Import",
-            message: "Choose a ChatGPT export — its conversations.json or the unzipped export folder"
+            message: "Choose a ChatGPT export: its conversations.json file or the unzipped export folder"
         )
         guard panel.runModal() == .OK else { return }
         let selection = panel.urls

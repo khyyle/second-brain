@@ -57,12 +57,12 @@ class HealthReport:
             Multi-line text summarizing issue counts.
         """
         lines = ["=== Wiki Report ==="]
-        lines.append(f"Referenced but not written (gaps): {len(self.gap_links)}")
-        lines.append(f"Not linked from any page (orphans): {len(self.orphan_pages)}")
+        lines.append(f"Referenced but not written: {len(self.gap_links)}")
+        lines.append(f"Not linked from any page: {len(self.orphan_pages)}")
         lines.append(f"Possible duplicates: {len(self.possible_duplicates)}")
-        lines.append(f"Oversized pages (>4000 words): {len(self.oversized_pages)}")
-        lines.append(f"Undersized pages (<150 words): {len(self.undersized_pages)}")
-        lines.append(f"Missing required frontmatter: {len(self.missing_frontmatter)}")
+        lines.append(f"Over {SPLIT_THRESHOLD:,} words: {len(self.oversized_pages)}")
+        lines.append(f"Under {MERGE_THRESHOLD:,} words: {len(self.undersized_pages)}")
+        lines.append(f"Missing a title, type, or domain: {len(self.missing_frontmatter)}")
         return "\n".join(lines)
 
 

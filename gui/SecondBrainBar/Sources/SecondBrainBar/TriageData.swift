@@ -16,7 +16,7 @@ struct TriageRow: Identifiable, Hashable {
 
         var label: String {
             switch self {
-            case .worthwhile: return "worthwhile"
+            case .worthwhile: return "kept"
             case .review:     return "review"
             case .skip:       return "skipped"
             }

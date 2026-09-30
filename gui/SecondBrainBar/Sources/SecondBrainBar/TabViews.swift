@@ -165,8 +165,8 @@ struct IngestTab: View {
             if !failed.isEmpty {
                 SectionHeader(
                     title: "Failed",
-                    help: "These couldn't be parsed. Retry re-runs the local "
-                        + "parser; the X removes the file."
+                    help: "These files couldn't be parsed. Retry ingestion "
+                        + "or remove files."
                 )
                 PaginatedList(items: failed) { item in
                     QueueRow(
@@ -248,7 +248,7 @@ private struct QueueRow: View {
                         .foregroundStyle(Theme.Colors.textTertiary)
                         .monospacedDigit()
                         .help(item.state == .duplicate
-                            ? "This file's content was already ingested elsewhere"
+                            ? "This file's content is already in Second Brain"
                             : "")
                 }
             } hover: {
@@ -289,10 +289,9 @@ struct ChatsTab: View {
         return VStack(spacing: 1) {
             SectionHeader(
                 title: "Needs review",
-                help: "Triage filters bulk ChatGPT conversation imports into "
-                    + "worthwhile / review / skip using a local model, so only "
-                    + "substantive chats become wiki pages. Items it's unsure "
-                    + "about land here for your call."
+                help: "A local model sorts imported chats so only substantial ones "
+                    + "become wiki pages. Chats it isn't sure about wait here for "
+                    + "you to keep or skip."
             )
             if review.isEmpty {
                 EmptyListMessage(text: loaded ? "Nothing needs review." : nil)
@@ -435,10 +434,10 @@ private struct TriageDecidedRow: View {
     private var hoverAction: some View {
         switch row.decision {
         case .worthwhile:
-            HoverIcon(systemName: "minus.circle", help: "Skip — set aside",
+            HoverIcon(systemName: "minus.circle", help: "Skip this chat",
                       size: 12, action: onSkip)
         case .skip:
-            HoverIcon(systemName: "plus.circle", help: "Keep — restore to the build",
+            HoverIcon(systemName: "plus.circle", help: "Keep this chat",
                       size: 12, restTint: Theme.Colors.success, action: onUnskip)
         case .review:
             EmptyView()
@@ -564,7 +563,7 @@ struct BuildTab: View {
         } else if store.staged.isEmpty {
             EmptyListMessage(
                 text: store.hasState
-                    ? "Nothing staged. Drop and ingest files, then click Build wiki."
+                    ? "Nothing staged. Files you drop appear here once they're ingested."
                     : nil
             )
         } else {
@@ -671,9 +670,9 @@ private struct StagedHeader: View {
                     Text("Staged for build")
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(Theme.Colors.textTertiary)
-                    HelpButton(text: "Ingested files that will be compiled when build is selected. 'Group' (chats only) "
-                        + "bundles related conversations into one compilation to avoid duplicate calls/pages. "
-                        + "Cost is a rough upper bound.")
+                    HelpButton(text: "Sources that go into the wiki on the next build. 'Group' (chats only) "
+                        + "bundles related conversations to avoid creating duplicate Second Brain entries. "
+                        + "The cost is a rough upper bound.")
                 }
                 if !running, sourceCount > 0 {
                     costLine
@@ -853,8 +852,8 @@ private struct ClusterGroupRow: View {
 }
 
 /// One chat inside an expanded group. Hovering reveals two actions: pop it
-/// out so it compiles as its own page, or remove it from staging. An amber
-/// "own page" tag marks a chat already popped out.
+/// out so it builds as an independent source, or remove it from staging. An
+/// amber "independent" tag marks a chat already popped out.
 private struct ClusterMemberRow: View {
     let member: ClusterMember
     let excluded: Bool
@@ -877,7 +876,7 @@ private struct ClusterMemberRow: View {
                 HoverIcon(
                     systemName: excluded ? "arrow.uturn.left.circle" : "arrow.up.right.circle",
                     help: excluded ? "Put back in this group"
-                                   : "Compile on its own page instead of in this group",
+                                   : "Build as an independent source instead of in this group",
                     action: onToggleExclude
                 )
                 .disabled(store.locked)
@@ -888,7 +887,7 @@ private struct ClusterMemberRow: View {
                 )
                 .disabled(store.locked)
             } else if excluded {
-                Text("own page")
+                Text("independent")
                     .font(Theme.Font.meta(9))
                     .foregroundStyle(Theme.Colors.accentAmber)
             }
@@ -934,7 +933,7 @@ private struct StagedRow: View {
                 HStack(spacing: 4) {
                     if let onRetry {
                         HoverIcon(systemName: "arrow.clockwise",
-                                  help: "Retry — requeue for the next build",
+                                  help: "Try again on the next build",
                                   action: onRetry)
                             .disabled(store.locked)
                     }
@@ -957,7 +956,7 @@ private struct StagedRow: View {
             .foregroundStyle(Theme.Colors.accentAmber)
             .padding(.horizontal, 6).padding(.vertical, 2)
             .background(Capsule().fill(Theme.Colors.accentAmber.opacity(0.14)))
-            .help("Skipped by builds: \(reason)")
+            .help("Builds will skip this source: \(reason)")
     }
 }
 
@@ -1029,7 +1028,7 @@ struct DomainsTab: View {
         } message: {
             Text(
                 deleting.map {
-                    "Remove '\($0.name)' from \($0.pageCount) page(s)? The pages stay, "
+                    "Remove '\($0.name)' from \($0.pageCount) page(s)? The pages will stay, "
                         + "only this domain is removed from their frontmatter."
                 } ?? ""
             )
@@ -1043,7 +1042,7 @@ struct DomainsTab: View {
                 .foregroundStyle(Theme.Colors.textTertiary)
             HelpButton(
                 text: "Domains are broad subject areas tagged in each page's frontmatter, "
-                    + "grown by the compilation agent as it builds. Edits rewrite every affected page"
+                    + "added as needed by the compilation agent during builds."
             )
             Spacer()
             if busy { ProgressView().controlSize(.small).scaleEffect(0.7) }
@@ -1244,7 +1243,7 @@ struct OverviewTab: View {
         } message: {
             Text(
                 "The kept page will absorb the other's links and sources. The retired page "
-                    + "will be deleted--its text is not copied, so move anything worth keeping first."
+                    + "will be deleted without copying its text over."
             )
         }
     }
@@ -1260,36 +1259,17 @@ struct OverviewTab: View {
         } else if unavailable {
             EmptyListMessage(text: "The overview needs the installed pipeline. Reinstall to view it.")
         } else if let health {
-            section(
-                title: "Improve your wiki",
-                help: """
-                Referenced but not written — concepts the wiki points to but \
-                has not written up yet, ranked by how often they are referenced.
-                Not linked from any page — pages with no incoming links. Add \
-                a reference from a related note to make them easier to discover.
-                Possible duplicates — pairs of pages that cover very similar \
-                material.
-                """,
-                categories: health.categories(in: "improve")
-            )
-            section(
-                title: "Health",
-                help: """
-                Oversized pages — over 4000 words; candidates to split.
-                Stub pages — under 150 words.
-                Missing frontmatter — no title, type, or domains.
-                """,
-                categories: health.categories(in: "health")
-            )
+            section(title: "Improve your wiki", categories: health.categories(in: "improve"))
+            section(title: "Health", categories: health.categories(in: "health"))
         }
     }
 
-    /// One titled, explained section — a header with a "?" popover over its
-    /// checks. Rendered only when the section has checks to show.
+    /// One titled section over its checks. Rendered only when the section has
+    /// checks to show.
     @ViewBuilder
-    private func section(title: String, help: String, categories: [HealthCategory]) -> some View {
+    private func section(title: String, categories: [HealthCategory]) -> some View {
         if !categories.isEmpty {
-            SectionHeader(title: title, help: help)
+            SectionHeader(title: title)
             ForEach(categories) { category in
                 let actionable = category.key == "possible_duplicates"
                 HealthCategoryRow(
@@ -1368,20 +1348,6 @@ private struct HealthCategoryRow: View {
 
     private var hasIssues: Bool { category.count > 0 }
 
-    /// What this check means, surfaced as a hover tooltip in place of a header
-    /// help button — the labels carry the rest.
-    private var explanation: String {
-        switch category.key {
-        case "gap_links": return "Concepts your pages reference but you haven't written yet."
-        case "orphan_pages": return "Pages nothing links to yet — reachable by search, easy to miss."
-        case "possible_duplicates": return "Pairs of pages covering very similar material."
-        case "oversized_pages": return "Pages over 4000 words."
-        case "undersized_pages": return "Pages under 150 words."
-        case "missing_frontmatter": return "Pages missing a title, type, or domains."
-        default: return category.label
-        }
-    }
-
     var body: some View {
         VStack(spacing: 1) {
             row
@@ -1415,7 +1381,6 @@ private struct HealthCategoryRow: View {
             withAnimation(.easeInOut(duration: 0.15)) { expanded.toggle() }
         }
         .onHover { hovering = $0 }
-        .help(explanation)
         .animation(.easeInOut(duration: 0.12), value: hovering)
     }
 }
