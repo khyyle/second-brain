@@ -5,13 +5,14 @@ from __future__ import annotations
 import dataclasses
 from pathlib import Path
 
+import anthropic
+import httpx
 import pytest
 
 from second_brain.compilation import compiler
 from second_brain.compilation.compiler import RunOutcome, RunResult
 from second_brain.config import CompilationConfig, Config, TriageConfig
 from second_brain.ingestion.manifest import Manifest
-from second_brain.llm import ModelError, ModelErrorKind
 
 
 class FakeUsage:
@@ -37,18 +38,36 @@ class FakeResponse:
 
 
 class FakeMessages:
-    def __init__(self, response: FakeResponse) -> None:
+    """Return ``response`` for the first ``successful_calls``, then raise ``error``."""
+
+    def __init__(
+        self,
+        response: FakeResponse,
+        *,
+        successful_calls: int = 0,
+        error: Exception | None = None,
+    ) -> None:
         self._response = response
+        self._successful_calls = successful_calls
+        self._error = error
         self.calls = 0
 
     def create(self, **_kwargs) -> FakeResponse:
         self.calls += 1
+        if self._error is not None and self.calls > self._successful_calls:
+            raise self._error
         return self._response
 
 
 class FakeClient:
-    def __init__(self, response: FakeResponse) -> None:
-        self.messages = FakeMessages(response)
+    def __init__(
+        self,
+        response: FakeResponse,
+        *,
+        successful_calls: int = 0,
+        error: Exception | None = None,
+    ) -> None:
+        self.messages = FakeMessages(response, successful_calls=successful_calls, error=error)
 
 
 def _make_config(tmp_path: Path, *, max_iter: int = 20, cost_cap: float = 0.0) -> Config:
@@ -64,8 +83,20 @@ def _make_config(tmp_path: Path, *, max_iter: int = 20, cost_cap: float = 0.0) -
     return cfg
 
 
-def _install_fake(monkeypatch: pytest.MonkeyPatch, response: FakeResponse) -> FakeClient:
-    client = FakeClient(response)
+def _status_error(status_code: int, message: str) -> anthropic.APIStatusError:
+    request = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+    response = httpx.Response(status_code, request=request)
+    return anthropic.APIStatusError(message, response=response, body=None)
+
+
+def _install_fake(
+    monkeypatch: pytest.MonkeyPatch,
+    response: FakeResponse,
+    *,
+    successful_calls: int = 0,
+    error: Exception | None = None,
+) -> FakeClient:
+    client = FakeClient(response, successful_calls=successful_calls, error=error)
     monkeypatch.setattr(compiler, "create_client", lambda *_args, **_kwargs: client)
     return client
 
@@ -102,6 +133,41 @@ def test_iteration_cap_reports_runaway_stop(
     assert client.messages.calls == 3
     assert result.outcome is RunOutcome.EXHAUSTED
     assert "3 agent turns" in result.reason
+
+
+def test_provider_failure_keeps_partial_cost(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A credit failure after a billed turn keeps that turn's cost."""
+    config = _make_config(tmp_path)
+    client = _install_fake(
+        monkeypatch,
+        FakeResponse("tool_use", FakeUsage(1_000, 100), [FakeBlock()]),
+        successful_calls=1,
+        error=_status_error(402, "credit balance is too low"),
+    )
+
+    result = _run(config)
+
+    assert client.messages.calls == 2
+    assert result.outcome is RunOutcome.PROVIDER_FAILED
+    assert result.reason == "Out of API credits"
+    assert result.cost > 0
+
+
+def test_context_window_stop_is_too_large(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A window-exceeded stop is too large, so the same source is not retried."""
+    config = _make_config(tmp_path)
+    client = _install_fake(
+        monkeypatch,
+        FakeResponse("model_context_window_exceeded", FakeUsage(10, 0), []),
+    )
+
+    result = _run(config)
+
+    assert client.messages.calls == 1
+    assert result.outcome is RunOutcome.TOO_LARGE
+    assert result.reason.startswith("too large")
 
 
 def test_cost_cap_stops_midrun(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -258,7 +324,7 @@ def test_over_window_unit_defers_preflight_without_api_call(
 def test_transient_failure_stays_staged_not_deferred(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A network-style failure leaves the unit staged for the next build."""
+    """An unexpected failure in our own code leaves the unit staged for the next build."""
     config = _build_config(tmp_path)
     manifest = Manifest(config.manifest_db_path)
 
@@ -293,15 +359,54 @@ def test_prompt_too_long_rejection_defers_not_retries(
     monkeypatch.setattr(compiler, "_git_commit", lambda *_: None)
     (config.raw_dir / "a.md").write_text("body", encoding="utf-8")
 
-    def raise_too_long(*_a, **_k):
-        raise ModelError(ModelErrorKind.TOO_LARGE, "The source is too large for the model")
-
-    monkeypatch.setattr(compiler, "_run_agent", raise_too_long)
+    error = _status_error(400, "prompt is too long: 210000 tokens > 200000 maximum")
+    client = _install_fake(
+        monkeypatch,
+        FakeResponse("end_turn", FakeUsage(0, 0), []),
+        error=error,
+    )
 
     stats = compiler.run_compilation(config, manifest)
 
+    assert client.messages.calls == 1
     assert stats["sources_compiled"] == 0
     assert set(manifest.get_deferred_sources()) == {"a.md"}
+
+
+def test_provider_failure_stops_build_and_keeps_curation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An account failure stops the build and leaves skipped files and the preview."""
+    config = _build_config(tmp_path)
+    manifest = Manifest(config.manifest_db_path)
+    skipped = config.raw_dir / ".skipped" / "chatgpt"
+    skipped.mkdir(parents=True)
+    (skipped / "junk.md").write_text("y", encoding="utf-8")
+    (config.raw_dir / "a.md").write_text("alpha", encoding="utf-8")
+    (config.raw_dir / "b.md").write_text("beta", encoding="utf-8")
+    # Not valid preview JSON, so grouping stays one source per run.
+    (config.data_dir / ".clusters.json").write_text("{not json", encoding="utf-8")
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setattr(compiler, "find_new_sources", lambda *_: ["a.md", "b.md"])
+    monkeypatch.setattr(compiler, "rebuild_structure", lambda *_: {})
+    monkeypatch.setattr(compiler, "_git_commit", lambda *_: None)
+    monkeypatch.setattr(compiler, "_git_restore", lambda *_: None)
+
+    client = _install_fake(
+        monkeypatch,
+        FakeResponse("end_turn", FakeUsage(0, 0), []),
+        error=_status_error(402, "credit balance is too low"),
+    )
+
+    stats = compiler.run_compilation(config, manifest)
+
+    assert client.messages.calls == 1
+    assert manifest.get_compiled_raw_paths() == set()
+    assert manifest.get_deferred_sources() == {}
+    assert (config.raw_dir / ".skipped" / "chatgpt" / "junk.md").is_file()
+    assert (config.data_dir / ".clusters.json").is_file()
+    assert stats["failure_reason"] == "Out of API credits"
 
 
 def test_full_build_purges_skipped_holding(

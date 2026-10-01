@@ -359,6 +359,9 @@ def compile(ctx: click.Context, full: bool, dry_run: bool) -> None:
 
     emit_state(config)
 
+    if stats["failure_reason"]:
+        raise click.ClickException(f"Build stopped: {stats['failure_reason']}")
+
 
 @main.command(name="recompile")
 @click.argument("raw_paths", nargs=-1, required=True)

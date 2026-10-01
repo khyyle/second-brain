@@ -43,6 +43,9 @@ _MAX_OUTPUT_TOKENS_PER_TURN = 16384
 _INLINE_SOURCE_WINDOW_FRACTION = 0.6
 _SOURCE_TOKENS_PER_EXTRA_ITERATION = 4000
 
+# The prompt fit, but the reply had no room left in the context window.
+_MODEL_CONTEXT_WINDOW_EXCEEDED = "model_context_window_exceeded"
+
 
 class RunOutcome(Enum):
     COMPLETED = "completed"
@@ -51,6 +54,7 @@ class RunOutcome(Enum):
     TOO_LARGE = "too_large"
     FAILED = "failed"
     STOPPED = "stopped"
+    PROVIDER_FAILED = "provider_failed"
 
 
 class RunResult(NamedTuple):
@@ -211,8 +215,9 @@ def run_compilation(
     Returns
     -------
     dict
-        Summary statistics including ``sources_compiled`` and
-        all keys from ``rebuild_structure``.
+        Summary statistics including ``sources_compiled``,
+        ``failure_reason`` (the provider failure that stopped the build,
+        or ``None``), and all keys from ``rebuild_structure``.
     """
     wiki_dir = config.wiki_dir
     raw_dir = config.raw_dir
@@ -230,7 +235,7 @@ def run_compilation(
     if not new_sources:
         logger.info("No new sources to compile")
         stats = rebuild_structure(wiki_dir)
-        return {**stats, "sources_compiled": 0}
+        return {**stats, "sources_compiled": 0, "failure_reason": None}
 
     # Triage already ran during ingestion (free, local). Here we just
     # filter to the worthwhile set from the recorded decisions; any
@@ -245,12 +250,13 @@ def run_compilation(
     if not new_sources:
         logger.info("Nothing worthwhile to compile")
         stats = rebuild_structure(wiki_dir)
-        return {**stats, "sources_compiled": 0}
+        return {**stats, "sources_compiled": 0, "failure_reason": None}
 
     profile = resolve_profile(config.compilation.provider, config.compilation.model)
     logger.info("Compiling %d worthwhile sources", len(new_sources))
 
     compiled_count = 0
+    failure_reason: str | None = None
     if not dry_run:
         # Fail fast on a missing key, before any heartbeat or git work.
         require_api_key(profile)
@@ -334,17 +340,8 @@ def run_compilation(
                         base_cost=cumulative_cost,
                         progress=(index, total),
                     )
-                except ModelError as exc:
-                    if exc.kind is ModelErrorKind.TOO_LARGE:
-                        result = RunResult(
-                            0.0, RunOutcome.TOO_LARGE, _too_large_reason(estimated_tokens)
-                        )
-                    else:
-                        logger.exception("Compile failed for %s", ", ".join(unit))
-                        result = RunResult(0.0, RunOutcome.FAILED)
                 except Exception:
-                    # catch transient failures like rate limit, network, an API call
-                    # killed by the machine sleeping
+                    # One failing source must not abort the remaining groups.
                     logger.exception("Compile failed for %s", ", ".join(unit))
                     result = RunResult(0.0, RunOutcome.FAILED)
                 if stop_requested(config.data_dir):
@@ -369,6 +366,11 @@ def run_compilation(
                         ", ".join(unit),
                         total - index,
                     )
+                    break
+                elif result.outcome is RunOutcome.PROVIDER_FAILED:
+                    # Every later group would fail the same way, so leave them all staged.
+                    logger.error("Build stopped: %s", result.reason)
+                    failure_reason = result.reason
                     break
                 elif result.outcome in (RunOutcome.EXHAUSTED, RunOutcome.TOO_LARGE):
                     # Retrying unattended would fail the same way and re-bill,
@@ -402,7 +404,11 @@ def run_compilation(
         register_domains(wiki_dir, set(stats.get("domains", {})))
         _git_commit(wiki_dir)
 
-    return {**stats, "sources_compiled": compiled_count}
+    return {
+        **stats,
+        "sources_compiled": compiled_count,
+        "failure_reason": failure_reason,
+    }
 
 
 def _run_agent(
@@ -444,8 +450,9 @@ def _run_agent(
     Returns
     -------
     RunResult
-        The run's USD cost, how it ended, and--for runs that ended
-        without completing--a human-readable reason.
+        The run's USD cost, how it ended, and a human-readable reason
+        when the run did not complete. Provider failures come back as
+        outcomes rather than exceptions.
     """
     from second_brain.status import stop_requested, write_status
 
@@ -528,14 +535,24 @@ def _run_agent(
         # large early file read isn't billed on every later turn.
         compact_history(messages)
 
-        response = request_turn(
-            client,
-            model=profile.model,
-            max_tokens=_MAX_OUTPUT_TOKENS_PER_TURN,
-            system=system,
-            tools=tools,
-            messages=messages,
-        )
+        try:
+            response = request_turn(
+                client,
+                model=profile.model,
+                max_tokens=_MAX_OUTPUT_TOKENS_PER_TURN,
+                system=system,
+                tools=tools,
+                messages=messages,
+            )
+        except ModelError as exc:
+            if exc.kind is ModelErrorKind.TOO_LARGE:
+                outcome = RunOutcome.TOO_LARGE
+                outcome_reason = _too_large_reason(_estimate_unit_tokens(raw_dir, sources))
+            else:
+                outcome = RunOutcome.PROVIDER_FAILED
+                outcome_reason = exc.reason
+            logger.warning("Provider error for %s: %s", ", ".join(sources), outcome_reason)
+            break
 
         total_input_tokens += response.usage.input_tokens
         total_output_tokens += response.usage.output_tokens
@@ -563,6 +580,11 @@ def _run_agent(
             response.usage.output_tokens,
             cost,
         )
+
+        if response.stop_reason == _MODEL_CONTEXT_WINDOW_EXCEEDED:
+            outcome = RunOutcome.TOO_LARGE
+            outcome_reason = _too_large_reason(_estimate_unit_tokens(raw_dir, sources))
+            break
 
         messages.append({"role": "assistant", "content": response.content})
 
