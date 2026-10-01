@@ -1,7 +1,7 @@
 import Foundation
 
 /// Cloud LLM providers the compilation agent can run on. Mirrors the
-/// catalog in `second_brain/llm_providers.py`. Should be kept in sync with python.
+/// catalog in `second_brain/llm/providers.py`. Should be kept in sync with python.
 /// Re-hardcoded here since the set of supported compilation models is unlikely to grow
 enum LLMProvider: String, CaseIterable, Identifiable {
     case anthropic
@@ -49,7 +49,7 @@ enum LLMProvider: String, CaseIterable, Identifiable {
 
     /// Cache-miss (input, output) USD per 1M tokens for a model, for a
     /// pre-build cost estimate. Mirrors _MODEL_PRICES in
-    /// second_brain/llm_providers.py. Unknown models fall back to Claude.
+    /// second_brain/llm/providers.py. Unknown models fall back to Claude.
     static func modelPrice(_ model: String) -> (input: Double, output: Double) {
         switch model {
         case "claude-opus-4-8":   return (5.0, 25.0)

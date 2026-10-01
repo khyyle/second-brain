@@ -143,7 +143,7 @@ class ProviderProfile:
         )
 
     def client_kwargs(self) -> dict:
-        """Build kwargs for ``anthropic.Anthropic`` from the environment."""
+        """Build kwargs for the Messages API client from the environment."""
         kwargs: dict = {}
         api_key = os.environ.get(self.api_key_env)
         if api_key:

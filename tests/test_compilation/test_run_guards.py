@@ -5,14 +5,13 @@ from __future__ import annotations
 import dataclasses
 from pathlib import Path
 
-import anthropic
-import httpx
 import pytest
 
 from second_brain.compilation import compiler
 from second_brain.compilation.compiler import RunOutcome, RunResult
 from second_brain.config import CompilationConfig, Config, TriageConfig
 from second_brain.ingestion.manifest import Manifest
+from second_brain.llm import ModelError, ModelErrorKind
 
 
 class FakeUsage:
@@ -67,7 +66,7 @@ def _make_config(tmp_path: Path, *, max_iter: int = 20, cost_cap: float = 0.0) -
 
 def _install_fake(monkeypatch: pytest.MonkeyPatch, response: FakeResponse) -> FakeClient:
     client = FakeClient(response)
-    monkeypatch.setattr(compiler.anthropic, "Anthropic", lambda *a, **k: client)
+    monkeypatch.setattr(compiler, "create_client", lambda *_args, **_kwargs: client)
     return client
 
 
@@ -295,11 +294,7 @@ def test_prompt_too_long_rejection_defers_not_retries(
     (config.raw_dir / "a.md").write_text("body", encoding="utf-8")
 
     def raise_too_long(*_a, **_k):
-        request = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
-        response = httpx.Response(400, request=request)
-        raise anthropic.BadRequestError(
-            "prompt is too long: 210000 tokens > 200000 maximum", response=response, body=None
-        )
+        raise ModelError(ModelErrorKind.TOO_LARGE, "The source is too large for the model")
 
     monkeypatch.setattr(compiler, "_run_agent", raise_too_long)
 

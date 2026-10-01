@@ -20,7 +20,7 @@ from second_brain.clustering import get_clusterer
 from second_brain.clustering.sources import cluster_scoped_sources
 from second_brain.config import Config
 from second_brain.ingestion.manifest import Manifest
-from second_brain.llm_providers import SUPPORTED_MODELS, resolve_profile
+from second_brain.llm import SUPPORTED_MODELS, resolve_profile
 
 logger = logging.getLogger(__name__)
 

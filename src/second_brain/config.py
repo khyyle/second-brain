@@ -16,7 +16,7 @@ from pydantic import (
     model_validator,
 )
 
-from second_brain.llm_providers import SUPPORTED_MODELS
+from second_brain.llm import SUPPORTED_MODELS
 
 logger = logging.getLogger(__name__)
 

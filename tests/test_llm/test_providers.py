@@ -6,7 +6,7 @@ import pytest
 from pydantic import ValidationError
 
 from second_brain.config import CompilationConfig
-from second_brain.llm_providers import SUPPORTED_MODELS, resolve_profile
+from second_brain.llm import SUPPORTED_MODELS, resolve_profile
 
 
 def test_anthropic_profile_defaults() -> None:

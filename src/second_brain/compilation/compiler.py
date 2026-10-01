@@ -3,14 +3,11 @@
 from __future__ import annotations
 
 import logging
-import os
 import subprocess
 import threading
 from enum import Enum
 from pathlib import Path
 from typing import NamedTuple
-
-import anthropic
 
 from second_brain.compilation.agent import (
     COMPILATION_SYSTEM_PROMPT,
@@ -24,17 +21,18 @@ from second_brain.compilation.agent import (
 )
 from second_brain.config import Config
 from second_brain.ingestion.manifest import Manifest
-from second_brain.llm_providers import resolve_profile
+from second_brain.llm import (
+    ModelError,
+    ModelErrorKind,
+    create_client,
+    request_turn,
+    require_api_key,
+    resolve_profile,
+)
 from second_brain.triage.skipped import purge_skipped
 from second_brain.wiki.structure import rebuild_structure
 
 logger = logging.getLogger(__name__)
-
-
-class MissingAPIKeyError(RuntimeError):
-    """
-    Raised when a build is attempted without the configured provider's API key.
-    """
 
 
 # Per-turn output cap for one agent Messages API call.
@@ -255,12 +253,7 @@ def run_compilation(
     compiled_count = 0
     if not dry_run:
         # Fail fast on a missing key, before any heartbeat or git work.
-        if not os.environ.get(profile.api_key_env):
-            raise MissingAPIKeyError(
-                f"{profile.api_key_env} is not set. Add your {profile.name} API key "
-                "in the app's Settings, or to a .env file at the repository root, "
-                "then build again."
-            )
+        require_api_key(profile)
 
         from second_brain.status import (
             clear_status,
@@ -341,8 +334,8 @@ def run_compilation(
                         base_cost=cumulative_cost,
                         progress=(index, total),
                     )
-                except anthropic.BadRequestError as exc:
-                    if "prompt is too long" in str(exc).lower():
+                except ModelError as exc:
+                    if exc.kind is ModelErrorKind.TOO_LARGE:
                         result = RunResult(
                             0.0, RunOutcome.TOO_LARGE, _too_large_reason(estimated_tokens)
                         )
@@ -457,7 +450,7 @@ def _run_agent(
     from second_brain.status import stop_requested, write_status
 
     profile = resolve_profile(config.compilation.provider, config.compilation.model)
-    client = anthropic.Anthropic(**profile.client_kwargs())
+    client = create_client(profile)
 
     # When exploration is enabled, give the agent the read-only wiki tools backed by a
     # one-time pre-run index snapshot. The agent's own writes don't touch the index, so
@@ -535,7 +528,8 @@ def _run_agent(
         # large early file read isn't billed on every later turn.
         compact_history(messages)
 
-        response = client.messages.create(
+        response = request_turn(
+            client,
             model=profile.model,
             max_tokens=_MAX_OUTPUT_TOKENS_PER_TURN,
             system=system,

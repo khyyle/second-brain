@@ -335,17 +335,15 @@ def compile(ctx: click.Context, full: bool, dry_run: bool) -> None:
     config.ensure_directories()
     _require_ollama(config)
 
-    from second_brain.compilation.compiler import (
-        MissingAPIKeyError,
-        run_compilation,
-    )
+    from second_brain.compilation.compiler import run_compilation
     from second_brain.ingestion.manifest import Manifest
+    from second_brain.llm import ModelError
 
     manifest = Manifest(config.manifest_db_path)
     try:
         stats = run_compilation(config, manifest, force_full=full, dry_run=dry_run)
-    except MissingAPIKeyError as exc:
-        raise click.ClickException(str(exc)) from exc
+    except ModelError as exc:
+        raise click.ClickException(exc.reason) from exc
 
     click.echo(f"Sources compiled: {stats['sources_compiled']}")
     click.echo(f"Wiki pages: {stats['total_pages']}")
