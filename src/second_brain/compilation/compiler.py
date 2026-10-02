@@ -47,6 +47,8 @@ _SOURCE_TOKENS_PER_EXTRA_ITERATION = 4000
 # The prompt fit, but the reply had no room left in the context window.
 _MODEL_CONTEXT_WINDOW_EXCEEDED = "model_context_window_exceeded"
 
+_UNEXPECTED_ERROR_REASON = "An unexpected error stopped the build; see logs/pipeline.log"
+
 
 class RunOutcome(Enum):
     COMPLETED = "completed"
@@ -194,15 +196,9 @@ def _source_count(count: int) -> str:
     return f"{count} {noun}"
 
 
-def _partial_reason(deferred: int, failed: int) -> str:
-    """One sentence for sources set aside, sources that failed, or both."""
-    clauses: list[str] = []
-    if deferred:
-        verb = "was" if deferred == 1 else "were"
-        clauses.append(f"{_source_count(deferred)} {verb} set aside")
-    if failed:
-        clauses.append(f"{failed} failed" if deferred else f"{_source_count(failed)} failed")
-    return " and ".join(clauses)
+def _set_aside_reason(deferred: int) -> str:
+    verb = "was" if deferred == 1 else "were"
+    return f"{_source_count(deferred)} {verb} set aside"
 
 
 def _spend_cap_reason(left: int) -> str:
@@ -214,14 +210,13 @@ def _finalize_outcome(
     outcome: StageOutcome,
     reason: str,
     deferred: int,
-    failed: int,
     left: int,
 ) -> tuple[StageOutcome, str]:
     """Fill in the run outcome once every unit has been classified.
 
-    A user stop, a provider failure, or the spend cap is decided in the loop.
-    Anything else is a partial run when sources were set aside or failed, and
-    a clean run otherwise.
+    A user stop, a failure, or the spend cap is decided in the loop. Anything
+    else is a partial run when sources were set aside, and a clean run
+    otherwise.
     """
     if outcome is StageOutcome.STOPPED:
         return outcome, ""
@@ -229,8 +224,8 @@ def _finalize_outcome(
         return outcome, reason
     if outcome is StageOutcome.CAPPED:
         return outcome, _spend_cap_reason(left)
-    if deferred or failed:
-        return StageOutcome.PARTIAL, _partial_reason(deferred, failed)
+    if deferred:
+        return StageOutcome.PARTIAL, _set_aside_reason(deferred)
     return StageOutcome.OK, ""
 
 
@@ -238,7 +233,6 @@ def _outcome_fields(
     outcome: StageOutcome,
     reason: str,
     completed: int = 0,
-    failed: int = 0,
     deferred: int = 0,
     left: int = 0,
 ) -> dict[str, StageOutcome | str | dict[str, int]]:
@@ -247,7 +241,6 @@ def _outcome_fields(
         "reason": reason,
         "counts": {
             "completed": completed,
-            "failed": failed,
             "deferred": deferred,
             "left": left,
         },
@@ -283,7 +276,7 @@ def run_compilation(
     dict
         Summary statistics including ``sources_compiled``, ``outcome``,
         ``reason`` (one sentence, or empty), ``counts`` (``completed``,
-        ``failed``, ``deferred``, and ``left`` source counts), and the
+        ``deferred``, and ``left`` source counts), and the
         structure rebuild's keys.
     """
     wiki_dir = config.wiki_dir
@@ -323,7 +316,6 @@ def run_compilation(
     logger.info("Compiling %d worthwhile sources", len(new_sources))
 
     compiled_count = 0
-    failed_count = 0
     deferred_count = 0
     left_count = 0
     outcome = StageOutcome.OK
@@ -416,9 +408,10 @@ def run_compilation(
                         progress=(index, total),
                     )
                 except Exception:
-                    # One failing source must not abort the remaining groups.
+                    # Caught rather than raised so the group in progress is rolled
+                    # back below before the build stops.
                     logger.exception("Compile failed for %s", ", ".join(unit))
-                    result = RunResult(0.0, RunOutcome.FAILED)
+                    result = RunResult(0.0, RunOutcome.FAILED, _UNEXPECTED_ERROR_REASON)
                 if stop_requested(config.data_dir):
                     result = RunResult(result.cost, RunOutcome.STOPPED)
 
@@ -444,8 +437,10 @@ def run_compilation(
                     )
                     outcome = StageOutcome.CAPPED
                     break
-                elif result.outcome is RunOutcome.PROVIDER_FAILED:
-                    # Every later group would fail the same way, so leave them all staged.
+                elif result.outcome in (RunOutcome.PROVIDER_FAILED, RunOutcome.FAILED):
+                    # A provider failure or an error in our own code would hit every
+                    # later group the same way, and each attempt can already have
+                    # spent money, so leave them all staged.
                     logger.error("Build stopped: %s", result.reason)
                     outcome = StageOutcome.FAILED
                     reason = result.reason
@@ -456,8 +451,6 @@ def run_compilation(
                     manifest.defer_sources(unit, result.reason)
                     logger.warning("Deferred %s: %s", ", ".join(unit), result.reason)
                     deferred_count += len(unit)
-                elif result.outcome is RunOutcome.FAILED:
-                    failed_count += len(unit)
         finally:
             stop_heartbeat.set()
             heartbeat.join(timeout=2.0)
@@ -465,12 +458,10 @@ def run_compilation(
             clear_status(config.data_dir)
         logger.info("Compiled %d sources for ~$%.2f", compiled_count, cumulative_cost)
 
-        # Units the loop did not compile, defer, or fail are still staged,
-        # including one rolled back by a stop, a cap, or a provider failure.
-        left_count = staged_count - compiled_count - failed_count - deferred_count
-        outcome, reason = _finalize_outcome(
-            outcome, reason, deferred_count, failed_count, left_count
-        )
+        # Units the loop did not compile or defer are still staged, including
+        # the one rolled back by a stop, a cap, or a failure.
+        left_count = staged_count - compiled_count - deferred_count
+        outcome, reason = _finalize_outcome(outcome, reason, deferred_count, left_count)
 
         # Only a build that compiled every staged source finalizes the user's
         # curation; anything less leaves decisions open for the next attempt.
@@ -495,9 +486,7 @@ def run_compilation(
     return {
         **stats,
         "sources_compiled": compiled_count,
-        **_outcome_fields(
-            outcome, reason, compiled_count, failed_count, deferred_count, left_count
-        ),
+        **_outcome_fields(outcome, reason, compiled_count, deferred_count, left_count),
     }
 
 

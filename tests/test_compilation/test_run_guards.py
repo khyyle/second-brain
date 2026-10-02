@@ -223,7 +223,7 @@ def test_build_stops_when_cost_cap_reached(
     assert stats["sources_compiled"] == 2
     assert stats["outcome"] is StageOutcome.CAPPED
     assert stats["reason"] == "Reached the spend cap with 1 source left"
-    assert stats["counts"] == {"completed": 2, "failed": 0, "deferred": 0, "left": 1}
+    assert stats["counts"] == {"completed": 2, "deferred": 0, "left": 1}
 
 
 def test_exhausted_unit_is_deferred_not_compiled(
@@ -252,7 +252,7 @@ def test_exhausted_unit_is_deferred_not_compiled(
     assert stats["sources_compiled"] == 1
     assert stats["outcome"] is StageOutcome.PARTIAL
     assert stats["reason"] == "1 source was set aside"
-    assert stats["counts"] == {"completed": 1, "failed": 0, "deferred": 1, "left": 0}
+    assert stats["counts"] == {"completed": 1, "deferred": 1, "left": 0}
 
 
 def test_cost_capped_unit_stays_staged_not_deferred(
@@ -282,7 +282,7 @@ def test_cost_capped_unit_stays_staged_not_deferred(
     assert stats["sources_compiled"] == 0
     assert stats["outcome"] is StageOutcome.CAPPED
     assert stats["reason"] == "Reached the spend cap with 2 sources left"
-    assert stats["counts"] == {"completed": 0, "failed": 0, "deferred": 0, "left": 2}
+    assert stats["counts"] == {"completed": 0, "deferred": 0, "left": 2}
     assert manifest.get_compiled_raw_paths() == set()
     assert manifest.get_deferred_sources() == {}
 
@@ -331,30 +331,35 @@ def test_over_window_unit_defers_preflight_without_api_call(
     assert "split it into parts" in deferred["huge.md"]
 
 
-def test_transient_failure_stays_staged_not_deferred(
+def test_unexpected_failure_stops_build_and_keeps_units_staged(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """An unexpected failure in our own code leaves the unit staged for the next build."""
+    """An unexpected failure in our own code stops the build and leaves every unit staged."""
     config = _build_config(tmp_path)
     manifest = Manifest(config.manifest_db_path)
 
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
-    monkeypatch.setattr(compiler, "find_new_sources", lambda *_: ["a.md"])
+    monkeypatch.setattr(compiler, "find_new_sources", lambda *_: ["a.md", "b.md"])
     monkeypatch.setattr(compiler, "rebuild_structure", lambda *_: {})
     monkeypatch.setattr(compiler, "_git_commit", lambda *_: None)
+    monkeypatch.setattr(compiler, "_git_restore", lambda *_: None)
     (config.raw_dir / "a.md").write_text("body", encoding="utf-8")
+    (config.raw_dir / "b.md").write_text("body", encoding="utf-8")
+    attempts: list[list[str]] = []
 
-    def raise_transient(*_a, **_k):
+    def raise_unexpected(_config, _wiki, _raw, unit, **_kwargs):
+        attempts.append(unit)
         raise ConnectionError("network blip")
 
-    monkeypatch.setattr(compiler, "_run_agent", raise_transient)
+    monkeypatch.setattr(compiler, "_run_agent", raise_unexpected)
 
     stats = compiler.run_compilation(config, manifest)
 
+    assert len(attempts) == 1
     assert stats["sources_compiled"] == 0
-    assert stats["outcome"] is StageOutcome.PARTIAL
-    assert stats["reason"] == "1 source failed"
-    assert stats["counts"] == {"completed": 0, "failed": 1, "deferred": 0, "left": 0}
+    assert stats["outcome"] is StageOutcome.FAILED
+    assert stats["reason"] == "An unexpected error stopped the build; see logs/pipeline.log"
+    assert stats["counts"] == {"completed": 0, "deferred": 0, "left": 2}
     assert manifest.get_deferred_sources() == {}
     assert manifest.get_compiled_raw_paths() == set()
 
@@ -421,7 +426,7 @@ def test_provider_failure_stops_build_and_keeps_curation(
     assert (config.data_dir / ".clusters.json").is_file()
     assert stats["outcome"] is StageOutcome.FAILED
     assert stats["reason"] == "Out of API credits"
-    assert stats["counts"] == {"completed": 0, "failed": 0, "deferred": 0, "left": 2}
+    assert stats["counts"] == {"completed": 0, "deferred": 0, "left": 2}
 
 
 def test_stop_before_first_unit_is_stopped(
@@ -446,7 +451,7 @@ def test_stop_before_first_unit_is_stopped(
 
     assert stats["outcome"] is StageOutcome.STOPPED
     assert stats["reason"] == ""
-    assert stats["counts"] == {"completed": 0, "failed": 0, "deferred": 0, "left": 2}
+    assert stats["counts"] == {"completed": 0, "deferred": 0, "left": 2}
     assert stats["sources_compiled"] == 0
 
 
@@ -472,7 +477,7 @@ def test_full_build_purges_skipped_holding(
 
     assert stats["outcome"] is StageOutcome.OK
     assert stats["reason"] == ""
-    assert stats["counts"] == {"completed": 1, "failed": 0, "deferred": 0, "left": 0}
+    assert stats["counts"] == {"completed": 1, "deferred": 0, "left": 0}
     assert not (config.raw_dir / ".skipped").exists()
 
 

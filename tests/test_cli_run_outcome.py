@@ -23,7 +23,7 @@ def _compile_stats(outcome: StageOutcome, reason: str) -> dict[str, object]:
         "domains": {},
         "outcome": outcome,
         "reason": reason,
-        "counts": {"completed": 1, "failed": 0, "deferred": 0, "left": 0},
+        "counts": {"completed": 1, "deferred": 0, "left": 0},
     }
 
 
