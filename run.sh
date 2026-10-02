@@ -55,14 +55,39 @@ trap 'rm -rf "$LOCK_DIR"' EXIT
 
 echo "[$LOG_PREFIX] Starting second-brain pipeline (stage: $STAGE)"
 
+exit_code=0
+
+# A failing stage must not abort the script: ingest still continues into
+# compile, and the process exits with the worst code that actually ran
+# (1 outranks 2).
+run_stage() {
+    local label="$1"
+    shift
+    local stage_code=0
+    "$@" 2>&1 || stage_code=$?
+    if [ "$stage_code" -ne 0 ]; then
+        echo "[$LOG_PREFIX] $label failed (exit $stage_code)"
+    fi
+    # Any code other than 2 (a launcher failure such as 127 included) counts
+    # as a failure, so it is never reported as a partial run.
+    if [ "$stage_code" -eq 2 ]; then
+        if [ "$exit_code" -eq 0 ]; then
+            exit_code=2
+        fi
+    elif [ "$stage_code" -ne 0 ]; then
+        exit_code=1
+    fi
+}
+
 if [ "$STAGE" = "drops" ]; then
-    uv run second-brain ingest --drops-only 2>&1 || echo "[$LOG_PREFIX] Ingestion failed"
+    run_stage "Ingestion" uv run second-brain ingest --drops-only
 fi
 if [ "$STAGE" = "ingest" ] || [ "$STAGE" = "all" ]; then
-    uv run second-brain ingest 2>&1 || echo "[$LOG_PREFIX] Ingestion failed"
+    run_stage "Ingestion" uv run second-brain ingest
 fi
 if [ "$STAGE" = "compile" ] || [ "$STAGE" = "all" ]; then
-    uv run second-brain compile 2>&1 || echo "[$LOG_PREFIX] Compilation failed"
+    run_stage "Compilation" uv run second-brain compile
 fi
 
 echo "[$LOG_PREFIX] Pipeline complete"
+exit "$exit_code"

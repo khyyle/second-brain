@@ -29,6 +29,7 @@ from second_brain.llm import (
     require_api_key,
     resolve_profile,
 )
+from second_brain.run_record import StageOutcome
 from second_brain.triage.skipped import purge_skipped
 from second_brain.wiki.structure import rebuild_structure
 
@@ -188,6 +189,71 @@ def find_new_sources(config: Config, manifest: Manifest) -> list[str]:
     return sorted(new_sources)
 
 
+def _source_count(count: int) -> str:
+    noun = "source" if count == 1 else "sources"
+    return f"{count} {noun}"
+
+
+def _partial_reason(deferred: int, failed: int) -> str:
+    """One sentence for sources set aside, sources that failed, or both."""
+    clauses: list[str] = []
+    if deferred:
+        verb = "was" if deferred == 1 else "were"
+        clauses.append(f"{_source_count(deferred)} {verb} set aside")
+    if failed:
+        clauses.append(f"{failed} failed" if deferred else f"{_source_count(failed)} failed")
+    return " and ".join(clauses)
+
+
+def _spend_cap_reason(left: int) -> str:
+    """Sentence for a build the spend cap stopped, including sources still staged."""
+    return f"Reached the spend cap with {_source_count(left)} left"
+
+
+def _finalize_outcome(
+    outcome: StageOutcome,
+    reason: str,
+    deferred: int,
+    failed: int,
+    left: int,
+) -> tuple[StageOutcome, str]:
+    """Fill in the run outcome once every unit has been classified.
+
+    A user stop, a provider failure, or the spend cap is decided in the loop.
+    Anything else is a partial run when sources were set aside or failed, and
+    a clean run otherwise.
+    """
+    if outcome is StageOutcome.STOPPED:
+        return outcome, ""
+    if outcome is StageOutcome.FAILED:
+        return outcome, reason
+    if outcome is StageOutcome.CAPPED:
+        return outcome, _spend_cap_reason(left)
+    if deferred or failed:
+        return StageOutcome.PARTIAL, _partial_reason(deferred, failed)
+    return StageOutcome.OK, ""
+
+
+def _outcome_fields(
+    outcome: StageOutcome,
+    reason: str,
+    completed: int = 0,
+    failed: int = 0,
+    deferred: int = 0,
+    left: int = 0,
+) -> dict[str, StageOutcome | str | dict[str, int]]:
+    return {
+        "outcome": outcome,
+        "reason": reason,
+        "counts": {
+            "completed": completed,
+            "failed": failed,
+            "deferred": deferred,
+            "left": left,
+        },
+    }
+
+
 def run_compilation(
     config: Config,
     manifest: Manifest,
@@ -215,9 +281,10 @@ def run_compilation(
     Returns
     -------
     dict
-        Summary statistics including ``sources_compiled``,
-        ``failure_reason`` (the provider failure that stopped the build,
-        or ``None``), and all keys from ``rebuild_structure``.
+        Summary statistics including ``sources_compiled``, ``outcome``,
+        ``reason`` (one sentence, or empty), ``counts`` (``completed``,
+        ``failed``, ``deferred``, and ``left`` source counts), and the
+        structure rebuild's keys.
     """
     wiki_dir = config.wiki_dir
     raw_dir = config.raw_dir
@@ -235,7 +302,7 @@ def run_compilation(
     if not new_sources:
         logger.info("No new sources to compile")
         stats = rebuild_structure(wiki_dir)
-        return {**stats, "sources_compiled": 0, "failure_reason": None}
+        return {**stats, "sources_compiled": 0, **_outcome_fields(StageOutcome.OK, "")}
 
     # Triage already ran during ingestion (free, local). Here we just
     # filter to the worthwhile set from the recorded decisions; any
@@ -250,13 +317,17 @@ def run_compilation(
     if not new_sources:
         logger.info("Nothing worthwhile to compile")
         stats = rebuild_structure(wiki_dir)
-        return {**stats, "sources_compiled": 0, "failure_reason": None}
+        return {**stats, "sources_compiled": 0, **_outcome_fields(StageOutcome.OK, "")}
 
     profile = resolve_profile(config.compilation.provider, config.compilation.model)
     logger.info("Compiling %d worthwhile sources", len(new_sources))
 
     compiled_count = 0
-    failure_reason: str | None = None
+    failed_count = 0
+    deferred_count = 0
+    left_count = 0
+    outcome = StageOutcome.OK
+    reason = ""
     if not dry_run:
         # Fail fast on a missing key, before any heartbeat or git work.
         require_api_key(profile)
@@ -276,6 +347,7 @@ def run_compilation(
         started = now_iso()
 
         work_units = _build_work_units(config, raw_dir, new_sources)
+        staged_count = sum(len(unit) for unit in work_units)
 
         total = len(work_units)
         cumulative_cost = 0.0
@@ -295,6 +367,7 @@ def run_compilation(
             for index, unit in enumerate(work_units):
                 if stop_requested(config.data_dir):
                     logger.info("Stop requested — halting before group %d/%d", index + 1, total)
+                    outcome = StageOutcome.STOPPED
                     break
                 if cost_cap > 0 and cumulative_cost >= cost_cap:
                     logger.info(
@@ -306,6 +379,7 @@ def run_compilation(
                         total,
                         total - index,
                     )
+                    outcome = StageOutcome.CAPPED
                     break
                 # determine if this source can leave working room in model context window
                 estimated_tokens = _estimate_unit_tokens(raw_dir, unit)
@@ -320,6 +394,7 @@ def run_compilation(
                         estimated_tokens // 1000,
                         window // 1000,
                     )
+                    deferred_count += len(unit)
                     continue
                 write_status(
                     config.data_dir,
@@ -358,6 +433,7 @@ def run_compilation(
                 _git_restore(wiki_dir)
                 if result.outcome is RunOutcome.STOPPED:
                     logger.info("Stopped during %s — rolled back partial work", ", ".join(unit))
+                    outcome = StageOutcome.STOPPED
                     break
                 elif result.outcome is RunOutcome.COST_CAPPED:
                     logger.info(
@@ -366,17 +442,22 @@ def run_compilation(
                         ", ".join(unit),
                         total - index,
                     )
+                    outcome = StageOutcome.CAPPED
                     break
                 elif result.outcome is RunOutcome.PROVIDER_FAILED:
                     # Every later group would fail the same way, so leave them all staged.
                     logger.error("Build stopped: %s", result.reason)
-                    failure_reason = result.reason
+                    outcome = StageOutcome.FAILED
+                    reason = result.reason
                     break
                 elif result.outcome in (RunOutcome.EXHAUSTED, RunOutcome.TOO_LARGE):
                     # Retrying unattended would fail the same way and re-bill,
                     # so park the group where the user can see why.
                     manifest.defer_sources(unit, result.reason)
                     logger.warning("Deferred %s: %s", ", ".join(unit), result.reason)
+                    deferred_count += len(unit)
+                elif result.outcome is RunOutcome.FAILED:
+                    failed_count += len(unit)
         finally:
             stop_heartbeat.set()
             heartbeat.join(timeout=2.0)
@@ -384,9 +465,16 @@ def run_compilation(
             clear_status(config.data_dir)
         logger.info("Compiled %d sources for ~$%.2f", compiled_count, cumulative_cost)
 
+        # Units the loop did not compile, defer, or fail are still staged,
+        # including one rolled back by a stop, a cap, or a provider failure.
+        left_count = staged_count - compiled_count - failed_count - deferred_count
+        outcome, reason = _finalize_outcome(
+            outcome, reason, deferred_count, failed_count, left_count
+        )
+
         # Only a build that compiled every staged source finalizes the user's
         # curation; anything less leaves decisions open for the next attempt.
-        if compiled_count == sum(len(unit) for unit in work_units):
+        if compiled_count == staged_count:
             purge_skipped(raw_dir)
             from second_brain.clustering.preview import clear_preview
 
@@ -407,7 +495,9 @@ def run_compilation(
     return {
         **stats,
         "sources_compiled": compiled_count,
-        "failure_reason": failure_reason,
+        **_outcome_fields(
+            outcome, reason, compiled_count, failed_count, deferred_count, left_count
+        ),
     }
 
 

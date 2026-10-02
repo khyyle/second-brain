@@ -13,6 +13,7 @@ from second_brain.compilation import compiler
 from second_brain.compilation.compiler import RunOutcome, RunResult
 from second_brain.config import CompilationConfig, Config, TriageConfig
 from second_brain.ingestion.manifest import Manifest
+from second_brain.run_record import StageOutcome
 
 
 class FakeUsage:
@@ -84,7 +85,7 @@ def _make_config(tmp_path: Path, *, max_iter: int = 20, cost_cap: float = 0.0) -
 
 
 def _status_error(status_code: int, message: str) -> anthropic.APIStatusError:
-    request = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+    request = httpx.Request("POST", "https://api.invalid/v1/messages")
     response = httpx.Response(status_code, request=request)
     return anthropic.APIStatusError(message, response=response, body=None)
 
@@ -220,6 +221,9 @@ def test_build_stops_when_cost_cap_reached(
     # a -> $1, b -> $2, then cumulative ($2) hits the cap before c.
     assert runs == ["a.md", "b.md"]
     assert stats["sources_compiled"] == 2
+    assert stats["outcome"] is StageOutcome.CAPPED
+    assert stats["reason"] == "Reached the spend cap with 1 source left"
+    assert stats["counts"] == {"completed": 2, "failed": 0, "deferred": 0, "left": 1}
 
 
 def test_exhausted_unit_is_deferred_not_compiled(
@@ -246,6 +250,9 @@ def test_exhausted_unit_is_deferred_not_compiled(
     assert manifest.get_deferred_sources() == {"a.md": "failed to compile within 20 agent turns"}
     assert manifest.get_compiled_raw_paths() == {"b.md"}
     assert stats["sources_compiled"] == 1
+    assert stats["outcome"] is StageOutcome.PARTIAL
+    assert stats["reason"] == "1 source was set aside"
+    assert stats["counts"] == {"completed": 1, "failed": 0, "deferred": 1, "left": 0}
 
 
 def test_cost_capped_unit_stays_staged_not_deferred(
@@ -273,6 +280,9 @@ def test_cost_capped_unit_stays_staged_not_deferred(
     # The capped unit ends the build; nothing after it runs.
     assert runs == ["a.md"]
     assert stats["sources_compiled"] == 0
+    assert stats["outcome"] is StageOutcome.CAPPED
+    assert stats["reason"] == "Reached the spend cap with 2 sources left"
+    assert stats["counts"] == {"completed": 0, "failed": 0, "deferred": 0, "left": 2}
     assert manifest.get_compiled_raw_paths() == set()
     assert manifest.get_deferred_sources() == {}
 
@@ -342,6 +352,9 @@ def test_transient_failure_stays_staged_not_deferred(
     stats = compiler.run_compilation(config, manifest)
 
     assert stats["sources_compiled"] == 0
+    assert stats["outcome"] is StageOutcome.PARTIAL
+    assert stats["reason"] == "1 source failed"
+    assert stats["counts"] == {"completed": 0, "failed": 1, "deferred": 0, "left": 0}
     assert manifest.get_deferred_sources() == {}
     assert manifest.get_compiled_raw_paths() == set()
 
@@ -406,7 +419,35 @@ def test_provider_failure_stops_build_and_keeps_curation(
     assert manifest.get_deferred_sources() == {}
     assert (config.raw_dir / ".skipped" / "chatgpt" / "junk.md").is_file()
     assert (config.data_dir / ".clusters.json").is_file()
-    assert stats["failure_reason"] == "Out of API credits"
+    assert stats["outcome"] is StageOutcome.FAILED
+    assert stats["reason"] == "Out of API credits"
+    assert stats["counts"] == {"completed": 0, "failed": 0, "deferred": 0, "left": 2}
+
+
+def test_stop_before_first_unit_is_stopped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A stop requested before the first unit ends the build with nothing run."""
+    config = _build_config(tmp_path)
+    manifest = Manifest(config.manifest_db_path)
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setattr(compiler, "find_new_sources", lambda *_: ["a.md", "b.md"])
+    monkeypatch.setattr(compiler, "rebuild_structure", lambda *_: {})
+    monkeypatch.setattr(compiler, "_git_commit", lambda *_: None)
+    monkeypatch.setattr("second_brain.status.stop_requested", lambda _data_dir: True)
+
+    def fail_if_called(*_args, **_kwargs):
+        raise AssertionError("agent must not run after a stop")
+
+    monkeypatch.setattr(compiler, "_run_agent", fail_if_called)
+
+    stats = compiler.run_compilation(config, manifest)
+
+    assert stats["outcome"] is StageOutcome.STOPPED
+    assert stats["reason"] == ""
+    assert stats["counts"] == {"completed": 0, "failed": 0, "deferred": 0, "left": 2}
+    assert stats["sources_compiled"] == 0
 
 
 def test_full_build_purges_skipped_holding(
@@ -427,8 +468,11 @@ def test_full_build_purges_skipped_holding(
         compiler, "_run_agent", lambda *_a, **_k: RunResult(0.1, RunOutcome.COMPLETED)
     )
 
-    compiler.run_compilation(config, manifest)
+    stats = compiler.run_compilation(config, manifest)
 
+    assert stats["outcome"] is StageOutcome.OK
+    assert stats["reason"] == ""
+    assert stats["counts"] == {"completed": 1, "failed": 0, "deferred": 0, "left": 0}
     assert not (config.raw_dir / ".skipped").exists()
 
 

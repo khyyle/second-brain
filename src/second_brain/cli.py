@@ -10,8 +10,19 @@ import click
 
 from second_brain.config import Config, load_config
 from second_brain.ingestion.manifest import Manifest
+from second_brain.run_record import StageOutcome, exit_code_for, record_run
+from second_brain.status import now_iso
 
 logger = logging.getLogger(__name__)
+
+_INGEST_CRASH_REASON = "The ingest crashed; see logs/pipeline.log"
+_COMPILE_CRASH_REASON = "The build crashed; see logs/pipeline.log"
+_EMPTY_COMPILE_COUNTS: dict[str, int] = {
+    "completed": 0,
+    "failed": 0,
+    "deferred": 0,
+    "left": 0,
+}
 
 
 def _setup_logging(verbose: bool) -> None:
@@ -89,6 +100,59 @@ def _require_ollama(config: Config) -> None:
         raise click.ClickException(status.message())
 
 
+def _ingest_outcome(completed: int, failed: int) -> tuple[StageOutcome, str]:
+    """
+    Classify an ingest from how many files finished and how many failed.
+
+    Parameters
+    ----------
+    completed: int
+        Files ingested on this run.
+    failed: int
+        Files that did not ingest on this run.
+
+    Returns
+    -------
+    tuple[StageOutcome, str]
+        Outcome and a one-sentence reason, empty when nothing failed.
+    """
+    if failed == 0:
+        return StageOutcome.OK, ""
+    noun = "file" if failed == 1 else "files"
+    reason = f"{failed} {noun} failed to ingest"
+    if completed == 0:
+        return StageOutcome.FAILED, reason
+    return StageOutcome.PARTIAL, reason
+
+
+def _exit_for_stage(
+    ctx: click.Context,
+    outcome: StageOutcome,
+    reason: str,
+    *,
+    failure_message: str,
+) -> None:
+    """
+    Exit from a finished stage using the outcome's status code.
+
+    Parameters
+    ----------
+    ctx: click.Context
+        Active command context.
+    outcome: StageOutcome
+        How the stage ended.
+    reason: str
+        Sentence printed for a partial or capped run.
+    failure_message: str
+        Message raised when the stage failed. Click turns that into exit 1.
+    """
+    if outcome is StageOutcome.FAILED:
+        raise click.ClickException(failure_message)
+    if outcome in (StageOutcome.PARTIAL, StageOutcome.CAPPED):
+        click.echo(reason)
+        ctx.exit(exit_code_for(outcome))
+
+
 def _sync_search_index(config: Config) -> None:
     """Reconcile the search index with the wiki after an edit.
 
@@ -132,66 +196,111 @@ def ingest(
     drops_only: bool,
 ) -> None:
     """Process pending files from watched directories."""
-    config: Config = ctx.obj["config"]
-    config.ensure_directories()
-
-    _preflight_check()
-    _require_ollama(config)
-
     from second_brain.ingestion.manifest import Manifest
     from second_brain.state import emit_state
 
-    manifest = Manifest(config.manifest_db_path)
+    config: Config = ctx.obj["config"]
+    started_at = now_iso()
+    completed = 0
+    failed = 0
+    watched = False
+    try:
+        config.ensure_directories()
+        _preflight_check()
+        _require_ollama(config)
 
-    if chatgpt_path:
-        from second_brain.ingestion.chatgpt_parser import process_chatgpt_export
+        manifest = Manifest(config.manifest_db_path)
 
-        export_path = Path(chatgpt_path).expanduser().resolve()
-        output_dir = config.raw_dir / "chatgpt"
-        paths = process_chatgpt_export(export_path, output_dir)
-        click.echo(f"Imported {len(paths)} conversations")
-        for p in paths:
-            manifest.mark_processing(p, "chatgpt")
-            manifest.mark_complete(p, parse_lane="passthrough", raw_output=str(p))
-        emit_state(config)
+        if chatgpt_path:
+            from second_brain.ingestion.chatgpt_parser import process_chatgpt_export
+
+            export_path = Path(chatgpt_path).expanduser().resolve()
+            output_dir = config.raw_dir / "chatgpt"
+            paths = process_chatgpt_export(export_path, output_dir)
+            click.echo(f"Imported {len(paths)} conversations")
+            for conversation in paths:
+                manifest.mark_processing(conversation, "chatgpt")
+                manifest.mark_complete(
+                    conversation, parse_lane="passthrough", raw_output=str(conversation)
+                )
+            completed = len(paths)
+            emit_state(config)
+        elif file_path:
+            ingested = _ingest_single(Path(file_path).expanduser().resolve(), config, manifest)
+            if ingested:
+                completed = 1
+            else:
+                failed = 1
+            emit_state(config)
+        elif watch:
+            from second_brain.ingestion.watcher import watch_sources
+
+            watched = True
+            watch_sources(
+                config,
+                manifest,
+                lambda p, s: _ingest_single(p, config, manifest, source_type=s),
+            )
+        else:
+            from second_brain.ingestion.watcher import _batch_scan
+
+            def _process(path: Path, source_type: str) -> None:
+                nonlocal completed, failed
+                if _ingest_single(path, config, manifest, source_type=source_type):
+                    completed += 1
+                else:
+                    failed += 1
+
+            count = _batch_scan(config, manifest, _process, drops_only=drops_only)
+            click.echo(f"Processed {count} files")
+
+            # Triage runs here (local Gemma, free) rather than at the paid compile
+            # step, so every ingested source has a decision before the user builds.
+            from second_brain.triage.pipeline import triage_pending
+
+            triaged = triage_pending(config, manifest)
+            if sum(triaged.values()):
+                click.echo(
+                    f"Triaged: {triaged['worthwhile']} worthwhile, "
+                    f"{triaged['review']} review, {triaged['skip']} skip"
+                )
+            emit_state(config)
+    except click.ClickException as exc:
+        if not watched:
+            record_run(
+                config.data_dir,
+                "ingest",
+                StageOutcome.FAILED,
+                str(exc),
+                {"completed": completed, "failed": failed},
+                started_at,
+            )
+        raise
+    except Exception:
+        if not watched:
+            record_run(
+                config.data_dir,
+                "ingest",
+                StageOutcome.FAILED,
+                _INGEST_CRASH_REASON,
+                {"completed": completed, "failed": failed},
+                started_at,
+            )
+        raise
+
+    if watched:
         return
 
-    if file_path:
-        _ingest_single(Path(file_path).expanduser().resolve(), config, manifest)
-        emit_state(config)
-        return
-
-    if watch:
-        from second_brain.ingestion.watcher import watch_sources
-
-        watch_sources(
-            config,
-            manifest,
-            lambda p, s: _ingest_single(p, config, manifest, source_type=s),
-        )
-        return
-
-    from second_brain.ingestion.watcher import _batch_scan
-
-    count = _batch_scan(
-        config,
-        manifest,
-        lambda p, s: _ingest_single(p, config, manifest, source_type=s),
-        drops_only=drops_only,
+    outcome, reason = _ingest_outcome(completed, failed)
+    record_run(
+        config.data_dir,
+        "ingest",
+        outcome,
+        reason,
+        {"completed": completed, "failed": failed},
+        started_at,
     )
-    click.echo(f"Processed {count} files")
-
-    # Triage runs here (local Gemma, free) rather than at the paid compile
-    # step, so every ingested source has a decision before the user builds.
-    from second_brain.triage.pipeline import triage_pending
-
-    counts = triage_pending(config, manifest)
-    if sum(counts.values()):
-        click.echo(
-            f"Triaged: {counts['worthwhile']} worthwhile, "
-            f"{counts['review']} review, {counts['skip']} skip"
-        )
-    emit_state(config)
+    _exit_for_stage(ctx, outcome, reason, failure_message=reason)
 
 
 def _ingest_single(
@@ -199,7 +308,7 @@ def _ingest_single(
     config: Config,
     manifest: Manifest,
     source_type: str = "document",
-) -> None:
+) -> bool:
     """
     Route a single file to the appropriate parser and record the result.
 
@@ -213,10 +322,17 @@ def _ingest_single(
         Ingestion manifest to record processing status.
     source_type: str
         Source category label (e.g. ``"document"``, ``"chatgpt"``).
+
+    Returns
+    -------
+    bool
+        ``True`` when the file was ingested. ``False`` when it was missing
+        or marked failed. Those cases are recorded and then return, so a
+        raised exception is not the failure signal.
     """
     if not file_path.exists():
         click.echo(f"File not found: {file_path}", err=True)
-        return
+        return False
 
     source_cfg = config.sources.get(source_type)
     force_lane = source_cfg.force_parse_lane if source_cfg else None
@@ -298,6 +414,7 @@ def _ingest_single(
         from second_brain.ingestion.watcher import remove_drop_copy
 
         remove_drop_copy(file_path, config)
+    return ingested
 
 
 def _relative_output_dir(file_path: Path, config: Config) -> str:
@@ -331,36 +448,75 @@ def _relative_output_dir(file_path: Path, config: Config) -> str:
 @click.pass_context
 def compile(ctx: click.Context, full: bool, dry_run: bool) -> None:
     """Compile new/changed sources into the wiki."""
-    config: Config = ctx.obj["config"]
-    config.ensure_directories()
-    _require_ollama(config)
-
     from second_brain.compilation.compiler import run_compilation
     from second_brain.ingestion.manifest import Manifest
     from second_brain.llm import ModelError
-
-    manifest = Manifest(config.manifest_db_path)
-    try:
-        stats = run_compilation(config, manifest, force_full=full, dry_run=dry_run)
-    except ModelError as exc:
-        raise click.ClickException(exc.reason) from exc
-
-    click.echo(f"Sources compiled: {stats['sources_compiled']}")
-    click.echo(f"Wiki pages: {stats['total_pages']}")
-    click.echo(f"Total links: {stats['total_links']}")
-    click.echo(f"Orphans: {stats['orphans']}")
-    click.echo(f"Gaps: {stats['gaps']}")
-    domains = stats.get("domains") or {}
-    if domains:
-        summary = ", ".join(f"{name} ({count})" for name, count in sorted(domains.items()))
-        click.echo(f"Domains: {summary}")
-
     from second_brain.state import emit_state
 
-    emit_state(config)
+    config: Config = ctx.obj["config"]
+    started_at = now_iso()
+    try:
+        config.ensure_directories()
+        _require_ollama(config)
 
-    if stats["failure_reason"]:
-        raise click.ClickException(f"Build stopped: {stats['failure_reason']}")
+        manifest = Manifest(config.manifest_db_path)
+        stats = run_compilation(config, manifest, force_full=full, dry_run=dry_run)
+        click.echo(f"Sources compiled: {stats['sources_compiled']}")
+        click.echo(f"Wiki pages: {stats['total_pages']}")
+        click.echo(f"Total links: {stats['total_links']}")
+        click.echo(f"Orphans: {stats['orphans']}")
+        click.echo(f"Gaps: {stats['gaps']}")
+        domains = stats.get("domains") or {}
+        if domains:
+            summary = ", ".join(f"{name} ({count})" for name, count in sorted(domains.items()))
+            click.echo(f"Domains: {summary}")
+        emit_state(config)
+    except ModelError as exc:
+        record_run(
+            config.data_dir,
+            "compile",
+            StageOutcome.FAILED,
+            exc.reason,
+            _EMPTY_COMPILE_COUNTS,
+            started_at,
+        )
+        raise click.ClickException(exc.reason) from exc
+    except click.ClickException as exc:
+        record_run(
+            config.data_dir,
+            "compile",
+            StageOutcome.FAILED,
+            str(exc),
+            _EMPTY_COMPILE_COUNTS,
+            started_at,
+        )
+        raise
+    except Exception:
+        record_run(
+            config.data_dir,
+            "compile",
+            StageOutcome.FAILED,
+            _COMPILE_CRASH_REASON,
+            _EMPTY_COMPILE_COUNTS,
+            started_at,
+        )
+        raise
+
+    if not dry_run:
+        record_run(
+            config.data_dir,
+            "compile",
+            stats["outcome"],
+            stats["reason"],
+            stats["counts"],
+            started_at,
+        )
+    _exit_for_stage(
+        ctx,
+        stats["outcome"],
+        stats["reason"],
+        failure_message=f"Build stopped: {stats['reason']}",
+    )
 
 
 @main.command(name="recompile")
