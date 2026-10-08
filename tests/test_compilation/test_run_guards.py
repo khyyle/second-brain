@@ -13,6 +13,9 @@ from second_brain.compilation import compiler
 from second_brain.compilation.compiler import RunOutcome, RunResult
 from second_brain.config import CompilationConfig, Config, TriageConfig
 from second_brain.ingestion.manifest import Manifest
+from second_brain.llm import resolve_profile
+from second_brain.mcp_server.tools import WikiTools
+from second_brain.ollama import OllamaUnavailableError
 from second_brain.run_record import StageOutcome
 
 
@@ -29,6 +32,15 @@ class FakeBlock:
     name = "glob_files"
     id = "tool-1"
     input = {"pattern": "*.md"}  # noqa: A003
+
+
+class SemanticSearchBlock:
+    """A tool_use block that asks for a meaning-based search."""
+
+    type = "tool_use"
+    name = "semantic_search"
+    id = "tool-search"
+    input = {"query": "gradient descent"}  # noqa: A003
 
 
 class FakeResponse:
@@ -71,13 +83,19 @@ class FakeClient:
         self.messages = FakeMessages(response, successful_calls=successful_calls, error=error)
 
 
-def _make_config(tmp_path: Path, *, max_iter: int = 20, cost_cap: float = 0.0) -> Config:
+def _make_config(
+    tmp_path: Path,
+    *,
+    max_iter: int = 20,
+    cost_cap: float = 0.0,
+    explore_tools: bool = False,
+) -> Config:
     cfg = Config(
         data_dir=tmp_path / "sb",
         compilation=CompilationConfig(
             max_iterations=max_iter,
             max_cost_per_build_usd=cost_cap,
-            explore_tools=False,
+            explore_tools=explore_tools,
         ),
     )
     cfg.ensure_directories()
@@ -134,6 +152,32 @@ def test_iteration_cap_reports_runaway_stop(
     assert client.messages.calls == 3
     assert result.outcome is RunOutcome.EXHAUSTED
     assert "3 agent turns" in result.reason
+
+
+def test_ollama_outage_during_search_fails_the_unit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _make_config(tmp_path, explore_tools=True)
+    usage = FakeUsage(1_000, 100)
+    client = _install_fake(
+        monkeypatch,
+        FakeResponse("tool_use", usage, [SemanticSearchBlock()]),
+    )
+
+    def _down(*_args: object, **_kwargs: object) -> str:
+        raise OllamaUnavailableError("down")
+
+    monkeypatch.setattr(WikiTools, "semantic_search", _down)
+
+    result = _run(config)
+
+    profile = resolve_profile(config.compilation.provider, config.compilation.model)
+    assert client.messages.calls == 1
+    assert result.outcome is RunOutcome.FAILED
+    assert result.reason == (
+        "Build stopped because Ollama isn't responding. Start Ollama and build again."
+    )
+    assert result.cost == profile.estimate_cost(usage.input_tokens, usage.output_tokens)
 
 
 def test_provider_failure_keeps_partial_cost(

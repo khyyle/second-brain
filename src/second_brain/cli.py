@@ -88,10 +88,10 @@ def _preflight_check() -> None:
 
 
 def _require_ollama(config: Config) -> None:
-    """Fail fast with a clear message when Ollama is not ready at startup.
+    """Fail fast when Ollama is not ready before a build, the paid step.
 
-    Ollama hosts the local models triage and embeddings depend on. A server
-    that is down before the run starts is an actionable setup error.
+    This guards a build, not every command. A server that is down before
+    the build starts is an actionable setup error.
     """
     from second_brain.ollama import check_ollama
 
@@ -123,6 +123,27 @@ def _ingest_outcome(completed: int, failed: int) -> tuple[StageOutcome, str]:
     if completed == 0:
         return StageOutcome.FAILED, reason
     return StageOutcome.PARTIAL, reason
+
+
+def _triage_interrupted_reason(unsorted_count: int) -> str:
+    """
+    Phrase the reason sorting stopped with chats still undecided.
+
+    Parameters
+    ----------
+    unsorted_count: int
+        Chats left without a decision.
+
+    Returns
+    -------
+    str
+        A one-sentence reason. One chat is named in the singular.
+    """
+    noun = "chat" if unsorted_count == 1 else "chats"
+    return (
+        f"Couldn't sort {unsorted_count} {noun} because Ollama isn't responding. "
+        "Start Ollama and try again."
+    )
 
 
 def _exit_for_stage(
@@ -198,6 +219,7 @@ def ingest(
     """Process pending files from watched directories."""
     from second_brain.ingestion.manifest import Manifest
     from second_brain.state import emit_state
+    from second_brain.triage.pipeline import TriageInterruptedError
 
     config: Config = ctx.obj["config"]
     started_at = now_iso()
@@ -207,7 +229,6 @@ def ingest(
     try:
         config.ensure_directories()
         _preflight_check()
-        _require_ollama(config)
 
         manifest = Manifest(config.manifest_db_path)
 
@@ -265,19 +286,20 @@ def ingest(
                     f"{triaged['review']} review, {triaged['skip']} skip"
                 )
             emit_state(config)
-    except OllamaUnavailableError as exc:
+    except TriageInterruptedError as exc:
         # Files parsed before the sort stopped still changed what is staged.
         emit_state(config)
+        reason = _triage_interrupted_reason(exc.unsorted_count)
         if not watched:
             record_run(
                 config.data_dir,
                 "ingest",
                 StageOutcome.FAILED,
-                str(exc),
+                reason,
                 {"completed": completed, "failed": failed},
                 started_at,
             )
-        raise click.ClickException(str(exc)) from exc
+        raise click.ClickException(reason) from exc
     except click.ClickException as exc:
         if not watched:
             record_run(
@@ -461,7 +483,7 @@ def _relative_output_dir(file_path: Path, config: Config) -> str:
 @click.pass_context
 def compile(ctx: click.Context, full: bool, dry_run: bool) -> None:
     """Compile new/changed sources into the wiki."""
-    from second_brain.compilation.compiler import run_compilation
+    from second_brain.compilation.compiler import OLLAMA_BUILD_STOPPED_REASON, run_compilation
     from second_brain.ingestion.manifest import Manifest
     from second_brain.llm import ModelError
     from second_brain.state import emit_state
@@ -489,11 +511,11 @@ def compile(ctx: click.Context, full: bool, dry_run: bool) -> None:
             config.data_dir,
             "compile",
             StageOutcome.FAILED,
-            str(exc),
+            OLLAMA_BUILD_STOPPED_REASON,
             _EMPTY_COMPILE_COUNTS,
             started_at,
         )
-        raise click.ClickException(str(exc)) from exc
+        raise click.ClickException(OLLAMA_BUILD_STOPPED_REASON) from exc
     except ModelError as exc:
         record_run(
             config.data_dir,
@@ -608,7 +630,7 @@ def preview_clusters(ctx: click.Context) -> None:
         artifact = write_preview(config, manifest, progress=_on_progress)
     except OllamaUnavailableError as exc:
         raise click.ClickException(
-            "Ollama stopped responding; the grouping wasn't changed"
+            "Couldn't group chats because Ollama isn't responding. Your grouping wasn't changed."
         ) from exc
     finally:
         stop.set()
@@ -1007,11 +1029,8 @@ def mcp() -> None:
 
 
 @mcp.command(name="serve")
-@click.pass_context
-def mcp_serve(ctx: click.Context) -> None:
+def mcp_serve() -> None:
     """Start the MCP server."""
-    _require_ollama(ctx.obj["config"])
-
     from second_brain.mcp_server.server import serve
 
     serve()

@@ -14,7 +14,6 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from second_brain.mcp_server.search import SearchIndex
-from second_brain.ollama import OllamaUnavailableError
 from second_brain.wiki.slugs import normalize_link_target, slugify
 from second_brain.wiki.structure import CONTENT_DIRS, _parse_frontmatter, strip_frontmatter
 
@@ -312,6 +311,11 @@ class WikiTools:
             One block per matching page with its title, content type, domains, and a
             relevance distance (closest first). Falls back to a notice pointing at
             ``search_wiki`` when the semantic layer is unavailable.
+
+        Raises
+        ------
+        OllamaUnavailableError
+            When the embedding server stops answering a query.
         """
         if not self._search.semantic_enabled:
             return (
@@ -319,15 +323,7 @@ class WikiTools:
                 "Ollama is not running). Use search_wiki for keyword search instead."
             )
 
-        try:
-            hits = self._search.semantic_search(query, limit=limit)
-        except OllamaUnavailableError:
-            # The person asking can't see this tool's output, so the agent has
-            # to relay it or the degraded answer looks like a complete one.
-            return (
-                "Ollama isn't running, so search by meaning is unavailable. Tell the "
-                "user, and use search_wiki for keyword search instead."
-            )
+        hits = self._search.semantic_search(query, limit=limit)
         if not hits:
             return (
                 "No pages matched by meaning (the embedding index may be empty). "

@@ -21,6 +21,7 @@ from second_brain.mcp_server.tools import (
     INDEX_PAGES_PER_DOMAIN,
     WikiTools,
 )
+from second_brain.ollama import OllamaUnavailableError
 
 logger = logging.getLogger(__name__)
 
@@ -105,7 +106,15 @@ def semantic_search(
     as a supplementary tool and reason over graph structure, not as an authoritative
     search tool.
     """
-    return _get_tools().semantic_search(query, limit)
+    try:
+        return _get_tools().semantic_search(query, limit)
+    except OllamaUnavailableError:
+        # The person asking can't see this tool's output, so the agent has
+        # to relay it or the degraded answer looks like a complete one.
+        return (
+            "Ollama isn't responding, so search by meaning is unavailable. Tell the "
+            "user, and use search_wiki for keyword search instead."
+        )
 
 
 @mcp.tool()

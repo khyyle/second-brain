@@ -121,7 +121,7 @@ def test_query_embedding_falls_back_to_keyword_search(
     assert any(hit.stem == "penguins" for hit in hits)
 
 
-def test_semantic_tool_tells_agent_to_relay_ollama_outage(
+def test_semantic_tool_propagates_ollama_outage(
     tmp_path: Path, search_index: SearchIndex, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _index_sample(search_index)
@@ -132,10 +132,27 @@ def test_semantic_tool_tells_agent_to_relay_ollama_outage(
 
     monkeypatch.setattr(embeddings_mod, "embed_text", _raise)
 
-    notice = tools.semantic_search("gradient")
+    with pytest.raises(OllamaUnavailableError):
+        tools.semantic_search("gradient")
 
-    assert notice.startswith("Ollama isn't running")
-    assert "Tell the user" in notice
+
+def test_mcp_semantic_search_notifies_when_ollama_is_down(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _Down:
+        def semantic_search(self, query: str, limit: int = 10) -> str:
+            raise OllamaUnavailableError("down")
+
+    monkeypatch.setattr("second_brain.mcp_server.server._get_tools", lambda: _Down())
+
+    from second_brain.mcp_server.server import semantic_search
+
+    notice = semantic_search("gradient")
+
+    assert notice == (
+        "Ollama isn't responding, so search by meaning is unavailable. Tell the "
+        "user, and use search_wiki for keyword search instead."
+    )
 
 
 def test_semantic_returns_empty_when_embeddings_unavailable(

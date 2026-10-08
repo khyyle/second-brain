@@ -41,7 +41,7 @@ See [Architecture](docs/architecture.md) to understand each step in detail.
 - [uv](https://github.com/astral-sh/uv) for the Python environment.
 - The Swift toolchain to build the app (Xcode, or `xcode-select --install`).
 - An API key for the compilation provider, Anthropic by default or DeepSeek. Enter it in the app's Settings (which writes a local `.env` for you), or add `ANTHROPIC_API_KEY=...` (or `DEEPSEEK_API_KEY=...`) to a `.env` file at the repository root.
-- [Ollama](https://ollama.com), required for chat triage, clustering, and MCP semantic search. Install it and start it (open the Ollama app, or run `ollama serve`) before installing. It must be *running*, not just installed.
+- [Ollama](https://ollama.com), required for building the wiki and sorting imported chats, and used by MCP semantic search. Install it and start it (open the Ollama app, or run `ollama serve`) before installing.
 
 ### Install
 

@@ -1,4 +1,4 @@
-"""Tests for the Ollama preflight gate used by ingest/compile/mcp."""
+"""Tests for the Ollama preflight gate used before a build."""
 
 from __future__ import annotations
 

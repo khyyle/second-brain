@@ -29,6 +29,7 @@ from second_brain.llm import (
     require_api_key,
     resolve_profile,
 )
+from second_brain.ollama import OllamaUnavailableError
 from second_brain.run_record import StageOutcome
 from second_brain.triage.skipped import purge_skipped
 from second_brain.wiki.structure import rebuild_structure
@@ -48,6 +49,9 @@ _SOURCE_TOKENS_PER_EXTRA_ITERATION = 4000
 _MODEL_CONTEXT_WINDOW_EXCEEDED = "model_context_window_exceeded"
 
 _UNEXPECTED_ERROR_REASON = "An unexpected error stopped the build; see logs/pipeline.log"
+OLLAMA_BUILD_STOPPED_REASON = (
+    "Build stopped because Ollama isn't responding. Start Ollama and build again."
+)
 
 
 class RunOutcome(Enum):
@@ -690,7 +694,17 @@ def _run_agent(
         tool_results = []
         for block in response.content:
             if block.type == "tool_use":
-                result = executor.execute(block.name, block.input)
+                try:
+                    result = executor.execute(block.name, block.input)
+                except OllamaUnavailableError:
+                    outcome = RunOutcome.FAILED
+                    outcome_reason = OLLAMA_BUILD_STOPPED_REASON
+                    logger.warning(
+                        "Ollama isn't responding for %s: %s",
+                        ", ".join(sources),
+                        outcome_reason,
+                    )
+                    break
                 logger.debug("Tool %s(%s) -> %s", block.name, block.input, result[:200])
                 tool_results.append(
                     {
@@ -699,6 +713,9 @@ def _run_agent(
                         "content": result,
                     }
                 )
+
+        if outcome is RunOutcome.FAILED:
+            break
 
         if not tool_results:
             # Treat a turn that requested no tools but did not end cleanly

@@ -22,6 +22,14 @@ from second_brain.triage.skipped import move_skips_to_holding
 logger = logging.getLogger(__name__)
 
 
+class TriageInterruptedError(OllamaUnavailableError):
+    """Ollama stopped answering partway through sorting chats."""
+
+    def __init__(self, unsorted_count: int) -> None:
+        super().__init__(f"Ollama stopped answering; {unsorted_count} chats left unsorted")
+        self.unsorted_count = unsorted_count
+
+
 def _source_of(rel_path: str) -> str:
     """Return the source name from a raw path's first component (e.g. 'chatgpt')."""
     parts = Path(rel_path).parts
@@ -88,17 +96,17 @@ def triage_pending(config: Config, manifest: Manifest) -> dict[str, int]:
 
     Raises
     ------
-    OllamaUnavailableError
-        When Ollama stops answering. Chats not yet decided stay undecided
-        and are sorted on the next run.
+    TriageInterruptedError
+        When Ollama stops answering. ``unsorted_count`` is the chats left
+        undecided; they are sorted on the next run.
     """
     if not config.triage.enabled:
         return {"worthwhile": 0, "review": 0, "skip": 0}
 
     pending = _find_untriaged(config, manifest)
     counts = {"worthwhile": 0, "review": 0, "skip": 0}
+    interruption: TriageInterruptedError | None = None
     interruption_cause: OllamaUnavailableError | None = None
-    interruption_message = ""
     if pending:
         total = len(pending)
         started = now_iso()
@@ -121,14 +129,9 @@ def triage_pending(config: Config, manifest: Manifest) -> dict[str, int]:
                     logger.warning("Skipping triage for %s: %s", rel, exc)
                     continue
                 except OllamaUnavailableError as exc:
-                    waiting = total - idx
-                    if waiting == 1:
-                        detail = "1 chat is waiting to be sorted"
-                    else:
-                        detail = f"{waiting} chats are waiting to be sorted"
-                    interruption_message = f"Ollama stopped responding; {detail}"
-                    logger.warning("%s", interruption_message)
+                    interruption = TriageInterruptedError(total - idx)
                     interruption_cause = exc
+                    logger.warning("%s", interruption)
                     break
                 manifest.record_triage(
                     rel, result.decision.value, result.confidence, result.reason
@@ -151,8 +154,8 @@ def triage_pending(config: Config, manifest: Manifest) -> dict[str, int]:
     moved = move_skips_to_holding(config.raw_dir, manifest.get_triage_decisions())
     if moved:
         logger.info("Moved %d skipped source(s) into holding folder", moved)
-    if interruption_cause is not None:
-        raise OllamaUnavailableError(interruption_message) from interruption_cause
+    if interruption is not None and interruption_cause is not None:
+        raise interruption from interruption_cause
     return counts
 
 
