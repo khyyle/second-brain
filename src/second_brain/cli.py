@@ -9,6 +9,7 @@ from pathlib import Path
 import click
 
 from second_brain.config import Config, load_config
+from second_brain.dependencies import OllamaUnavailableError
 from second_brain.ingestion.manifest import Manifest
 from second_brain.run_record import StageOutcome, exit_code_for, record_run
 from second_brain.status import now_iso
@@ -87,11 +88,10 @@ def _preflight_check() -> None:
 
 
 def _require_ollama(config: Config) -> None:
-    """Fail fast with a clear message when Ollama is not ready.
+    """Fail fast with a clear message when Ollama is not ready at startup.
 
-    Ollama hosts the local models triage and embeddings depend on; the call
-    sites degrade silently without it, so a build could quietly mis-triage or
-    skip clustering. This turns that into an explicit, actionable error.
+    Ollama hosts the local models triage and embeddings depend on. A server
+    that is down before the run starts is an actionable setup error.
     """
     from second_brain.dependencies import check_ollama
 
@@ -265,6 +265,19 @@ def ingest(
                     f"{triaged['review']} review, {triaged['skip']} skip"
                 )
             emit_state(config)
+    except OllamaUnavailableError as exc:
+        # Files parsed before the sort stopped still changed what is staged.
+        emit_state(config)
+        if not watched:
+            record_run(
+                config.data_dir,
+                "ingest",
+                StageOutcome.FAILED,
+                str(exc),
+                {"completed": completed, "failed": failed},
+                started_at,
+            )
+        raise click.ClickException(str(exc)) from exc
     except click.ClickException as exc:
         if not watched:
             record_run(
@@ -471,6 +484,16 @@ def compile(ctx: click.Context, full: bool, dry_run: bool) -> None:
             summary = ", ".join(f"{name} ({count})" for name, count in sorted(domains.items()))
             click.echo(f"Domains: {summary}")
         emit_state(config)
+    except OllamaUnavailableError as exc:
+        record_run(
+            config.data_dir,
+            "compile",
+            StageOutcome.FAILED,
+            str(exc),
+            _EMPTY_COMPILE_COUNTS,
+            started_at,
+        )
+        raise click.ClickException(str(exc)) from exc
     except ModelError as exc:
         record_run(
             config.data_dir,
@@ -583,6 +606,10 @@ def preview_clusters(ctx: click.Context) -> None:
     heartbeat.start()
     try:
         artifact = write_preview(config, manifest, progress=_on_progress)
+    except OllamaUnavailableError as exc:
+        raise click.ClickException(
+            "Ollama stopped responding; the grouping wasn't changed"
+        ) from exc
     finally:
         stop.set()
         heartbeat.join(timeout=2.0)

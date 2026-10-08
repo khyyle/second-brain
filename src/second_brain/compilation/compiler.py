@@ -297,15 +297,15 @@ def run_compilation(
         stats = rebuild_structure(wiki_dir)
         return {**stats, "sources_compiled": 0, **_outcome_fields(StageOutcome.OK, "")}
 
-    # Triage already ran during ingestion (free, local). Here we just
-    # filter to the worthwhile set from the recorded decisions; any
-    # untriaged file (e.g. triage was disabled) passes through.
+    # Triage already ran during ingestion (free, local). Catch up anything
+    # still undecided, then drop review, skip, and chats that never got a
+    # decision so an interrupted sort cannot reach the paid build.
     if config.triage.enabled:
         from second_brain.triage.pipeline import triage_pending, worthwhile_sources
 
         # Catch anything ingested before triage existed.
         triage_pending(config, manifest)
-        new_sources = worthwhile_sources(manifest, new_sources)
+        new_sources = worthwhile_sources(config, manifest, new_sources)
 
     if not new_sources:
         logger.info("Nothing worthwhile to compile")

@@ -14,6 +14,7 @@ from second_brain.clustering import (
 )
 from second_brain.clustering import sources as sources_mod
 from second_brain.config import ClusteringConfig, SearchConfig
+from second_brain.dependencies import OllamaUnavailableError
 from second_brain.mcp_server.embeddings import EmbeddingRole
 
 
@@ -76,7 +77,7 @@ def test_embed_failure_becomes_singleton_not_dropped(
     _write(raw, "chatgpt/a.md", "alpha")
     _write(raw, "chatgpt/b.md", "beta")
 
-    # b fails to embed (e.g. Ollama hiccup) -> must still appear, as a singleton.
+    # b returns no embedding and must still appear, as a singleton.
     monkeypatch.setattr(
         sources_mod,
         "embed_text",
@@ -87,6 +88,20 @@ def test_embed_failure_becomes_singleton_not_dropped(
 
     assert ["chatgpt/b.md"] in clusters
     assert sorted(p for c in clusters for p in c) == sorted(paths)
+
+
+def test_embed_sources_propagates_ollama_unavailable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    raw = tmp_path / "raw"
+    _write(raw, "chatgpt/a.md", "alpha")
+
+    def _raise(text: str, config: SearchConfig, role: EmbeddingRole) -> list[float]:
+        raise OllamaUnavailableError("down")
+
+    monkeypatch.setattr(sources_mod, "embed_text", _raise)
+    with pytest.raises(OllamaUnavailableError):
+        sources_mod.embed_sources(["chatgpt/a.md"], raw, SearchConfig(), signature_chars=100)
 
 
 def test_scoped_clustering_clusters_only_in_scope_lanes(

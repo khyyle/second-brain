@@ -46,6 +46,12 @@ def embed_sources(
         Paths that embedded successfully, aligned with ``vectors``.
     vectors: list[list[float]]
         Their embedding vectors.
+
+    Raises
+    ------
+    OllamaUnavailableError
+        When the embedder cannot serve a request. A partial set is not
+        returned, because a grouping built from it would be wrong.
     """
     embedded: list[str] = []
     vectors: list[list[float]] = []
@@ -130,8 +136,10 @@ def cluster_sources(
     """
     Group related sources into clusters, preserving every source.
 
-    Sources that fail to embed (e.g. Ollama unavailable) are returned as
-    their own singleton clusters, so nothing is dropped from the build.
+    Sources that return no embedding are kept as their own singleton
+    clusters, so one unreadable or oversized source is not dropped. An
+    unavailable embedder raises instead, so grouping does not proceed on
+    a partial set.
 
     Parameters
     ----------

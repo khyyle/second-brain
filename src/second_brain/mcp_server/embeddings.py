@@ -8,6 +8,7 @@ from typing import Literal
 import httpx
 
 from second_brain.config import SearchConfig
+from second_brain.dependencies import OllamaUnavailableError
 
 logger = logging.getLogger(__name__)
 
@@ -42,8 +43,15 @@ def _embed_chunk(
     Returns
     -------
     list[float] | None
-        The embedding vector, or ``None`` if Ollama is unavailable or
-        returns no embedding.
+        The embedding vector, or ``None`` when this text has no usable
+        embedding (including an oversized chunk, which the embedder
+        rejects on its own).
+
+    Raises
+    ------
+    OllamaUnavailableError
+        When the server cannot be reached or the model is not installed.
+        Later chunks would fail the same way.
     """
     try:
         response = httpx.post(
@@ -56,13 +64,24 @@ def _embed_chunk(
         )
         response.raise_for_status()
         embedding = response.json().get("embedding")
+    except httpx.TransportError as exc:
+        logger.debug("Embedding unavailable (%s)", exc)
+        raise OllamaUnavailableError("Ollama could not serve a request") from exc
+    except httpx.HTTPStatusError as exc:
+        logger.debug("Embedding unavailable (%s)", exc)
+        if exc.response.status_code == 404:
+            raise OllamaUnavailableError("Ollama could not serve a request") from exc
+        return None
     except (httpx.HTTPError, ValueError, KeyError) as exc:
         logger.debug("Embedding unavailable (%s)", exc)
         return None
 
     if not embedding:
         return None
-    return [float(value) for value in embedding]
+    try:
+        return [float(value) for value in embedding]
+    except (TypeError, ValueError):
+        return None
 
 
 def embed_text(
@@ -91,8 +110,14 @@ def embed_text(
     Returns
     -------
     list[float] | None
-        The embedding vector, or ``None`` only when every chunk fails
-        (e.g. Ollama is unavailable).
+        The embedding vector, or ``None`` when every chunk fails for this
+        text alone.
+
+    Raises
+    ------
+    OllamaUnavailableError
+        When Ollama cannot serve the request. A dead server is not a
+        per-text failure, so it propagates.
     """
     chunks = [text[i : i + EMBED_CHUNK_CHARS] for i in range(0, len(text), EMBED_CHUNK_CHARS)][
         :EMBED_MAX_CHUNKS

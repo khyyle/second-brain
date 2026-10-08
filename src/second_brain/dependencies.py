@@ -1,9 +1,10 @@
 """Runtime dependency checks for the local model stack.
 
 Ollama hosts the local models the pipeline needs (Gemma for triage, the
-embedding model for semantic search and clustering). It is a hard requirement:
-the individual call sites degrade silently when it is missing, which hides
-setup problems, so this module surfaces a clear, actionable status instead.
+embedding model for semantic search and clustering). It is a hard requirement.
+This module reports whether the server is up and the required models are
+installed before a run starts. A server that stops answering during a run
+raises ``OllamaUnavailableError`` so later work does not continue blindly.
 """
 
 from __future__ import annotations
@@ -15,6 +16,12 @@ import httpx
 from second_brain.config import Config
 
 PROBE_TIMEOUT_SECONDS = 5.0
+
+
+class OllamaUnavailableError(RuntimeError):
+    """Ollama could not serve a request (server unreachable, timed out, or the
+    model is not installed), so every later request in the run would fail the
+    same way."""
 
 
 @dataclass(frozen=True)

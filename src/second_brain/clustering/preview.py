@@ -124,7 +124,7 @@ def _staged_sources(config: Config, manifest: Manifest) -> list[str]:
 
     new_sources = find_new_sources(config, manifest)
     if config.triage.enabled:
-        new_sources = worthwhile_sources(manifest, new_sources)
+        new_sources = worthwhile_sources(config, manifest, new_sources)
     return new_sources
 
 

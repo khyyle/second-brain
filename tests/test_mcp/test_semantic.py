@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from second_brain.config import SearchConfig
+from second_brain.dependencies import OllamaUnavailableError
 from second_brain.mcp_server import embeddings as embeddings_mod
 from second_brain.mcp_server.embeddings import EmbeddingRole
 from second_brain.mcp_server.search import SearchIndex
@@ -102,6 +103,20 @@ def test_semantic_disabled_without_config(tmp_path: Path) -> None:
     index = SearchIndex(tmp_path / "s.db")  # no SearchConfig -> keyword only
     assert index.semantic_enabled is False
     assert index.semantic_search("anything") == []
+
+
+def test_query_embedding_falls_back_to_keyword_search(
+    search_index: SearchIndex, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _index_sample(search_index)
+
+    def _raise(text: str, config: SearchConfig, role: EmbeddingRole) -> list[float]:
+        raise OllamaUnavailableError("down")
+
+    monkeypatch.setattr(embeddings_mod, "embed_text", _raise)
+    assert search_index.semantic_search("gradient") == []
+    hits = search_index.search("penguin")
+    assert any(hit.stem == "penguins" for hit in hits)
 
 
 def test_semantic_returns_empty_when_embeddings_unavailable(

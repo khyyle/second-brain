@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from second_brain.config import SearchConfig
+from second_brain.dependencies import OllamaUnavailableError
 from second_brain.mcp_server import embeddings
 from second_brain.wiki.structure import LINK_KINDS, extract_typed_edges
 
@@ -334,14 +335,19 @@ class SearchIndex:
 
         embedded_count = 0
         for row in pending:
-            vector = embeddings.embed_text(
-                f"{row['title']}\n\n{row['content']}",
-                self._search_config,
-                role="search_document",
-            )
-            if vector is None:
-                # Embedder unavailable; leave the rest pending for next pass.
+            try:
+                vector = embeddings.embed_text(
+                    f"{row['title']}\n\n{row['content']}",
+                    self._search_config,
+                    role="search_document",
+                )
+            except OllamaUnavailableError as exc:
+                # Every later page would fail the same way.
+                logger.debug("Embedding pass stopped: %s", exc)
                 break
+            if vector is None:
+                # Only this page failed; it stays pending for the next pass.
+                continue
             try:
                 with self._vec_conn() as conn:
                     conn.execute("DELETE FROM wiki_vec WHERE stem = ?", (row["stem"],))
@@ -446,7 +452,10 @@ class SearchIndex:
 
         from sqlite_vec import serialize_float32
 
-        vector = embeddings.embed_text(query, self._search_config, role="search_query")
+        try:
+            vector = embeddings.embed_text(query, self._search_config, role="search_query")
+        except OllamaUnavailableError:
+            vector = None
         if vector is None:
             return []
 

@@ -9,6 +9,7 @@ import httpx
 import pytest
 
 from second_brain.config import TriageConfig
+from second_brain.dependencies import OllamaUnavailableError
 from second_brain.triage import gemma
 from second_brain.triage.gemma import (
     TriageDecision,
@@ -84,16 +85,31 @@ def test_skip_decision_passthrough(config: TriageConfig, monkeypatch: pytest.Mon
     assert result.decision == TriageDecision.SKIP
 
 
-def test_fails_open_when_ollama_unavailable(
-    config: TriageConfig, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_transport_error_raises(config: TriageConfig, monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = {"n": 0}
+
     def _raise(*_a, **_k):
+        calls["n"] += 1
         raise httpx.ConnectError("connection refused")
 
     monkeypatch.setattr(gemma.httpx, "post", _raise)
-    result = triage_content("content " * 50, config)
-    assert result.decision == TriageDecision.WORTHWHILE
-    assert result.reason == "triage-unavailable"
+    with pytest.raises(OllamaUnavailableError):
+        triage_content("content " * 50, config)
+    assert calls["n"] == 1
+
+
+@pytest.mark.parametrize("status_code", [404, 500])
+def test_unavailable_status_raises(
+    config: TriageConfig, monkeypatch: pytest.MonkeyPatch, status_code: int
+) -> None:
+    def _raise(*_a, **_k):
+        request = httpx.Request("POST", "http://localhost:11434/api/generate")
+        response = httpx.Response(status_code, request=request)
+        raise httpx.HTTPStatusError("unavailable", request=request, response=response)
+
+    monkeypatch.setattr(gemma.httpx, "post", _raise)
+    with pytest.raises(OllamaUnavailableError):
+        triage_content("content " * 50, config)
 
 
 def test_triage_file_heuristic_skip_avoids_model(
@@ -128,16 +144,17 @@ def test_profile_selects_matching_prompt(monkeypatch: pytest.MonkeyPatch) -> Non
     assert "Document:" in captured["prompt"]
 
 
-def test_retries_on_invalid_then_fails_open(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Malformed model output is retried, then fails open as worthwhile."""
+def test_invalid_json_goes_to_review(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Unparseable model output is retried, then sent to review."""
     calls = {"n": 0}
 
     def _invalid(*_a, **_k):
         calls["n"] += 1
-        return FakeResponse({"response": json.dumps({"decision": "garbage"})})
+        return FakeResponse({"response": "not json"})
 
     monkeypatch.setattr(gemma.httpx, "post", _invalid)
     result = triage_content("content " * 50, TriageConfig())
     assert calls["n"] == gemma.TRIAGE_MAX_ATTEMPTS
-    assert result.decision == TriageDecision.WORTHWHILE
+    assert result.decision == TriageDecision.REVIEW
+    assert result.confidence == 0.0
     assert result.reason == "triage-invalid-output"

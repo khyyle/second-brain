@@ -31,7 +31,7 @@ Bulk chat history is noisy. Conversations can be small talk, one-off lookups, or
 
 Triage only looks at the lanes named in `triage.sources`, which is just ChatGPT by default. A document you dropped yourself never goes through triage at all: dropping it is the curation, so it carries no verdict and flows straight to the build. Chats marked review are copied into `~/second-brain/inbox/` for a manual pass.
 
-Triage is built to never block the pipeline. If Ollama is off, or a chat comes back unscorable, that chat is passed through to the build rather than dropped. If a source vanishes mid-run (you un-ingested it from the app while triage was working), that one source is skipped and the run keeps going.
+Triage never sends an unsorted chat to the build. If Ollama stops responding, triage stops and the remaining chats wait to be sorted on the next run, and a chat the model can't score goes to review for you to decide. If a source vanishes mid-run (you un-ingested it from the app while triage was working), that one source is skipped and the run keeps going.
 
 ### Compile
 

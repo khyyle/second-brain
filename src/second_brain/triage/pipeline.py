@@ -13,6 +13,7 @@ import shutil
 from pathlib import Path
 
 from second_brain.config import Config
+from second_brain.dependencies import OllamaUnavailableError
 from second_brain.ingestion.manifest import Manifest
 from second_brain.status import clear_status, now_iso, write_status
 from second_brain.triage.gemma import TriageDecision, triage_file
@@ -70,6 +71,8 @@ def triage_pending(config: Config, manifest: Manifest) -> dict[str, int]:
     Skipped sources are moved into the holding folder under ``raw/``.
     Writes a status heartbeat so an external reader can show triage
     progress. Safe to call repeatedly: already-decided files are skipped.
+    If Ollama stops answering, the pass stops at that chat. Decisions
+    already recorded still get their follow-up; the rest stay undecided.
 
     Parameters
     ----------
@@ -82,12 +85,20 @@ def triage_pending(config: Config, manifest: Manifest) -> dict[str, int]:
     -------
     dict[str, int]
         Counts keyed by ``"worthwhile"``, ``"review"``, ``"skip"``.
+
+    Raises
+    ------
+    OllamaUnavailableError
+        When Ollama stops answering. Chats not yet decided stay undecided
+        and are sorted on the next run.
     """
     if not config.triage.enabled:
         return {"worthwhile": 0, "review": 0, "skip": 0}
 
     pending = _find_untriaged(config, manifest)
     counts = {"worthwhile": 0, "review": 0, "skip": 0}
+    interruption_cause: OllamaUnavailableError | None = None
+    interruption_message = ""
     if pending:
         total = len(pending)
         started = now_iso()
@@ -109,6 +120,16 @@ def triage_pending(config: Config, manifest: Manifest) -> dict[str, int]:
                     # whole triage pass and stall every later source.
                     logger.warning("Skipping triage for %s: %s", rel, exc)
                     continue
+                except OllamaUnavailableError as exc:
+                    waiting = total - idx
+                    if waiting == 1:
+                        detail = "1 chat is waiting to be sorted"
+                    else:
+                        detail = f"{waiting} chats are waiting to be sorted"
+                    interruption_message = f"Ollama stopped responding; {detail}"
+                    logger.warning("%s", interruption_message)
+                    interruption_cause = exc
+                    break
                 manifest.record_triage(
                     rel, result.decision.value, result.confidence, result.reason
                 )
@@ -130,6 +151,8 @@ def triage_pending(config: Config, manifest: Manifest) -> dict[str, int]:
     moved = move_skips_to_holding(config.raw_dir, manifest.get_triage_decisions())
     if moved:
         logger.info("Moved %d skipped source(s) into holding folder", moved)
+    if interruption_cause is not None:
+        raise OllamaUnavailableError(interruption_message) from interruption_cause
     return counts
 
 
@@ -148,14 +171,19 @@ def _route_review_to_inbox(config: Config, review: list[str]) -> None:
             logger.warning("Could not copy %s to inbox: %s", rel, exc)
 
 
-def worthwhile_sources(manifest: Manifest, sources: list[str]) -> list[str]:
-    """Filter sources to those to compile: all but those triaged skip or review.
+def worthwhile_sources(config: Config, manifest: Manifest, sources: list[str]) -> list[str]:
+    """Filter sources to those a paid build should compile.
 
-    Untriaged sources pass through (fail-open), so nothing is silently dropped
-    when triage was skipped or unavailable.
+    Review and skip decisions are excluded. When triage is enabled, a source
+    in a triaged lane with no decision yet is also excluded, so an interrupted
+    or skipped triage cannot send unsorted chats to a paid build. Sources in
+    untriaged lanes, and every undecided source when triage is disabled, pass
+    through.
 
     Parameters
     ----------
+    config: Config
+        Application configuration (triage scope and whether it is on).
     manifest: Manifest
         Manifest holding triage decisions.
     sources: list[str]
@@ -168,4 +196,13 @@ def worthwhile_sources(manifest: Manifest, sources: list[str]) -> list[str]:
     """
     decisions = manifest.get_triage_decisions()
     held = {TriageDecision.REVIEW.value, TriageDecision.SKIP.value}
-    return [rel for rel in sources if decisions.get(rel) not in held]
+    triaged_lanes = set(config.triage.sources)
+    kept: list[str] = []
+    for rel in sources:
+        decision = decisions.get(rel)
+        if decision in held:
+            continue
+        if config.triage.enabled and decision is None and _source_of(rel) in triaged_lanes:
+            continue
+        kept.append(rel)
+    return kept

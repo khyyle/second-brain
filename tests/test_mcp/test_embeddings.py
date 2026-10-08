@@ -7,9 +7,11 @@ returning None (which would drop the page from semantic search).
 
 from __future__ import annotations
 
+import httpx
 import pytest
 
 from second_brain.config import SearchConfig
+from second_brain.dependencies import OllamaUnavailableError
 from second_brain.mcp_server import embeddings as embeddings_mod
 from second_brain.mcp_server.embeddings import (
     EMBED_CHUNK_CHARS,
@@ -31,6 +33,29 @@ def _patch_chunk(
 
     monkeypatch.setattr(embeddings_mod, "_embed_chunk", fake)
     return seen
+
+
+def test_embed_text_raises_when_ollama_unreachable(
+    monkeypatch: pytest.MonkeyPatch, search_config: SearchConfig
+) -> None:
+    def _raise(*_args: object, **_kwargs: object) -> None:
+        raise httpx.ConnectError("connection refused")
+
+    monkeypatch.setattr(embeddings_mod.httpx, "post", _raise)
+    with pytest.raises(OllamaUnavailableError):
+        embed_text("short", search_config, role="search_query")
+
+
+def test_server_error_for_one_chunk_returns_none(
+    monkeypatch: pytest.MonkeyPatch, search_config: SearchConfig
+) -> None:
+    def _raise(*_args: object, **_kwargs: object) -> None:
+        request = httpx.Request("POST", "http://localhost:11434/api/embeddings")
+        response = httpx.Response(500, request=request)
+        raise httpx.HTTPStatusError("too large", request=request, response=response)
+
+    monkeypatch.setattr(embeddings_mod.httpx, "post", _raise)
+    assert embed_text("short", search_config, role="search_query") is None
 
 
 def test_short_text_single_chunk_unchanged(

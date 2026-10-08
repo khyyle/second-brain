@@ -11,9 +11,10 @@ Two layers:
 2. A Gemma classification over Ollama, used only on content that clears
    the heuristic.
 
-Both degrade gracefully: if Ollama is unreachable the content passes
-through as ``worthwhile`` (fail-open, so nothing is silently dropped),
-while the heuristic still filters obviously-thin content for free.
+The heuristic still filters obviously-thin content when the model is
+down. If Ollama cannot serve a request, that failure propagates so the
+run stops instead of treating unsorted chats as worthwhile. Malformed
+model output is retried, then sent to review for a person to decide.
 """
 
 from __future__ import annotations
@@ -27,6 +28,7 @@ from pathlib import Path
 import httpx
 
 from second_brain.config import TriageConfig
+from second_brain.dependencies import OllamaUnavailableError
 from second_brain.triage.prompts import get_prompt
 
 logger = logging.getLogger(__name__)
@@ -83,7 +85,7 @@ def heuristic_skip(content: str, min_word_count: int) -> bool:
 
 
 def _ollama_generate(prompt: str, config: TriageConfig) -> dict | None:
-    """Call Ollama and return the parsed JSON object, or None on failure.
+    """Call Ollama and return the parsed JSON object.
 
     Parameters
     ----------
@@ -95,8 +97,14 @@ def _ollama_generate(prompt: str, config: TriageConfig) -> dict | None:
     Returns
     -------
     dict | None
-        The model's parsed JSON object, or ``None`` if Ollama is
-        unreachable or its response is not parseable JSON.
+        The model's parsed JSON object, or ``None`` when the response is
+        not parseable JSON or is missing the expected field.
+
+    Raises
+    ------
+    OllamaUnavailableError
+        When the server cannot be reached, times out, or the model is not
+        installed. Later requests in the run would fail the same way.
     """
     payload = {
         "model": config.model,
@@ -112,7 +120,16 @@ def _ollama_generate(prompt: str, config: TriageConfig) -> dict | None:
         )
         response.raise_for_status()
         return json.loads(response.json()["response"])
-    except (httpx.HTTPError, json.JSONDecodeError, KeyError, ValueError) as exc:
+    except httpx.TransportError as exc:
+        logger.debug("Ollama generate failed: %s", exc)
+        raise OllamaUnavailableError("Ollama could not serve a request") from exc
+    except httpx.HTTPStatusError as exc:
+        logger.debug("Ollama generate failed: %s", exc)
+        status_code = exc.response.status_code
+        if status_code == 404 or status_code >= 500:
+            raise OllamaUnavailableError("Ollama could not serve a request") from exc
+        raise
+    except (json.JSONDecodeError, KeyError, ValueError) as exc:
         logger.debug("Ollama generate failed: %s", exc)
         return None
 
@@ -154,12 +171,13 @@ def _interpret(response_json: dict, config: TriageConfig) -> TriageResult | None
 
 
 def triage_content(content: str, config: TriageConfig) -> TriageResult:
-    """Classify content via the configured triage profile, failing open.
+    """Classify content via the configured triage profile.
 
     Uses the prompt profile named by ``config.profile`` and retries once
     on malformed model output (small local models occasionally ignore the
-    JSON format request). On a network error or persistent invalid output
-    it returns a ``WORTHWHILE`` result so nothing is silently dropped.
+    JSON format request). An unavailable server is not retried and is not
+    treated as a pass. When the output is still invalid after the retries,
+    the source goes to review so a person decides.
 
     Parameters
     ----------
@@ -172,26 +190,27 @@ def triage_content(content: str, config: TriageConfig) -> TriageResult:
     -------
     TriageResult
         The classification.
+
+    Raises
+    ------
+    OllamaUnavailableError
+        When Ollama cannot serve the request.
     """
     prompt = f"{get_prompt(config.profile)}\n\nDocument:\n{content[:TRIAGE_TRUNCATE_CHARS]}"
 
     for attempt in range(TRIAGE_MAX_ATTEMPTS):
         response_json = _ollama_generate(prompt, config)
         if response_json is None:
-            logger.warning("Triage unavailable — passing through as worthwhile")
-            return TriageResult(
-                decision=TriageDecision.WORTHWHILE,
-                confidence=0.0,
-                reason="triage-unavailable",
-            )
+            logger.debug("Triage produced invalid output (attempt %d)", attempt + 1)
+            continue
         result = _interpret(response_json, config)
         if result is not None:
             return result
         logger.debug("Triage produced invalid output (attempt %d)", attempt + 1)
 
-    logger.warning("Triage output invalid after retry — passing through as worthwhile")
+    logger.warning("Triage output invalid after retry; sending to review")
     return TriageResult(
-        decision=TriageDecision.WORTHWHILE,
+        decision=TriageDecision.REVIEW,
         confidence=0.0,
         reason="triage-invalid-output",
     )

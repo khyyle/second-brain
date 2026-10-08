@@ -105,7 +105,7 @@ def compute_state(config: Config, manifest: Manifest) -> dict:
         build cost, needs-review and skipped counts, and whether a reviewed
         grouping has drifted from staging.
     """
-    queue = worthwhile_sources(manifest, find_new_sources(config, manifest))
+    queue = worthwhile_sources(config, manifest, find_new_sources(config, manifest))
     work_units = reconcile_work_units(config.data_dir, queue) or [[rel] for rel in queue]
     preview = load_preview(config.data_dir)
     stale = preview is not None and preview_members(preview) != set(queue)

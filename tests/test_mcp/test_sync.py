@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from second_brain.config import SearchConfig
+from second_brain.dependencies import OllamaUnavailableError
 from second_brain.mcp_server import embeddings as embeddings_mod
 from second_brain.mcp_server.embeddings import EmbeddingRole
 from second_brain.mcp_server.search import SearchIndex
@@ -158,6 +159,27 @@ def test_embed_pending_reembeds_changed_page_only(
     search_index.sync_from_wiki(wiki)
     assert search_index.embed_pending() == 1
     assert len(embed_calls) == 1
+
+
+def test_embed_pending_stops_when_ollama_unavailable(
+    tmp_path: Path, search_index: SearchIndex, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    wiki = tmp_path / "wiki"
+    _write(wiki, "alpha", "alpha about cats", _BASE_MTIME)
+    _write(wiki, "beta", "beta about dogs", _BASE_MTIME)
+    search_index.sync_from_wiki(wiki)
+
+    calls = {"n": 0}
+
+    def _embed(text: str, config: SearchConfig, role: EmbeddingRole) -> list[float]:
+        calls["n"] += 1
+        if calls["n"] > 1:
+            raise OllamaUnavailableError("down")
+        return [0.1, 0.2, 0.3]
+
+    monkeypatch.setattr(embeddings_mod, "embed_text", _embed)
+    assert search_index.embed_pending() == 1
+    assert any(hit.stem == "alpha" for hit in search_index.search("cats"))
 
 
 def test_embed_pending_stops_when_embedder_unavailable(

@@ -29,6 +29,19 @@ def test_compute_state_lists_staged_sources(config: Config, manifest: Manifest) 
     assert state["costs"] and all(cost >= 0 for cost in state["costs"].values())
 
 
+def test_compute_state_excludes_undecided_chat(config: Config, manifest: Manifest) -> None:
+    chat = config.raw_dir / "chatgpt"
+    chat.mkdir(parents=True, exist_ok=True)
+    (chat / "chat.md").write_text("body " * 50, encoding="utf-8")
+    _seed(config, "doc.md")
+
+    state = compute_state(config, manifest)
+
+    rels = [entry["rel"] for entry in state["staged"]]
+    assert "chatgpt/chat.md" not in rels
+    assert "documents/doc.md" in rels
+
+
 def test_compute_state_excludes_skipped(config: Config, manifest: Manifest) -> None:
     _seed(config, "a.md", "b.md")
     manifest.record_triage("documents/b.md", "skip", confidence=1.0, reason="manual")

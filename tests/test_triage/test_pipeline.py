@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
 
 from second_brain.config import Config
+from second_brain.dependencies import OllamaUnavailableError
 from second_brain.ingestion.manifest import Manifest
+from second_brain.status import STATUS_FILENAME
 from second_brain.triage import pipeline as pipeline_mod
 from second_brain.triage.gemma import TriageDecision, TriageResult
 
@@ -60,11 +63,36 @@ def test_triage_skips_a_vanished_source(
     assert counts["worthwhile"] == 1
 
 
-def test_untriaged_documents_still_compile_via_fail_open(
-    config: Config, manifest: Manifest
+def test_triage_stops_when_ollama_stops(
+    config: Config, manifest: Manifest, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # A document with no triage decision must remain compilable.
-    _write(config.raw_dir, "documents/doc.md", "doc body")
+    for name in ("a.md", "b.md", "c.md"):
+        _write(config.raw_dir, f"chatgpt/{name}", "body " * 100)
 
-    kept = pipeline_mod.worthwhile_sources(manifest, ["documents/doc.md"])
-    assert kept == ["documents/doc.md"]
+    def fake_triage(path: Path, cfg: object) -> TriageResult:
+        if path.name == "b.md":
+            raise OllamaUnavailableError("down")
+        return TriageResult(decision=TriageDecision.WORTHWHILE, confidence=0.9)
+
+    monkeypatch.setattr(pipeline_mod, "triage_file", fake_triage)
+
+    with pytest.raises(OllamaUnavailableError, match="2 chats are waiting to be sorted"):
+        pipeline_mod.triage_pending(config, manifest)
+
+    decisions = manifest.get_triage_decisions()
+    assert "chatgpt/a.md" in decisions
+    assert "chatgpt/b.md" not in decisions
+    assert "chatgpt/c.md" not in decisions
+    status = json.loads((config.data_dir / STATUS_FILENAME).read_text(encoding="utf-8"))
+    assert status["running"] is False
+
+
+def test_worthwhile_sources_holds_undecided_chats(config: Config, manifest: Manifest) -> None:
+    sources = ["chatgpt/chat.md", "documents/doc.md"]
+
+    assert pipeline_mod.worthwhile_sources(config, manifest, sources) == ["documents/doc.md"]
+
+    disabled = config.model_copy(
+        update={"triage": config.triage.model_copy(update={"enabled": False})}
+    )
+    assert pipeline_mod.worthwhile_sources(disabled, manifest, sources) == sources
