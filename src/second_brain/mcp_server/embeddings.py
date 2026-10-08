@@ -8,7 +8,7 @@ from typing import Literal
 import httpx
 
 from second_brain.config import SearchConfig
-from second_brain.dependencies import OllamaUnavailableError
+from second_brain.ollama import post_to_ollama
 
 logger = logging.getLogger(__name__)
 
@@ -54,24 +54,16 @@ def _embed_chunk(
         Later chunks would fail the same way.
     """
     try:
-        response = httpx.post(
-            f"{config.ollama_host}/api/embeddings",
-            json={
+        body = post_to_ollama(
+            config.ollama_host,
+            "/api/embeddings",
+            {
                 "model": config.embedding_model,
                 "prompt": f"{role}: {text}",
             },
-            timeout=EMBED_TIMEOUT_SECONDS,
+            EMBED_TIMEOUT_SECONDS,
         )
-        response.raise_for_status()
-        embedding = response.json().get("embedding")
-    except httpx.TransportError as exc:
-        logger.debug("Embedding unavailable (%s)", exc)
-        raise OllamaUnavailableError("Ollama could not serve a request") from exc
-    except httpx.HTTPStatusError as exc:
-        logger.debug("Embedding unavailable (%s)", exc)
-        if exc.response.status_code == 404:
-            raise OllamaUnavailableError("Ollama could not serve a request") from exc
-        return None
+        embedding = body.get("embedding")
     except (httpx.HTTPError, ValueError, KeyError) as exc:
         logger.debug("Embedding unavailable (%s)", exc)
         return None

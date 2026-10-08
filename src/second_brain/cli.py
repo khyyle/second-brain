@@ -9,8 +9,8 @@ from pathlib import Path
 import click
 
 from second_brain.config import Config, load_config
-from second_brain.dependencies import OllamaUnavailableError
 from second_brain.ingestion.manifest import Manifest
+from second_brain.ollama import OllamaUnavailableError
 from second_brain.run_record import StageOutcome, exit_code_for, record_run
 from second_brain.status import now_iso
 
@@ -93,7 +93,7 @@ def _require_ollama(config: Config) -> None:
     Ollama hosts the local models triage and embeddings depend on. A server
     that is down before the run starts is an actionable setup error.
     """
-    from second_brain.dependencies import check_ollama
+    from second_brain.ollama import check_ollama
 
     status = check_ollama(config)
     if not status.healthy:
@@ -1046,7 +1046,7 @@ def doctor(ctx: click.Context, as_json: bool) -> None:
     gate on it.
     """
     config: Config = ctx.obj["config"]
-    from second_brain.dependencies import check_ollama
+    from second_brain.ollama import check_ollama
 
     status = check_ollama(config)
 

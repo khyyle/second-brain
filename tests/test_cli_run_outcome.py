@@ -11,7 +11,7 @@ from click.testing import CliRunner, Result
 from second_brain import cli
 from second_brain.clustering.preview import CLUSTERS_FILENAME
 from second_brain.config import Config
-from second_brain.dependencies import OllamaUnavailableError
+from second_brain.ollama import OllamaUnavailableError
 from second_brain.run_record import RUN_RECORD_FILENAME, StageOutcome
 from second_brain.status import STATUS_FILENAME
 

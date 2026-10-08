@@ -8,8 +8,9 @@ from pathlib import Path
 import httpx
 import pytest
 
+from second_brain import ollama
 from second_brain.config import TriageConfig
-from second_brain.dependencies import OllamaUnavailableError
+from second_brain.ollama import OllamaUnavailableError
 from second_brain.triage import gemma
 from second_brain.triage.gemma import (
     TriageDecision,
@@ -59,7 +60,7 @@ def test_heuristic_skips_thin_content() -> None:
 
 def test_triage_content_worthwhile(config: TriageConfig, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
-        gemma.httpx, "post", lambda *a, **k: FakeResponse(_ollama_reply("worthwhile", 0.9))
+        ollama.httpx, "post", lambda *a, **k: FakeResponse(_ollama_reply("worthwhile", 0.9))
     )
     result = triage_content("a substantive document " * 50, config)
     assert result.decision == TriageDecision.WORTHWHILE
@@ -71,7 +72,7 @@ def test_low_confidence_worthwhile_demoted_to_review(
     config: TriageConfig, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(
-        gemma.httpx, "post", lambda *a, **k: FakeResponse(_ollama_reply("worthwhile", 0.3))
+        ollama.httpx, "post", lambda *a, **k: FakeResponse(_ollama_reply("worthwhile", 0.3))
     )
     result = triage_content("content " * 50, config)
     assert result.decision == TriageDecision.REVIEW
@@ -79,7 +80,7 @@ def test_low_confidence_worthwhile_demoted_to_review(
 
 def test_skip_decision_passthrough(config: TriageConfig, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
-        gemma.httpx, "post", lambda *a, **k: FakeResponse(_ollama_reply("skip", 0.95))
+        ollama.httpx, "post", lambda *a, **k: FakeResponse(_ollama_reply("skip", 0.95))
     )
     result = triage_content("content " * 50, config)
     assert result.decision == TriageDecision.SKIP
@@ -92,7 +93,7 @@ def test_transport_error_raises(config: TriageConfig, monkeypatch: pytest.Monkey
         calls["n"] += 1
         raise httpx.ConnectError("connection refused")
 
-    monkeypatch.setattr(gemma.httpx, "post", _raise)
+    monkeypatch.setattr(ollama.httpx, "post", _raise)
     with pytest.raises(OllamaUnavailableError):
         triage_content("content " * 50, config)
     assert calls["n"] == 1
@@ -107,7 +108,7 @@ def test_unavailable_status_raises(
         response = httpx.Response(status_code, request=request)
         raise httpx.HTTPStatusError("unavailable", request=request, response=response)
 
-    monkeypatch.setattr(gemma.httpx, "post", _raise)
+    monkeypatch.setattr(ollama.httpx, "post", _raise)
     with pytest.raises(OllamaUnavailableError):
         triage_content("content " * 50, config)
 
@@ -122,7 +123,7 @@ def test_triage_file_heuristic_skip_avoids_model(
         called = True
         raise AssertionError("model must not be called for thin content")
 
-    monkeypatch.setattr(gemma.httpx, "post", _should_not_run)
+    monkeypatch.setattr(ollama.httpx, "post", _should_not_run)
     f = tmp_path / "thin.md"
     f.write_text("too short")
     result = triage_file(f, config)
@@ -138,7 +139,7 @@ def test_profile_selects_matching_prompt(monkeypatch: pytest.MonkeyPatch) -> Non
         captured["prompt"] = json["prompt"]
         return FakeResponse(_ollama_reply("worthwhile", 0.9))
 
-    monkeypatch.setattr(gemma.httpx, "post", _capture)
+    monkeypatch.setattr(ollama.httpx, "post", _capture)
     triage_content("content " * 50, TriageConfig(profile="technical"))
     assert "STEM researcher" in captured["prompt"]
     assert "Document:" in captured["prompt"]
@@ -152,7 +153,7 @@ def test_invalid_json_goes_to_review(monkeypatch: pytest.MonkeyPatch) -> None:
         calls["n"] += 1
         return FakeResponse({"response": "not json"})
 
-    monkeypatch.setattr(gemma.httpx, "post", _invalid)
+    monkeypatch.setattr(ollama.httpx, "post", _invalid)
     result = triage_content("content " * 50, TriageConfig())
     assert calls["n"] == gemma.TRIAGE_MAX_ATTEMPTS
     assert result.decision == TriageDecision.REVIEW

@@ -28,7 +28,7 @@ from pathlib import Path
 import httpx
 
 from second_brain.config import TriageConfig
-from second_brain.dependencies import OllamaUnavailableError
+from second_brain.ollama import OllamaUnavailableError, post_to_ollama
 from second_brain.triage.prompts import get_prompt
 
 logger = logging.getLogger(__name__)
@@ -113,20 +113,16 @@ def _ollama_generate(prompt: str, config: TriageConfig) -> dict | None:
         "format": "json",
     }
     try:
-        response = httpx.post(
-            f"{config.ollama_host}/api/generate",
-            json=payload,
-            timeout=TRIAGE_TIMEOUT_SECONDS,
+        body = post_to_ollama(
+            config.ollama_host,
+            "/api/generate",
+            payload,
+            TRIAGE_TIMEOUT_SECONDS,
         )
-        response.raise_for_status()
-        return json.loads(response.json()["response"])
-    except httpx.TransportError as exc:
-        logger.debug("Ollama generate failed: %s", exc)
-        raise OllamaUnavailableError("Ollama could not serve a request") from exc
+        return json.loads(body["response"])
     except httpx.HTTPStatusError as exc:
         logger.debug("Ollama generate failed: %s", exc)
-        status_code = exc.response.status_code
-        if status_code == 404 or status_code >= 500:
+        if exc.response.status_code >= 500:
             raise OllamaUnavailableError("Ollama could not serve a request") from exc
         raise
     except (json.JSONDecodeError, KeyError, ValueError) as exc:

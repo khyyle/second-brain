@@ -7,10 +7,10 @@ from pathlib import Path
 import pytest
 
 from second_brain.config import SearchConfig
-from second_brain.dependencies import OllamaUnavailableError
 from second_brain.mcp_server import embeddings as embeddings_mod
 from second_brain.mcp_server.embeddings import EmbeddingRole
 from second_brain.mcp_server.search import SearchIndex
+from second_brain.ollama import OllamaUnavailableError
 
 # Tiny deterministic "embeddings": map keywords to fixed 3-d vectors so
 # nearest-neighbor ordering is predictable without a real model.

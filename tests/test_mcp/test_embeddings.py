@@ -10,8 +10,8 @@ from __future__ import annotations
 import httpx
 import pytest
 
+from second_brain import ollama
 from second_brain.config import SearchConfig
-from second_brain.dependencies import OllamaUnavailableError
 from second_brain.mcp_server import embeddings as embeddings_mod
 from second_brain.mcp_server.embeddings import (
     EMBED_CHUNK_CHARS,
@@ -19,6 +19,7 @@ from second_brain.mcp_server.embeddings import (
     EmbeddingRole,
     embed_text,
 )
+from second_brain.ollama import OllamaUnavailableError
 
 
 def _patch_chunk(
@@ -41,7 +42,7 @@ def test_embed_text_raises_when_ollama_unreachable(
     def _raise(*_args: object, **_kwargs: object) -> None:
         raise httpx.ConnectError("connection refused")
 
-    monkeypatch.setattr(embeddings_mod.httpx, "post", _raise)
+    monkeypatch.setattr(ollama.httpx, "post", _raise)
     with pytest.raises(OllamaUnavailableError):
         embed_text("short", search_config, role="search_query")
 
@@ -54,7 +55,7 @@ def test_server_error_for_one_chunk_returns_none(
         response = httpx.Response(500, request=request)
         raise httpx.HTTPStatusError("too large", request=request, response=response)
 
-    monkeypatch.setattr(embeddings_mod.httpx, "post", _raise)
+    monkeypatch.setattr(ollama.httpx, "post", _raise)
     assert embed_text("short", search_config, role="search_query") is None
 
 
@@ -150,7 +151,7 @@ def test_embed_chunk_prefixes_text_for_role(
         request_json.update(json)
         return FakeResponse()
 
-    monkeypatch.setattr(embeddings_mod.httpx, "post", fake_post)
+    monkeypatch.setattr(ollama.httpx, "post", fake_post)
 
     assert embeddings_mod._embed_chunk("content", search_config, role) is not None
     assert request_json["prompt"] == f"{role}: content"
