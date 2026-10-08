@@ -432,8 +432,8 @@ class SearchIndex:
         """Embedding-based nearest-neighbor search over wiki pages.
 
         Finds pages by meaning rather than keyword overlap. Returns an
-        empty list when the semantic layer is disabled or Ollama is
-        unavailable, so callers can fall back to keyword search.
+        empty list when the semantic layer is disabled or the query has no
+        usable embedding, so callers can fall back to keyword search.
 
         Parameters
         ----------
@@ -446,16 +446,19 @@ class SearchIndex:
         -------
         list[SearchHit]
             Hits ordered by ascending vector distance (closest first).
+
+        Raises
+        ------
+        OllamaUnavailableError
+            When Ollama cannot embed the query, so the caller can say so
+            instead of reporting that nothing matched.
         """
         if not self._semantic or self._search_config is None:
             return []
 
         from sqlite_vec import serialize_float32
 
-        try:
-            vector = embeddings.embed_text(query, self._search_config, role="search_query")
-        except OllamaUnavailableError:
-            vector = None
+        vector = embeddings.embed_text(query, self._search_config, role="search_query")
         if vector is None:
             return []
 

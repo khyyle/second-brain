@@ -10,6 +10,7 @@ from second_brain.config import SearchConfig
 from second_brain.mcp_server import embeddings as embeddings_mod
 from second_brain.mcp_server.embeddings import EmbeddingRole
 from second_brain.mcp_server.search import SearchIndex
+from second_brain.mcp_server.tools import WikiTools
 from second_brain.ollama import OllamaUnavailableError
 
 # Tiny deterministic "embeddings": map keywords to fixed 3-d vectors so
@@ -114,9 +115,27 @@ def test_query_embedding_falls_back_to_keyword_search(
         raise OllamaUnavailableError("down")
 
     monkeypatch.setattr(embeddings_mod, "embed_text", _raise)
-    assert search_index.semantic_search("gradient") == []
+    with pytest.raises(OllamaUnavailableError):
+        search_index.semantic_search("gradient")
     hits = search_index.search("penguin")
     assert any(hit.stem == "penguins" for hit in hits)
+
+
+def test_semantic_tool_tells_agent_to_relay_ollama_outage(
+    tmp_path: Path, search_index: SearchIndex, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _index_sample(search_index)
+    tools = WikiTools(tmp_path / "wiki", tmp_path / "raw", search_index)
+
+    def _raise(text: str, config: SearchConfig, role: EmbeddingRole) -> list[float]:
+        raise OllamaUnavailableError("down")
+
+    monkeypatch.setattr(embeddings_mod, "embed_text", _raise)
+
+    notice = tools.semantic_search("gradient")
+
+    assert notice.startswith("Ollama isn't running")
+    assert "Tell the user" in notice
 
 
 def test_semantic_returns_empty_when_embeddings_unavailable(
