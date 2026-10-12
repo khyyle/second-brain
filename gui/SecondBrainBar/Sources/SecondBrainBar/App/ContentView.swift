@@ -10,6 +10,22 @@ private enum Tab: String, CaseIterable, Identifiable {
     case domains = "Domains"
     case overview = "Overview"
     var id: String { rawValue }
+
+    init(stage: PipelineStage) {
+        switch stage {
+        case .ingest: self = .ingest
+        case .compile: self = .build
+        }
+    }
+
+    /// The pipeline stage whose run outcome this tab owns.
+    var stage: PipelineStage? {
+        switch self {
+        case .ingest: return .ingest
+        case .build: return .compile
+        case .domains, .overview: return nil
+        }
+    }
 }
 
 /// Root popover view.
@@ -30,6 +46,7 @@ struct ContentView: View {
     @State private var ollamaHealth: PipelineRunner.OllamaHealth?
     @EnvironmentObject private var store: PipelineStore
     @EnvironmentObject private var intake: DropIntake
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Namespace private var tabNamespace
 
     var body: some View {
@@ -89,6 +106,16 @@ struct ContentView: View {
     private var main: some View {
         VStack(alignment: .leading, spacing: 10) {
             tabBar
+            if let notice = store.runNotice {
+                let owner = Tab(stage: notice.stage)
+                RunOutcomeBanner(
+                    notice: notice,
+                    tabName: owner.rawValue,
+                    onOpen: { select(owner) },
+                    onDismiss: { store.dismiss(notice) }
+                )
+                .transition(.opacity.combined(with: .move(edge: .top)))
+            }
             if tab == .ingest {
                 BinDropZone(bin: .inbox)
                     .transition(.opacity)
@@ -97,6 +124,11 @@ struct ContentView: View {
             footer
         }
         .padding(14)
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: store.runNotice?.id)
+    }
+
+    private func select(_ target: Tab) {
+        withAnimation(.spring(response: 0.28, dampingFraction: 0.82)) { tab = target }
     }
 
     /// Custom themed segmented control
@@ -120,10 +152,16 @@ struct ContentView: View {
     private func tabSegment(_ t: Tab) -> some View {
         let selected = tab == t
         let badge = badgeCount(for: t)
+        let notice = t.stage.flatMap { store.notice(for: $0) }
         return HStack(spacing: 4) {
             Text(t.rawValue)
                 .font(Theme.Font.body(11.5, weight: selected ? .semibold : .regular))
                 .foregroundStyle(selected ? Theme.Colors.textPrimary : Theme.Colors.textSecondary)
+            if let notice {
+                Image(systemName: notice.symbolName)
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(notice.tint)
+            }
             if let count = badge {
                 Text("\(count)")
                     .font(Theme.Font.meta(9).weight(.semibold))
@@ -144,13 +182,16 @@ struct ContentView: View {
             }
         )
         .contentShape(Rectangle())
-        .onTapGesture {
-            withAnimation(.spring(response: 0.28, dampingFraction: 0.82)) {
-                tab = t
-            }
-        }
+        .onTapGesture { select(t) }
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(badge.map { "\(t.rawValue), \($0) chats need review" } ?? t.rawValue)
+        .accessibilityLabel(tabAccessibilityLabel(t, badge: badge, notice: notice))
+    }
+
+    private func tabAccessibilityLabel(_ t: Tab, badge: Int?, notice: RunNotice?) -> String {
+        var parts = [t.rawValue]
+        if let notice { parts.append(notice.headline) }
+        if let badge { parts.append("\(badge) chats need review") }
+        return parts.joined(separator: ", ")
     }
 
     private func badgeCount(for tab: Tab) -> Int? {

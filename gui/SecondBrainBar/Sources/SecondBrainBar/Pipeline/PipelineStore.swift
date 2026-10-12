@@ -9,12 +9,20 @@ final class PipelineStore: ObservableObject {
     @Published private(set) var status: PipelineStatus?
     @Published private(set) var state: AppState?
     @Published private(set) var stopping = false
+    @Published private(set) var runRecord: RunRecord?
+    /// The `finishedAt` of the last run the user dismissed, per stage. Kept by
+    /// the app so it never writes to the pipeline's own record.
+    @Published private var dismissedRuns: [String: String]
+
+    private static let dismissedRunsKey = "dismissedRunOutcomes"
 
     private let config: AppConfig
     private var cancellable: AnyCancellable?
 
     init(config: AppConfig) {
         self.config = config
+        dismissedRuns = UserDefaults.standard
+            .dictionary(forKey: Self.dismissedRunsKey) as? [String: String] ?? [:]
         refresh()
         // Generate the derived-state file if a run hasn't written one yet, so a
         // fresh launch renders the staged set without waiting for the next run.
@@ -50,9 +58,42 @@ final class PipelineStore: ObservableObject {
         PipelineRunner.requestStop(vaultRoot: config.vaultRoot)
     }
 
+    /// The stage whose run is in progress, if any. Grouping prepares a build.
+    var activeStage: PipelineStage? {
+        guard isActive, let phase = status?.phase else { return nil }
+        switch phase {
+        case "compile", "cluster": return .compile
+        case "ingest", "triage": return .ingest
+        default: return nil
+        }
+    }
+
+    /// The stage's last run, if it ended badly and hasn't been dismissed. A
+    /// running stage is about to replace its record, so its old ending is held
+    /// back.
+    func notice(for stage: PipelineStage) -> RunNotice? {
+        guard stage != activeStage,
+              let run = runRecord?.run(for: stage),
+              run.needsAttention,
+              dismissedRuns[stage.rawValue] != run.finishedAt
+        else { return nil }
+        return RunNotice(stage: stage, run: run)
+    }
+
+    /// The single notice the banner shows. The build wins over ingest because
+    /// it is the stage that spends money.
+    var runNotice: RunNotice? { notice(for: .compile) ?? notice(for: .ingest) }
+
+    func dismiss(_ notice: RunNotice) {
+        dismissedRuns[notice.stage.rawValue] = notice.run.finishedAt
+        UserDefaults.standard.set(dismissedRuns, forKey: Self.dismissedRunsKey)
+    }
+
     private func refresh() {
         status = PipelineStatus.read(from: config.statusFile)
         state = AppState.load(from: config.stateFile)
+        let record = RunRecord.load(from: config.runRecordFile)
+        if record != runRecord { runRecord = record }
         if !isCompiling { stopping = false }
     }
 }
