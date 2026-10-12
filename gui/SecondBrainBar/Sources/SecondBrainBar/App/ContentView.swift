@@ -1,22 +1,13 @@
 import SwiftUI
 
-/// Which pipeline stage the shared scroll area is showing, left to right: the
-/// daily pipeline actions (ingest, build) lead, and the two wiki-state views
-/// (domains, overview) close it out, overview last, as the growth
-/// opportunities and health of the compiled wiki.
+/// The popover's tabs, left to right: the daily pipeline actions (ingest,
+/// build) lead, and the two wiki-state views (domains, overview) close it out.
 private enum Tab: String, CaseIterable, Identifiable {
     case ingest = "Ingest"
     case build = "Build"
     case domains = "Domains"
     case overview = "Overview"
     var id: String { rawValue }
-
-    init(stage: PipelineStage) {
-        switch stage {
-        case .ingest: self = .ingest
-        case .compile: self = .build
-        }
-    }
 
     /// The pipeline stage whose run outcome this tab owns.
     var stage: PipelineStage? {
@@ -103,18 +94,17 @@ struct ContentView: View {
         }
     }
 
+    /// The run notice for the selected tab's own stage, if it has one.
+    private var currentNotice: RunNotice? {
+        tab.stage.flatMap { store.notice(for: $0) }
+    }
+
     private var main: some View {
         VStack(alignment: .leading, spacing: 10) {
             tabBar
-            if let notice = store.runNotice {
-                let owner = Tab(stage: notice.stage)
-                RunOutcomeBanner(
-                    notice: notice,
-                    tabName: owner.rawValue,
-                    onOpen: { select(owner) },
-                    onDismiss: { store.dismiss(notice) }
-                )
-                .transition(.opacity.combined(with: .move(edge: .top)))
+            if let notice = currentNotice {
+                RunOutcomeBanner(notice: notice, onDismiss: { store.dismiss(notice) })
+                    .transition(.opacity.combined(with: .move(edge: .top)))
             }
             if tab == .ingest {
                 BinDropZone(bin: .inbox)
@@ -124,7 +114,7 @@ struct ContentView: View {
             footer
         }
         .padding(14)
-        .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: store.runNotice?.id)
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: currentNotice?.id)
     }
 
     private func select(_ target: Tab) {

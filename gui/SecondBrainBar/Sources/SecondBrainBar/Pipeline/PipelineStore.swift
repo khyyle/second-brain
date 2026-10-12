@@ -80,10 +80,6 @@ final class PipelineStore: ObservableObject {
         return RunNotice(stage: stage, run: run)
     }
 
-    /// The single notice the banner shows. The build wins over ingest because
-    /// it is the stage that spends money.
-    var runNotice: RunNotice? { notice(for: .compile) ?? notice(for: .ingest) }
-
     func dismiss(_ notice: RunNotice) {
         dismissedRuns[notice.stage.rawValue] = notice.run.finishedAt
         UserDefaults.standard.set(dismissedRuns, forKey: Self.dismissedRunsKey)

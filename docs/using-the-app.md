@@ -36,12 +36,6 @@ When the plan looks right, "Build wiki" compiles it. You can "Stop" mid-build: p
 
 If a source can't be compiled cleanly (e.g., the agent fails to finish compilation, or the source is too large for the model to read in one pass), it will be set aside with its relevant wiki edits rolled back. Failed sources are marked "Set aside" along with the reason, and can be recompiled via a retry button. Retried files will be marked ready for the next compilation pass. Importantly, sources that are too large to compile *cannot be retried* and must be split into smaller files first.
 
-## When a run doesn't finish
-
-If an ingest or build ends with a problem, a banner under the tabs says what happened and what to do, for example "Build failed: Your API account is out of credits." A red icon means the run failed. An amber icon means it stopped at the spend cap or left something behind, such as files that failed to ingest or sources set aside. The tab the problem belongs to shows the same icon.
-
-Click the banner to open that tab, or dismiss it. It comes back only if the next run of that stage also has a problem. A build you stop yourself doesn't show a banner.
-
 ## Reading what you built
 
 The wiki is stored in plain Markdown under `~/second-brain/wiki/` and opens directly as an Obsidian vault for visualization and traversal.

@@ -41,7 +41,7 @@ triage:
   ollama_host: http://localhost:11434
   min_word_count: 300            # free heuristic pre-filter
   worthwhile_threshold: 0.6      # Gemma confidence floor for "worthwhile"
-  profile: skip_heavy   # balanced | technical | skip_heavy | 
+  profile: technical   # balanced | technical | skip_heavy | 
                                  # project_heavy | lenient (see triage/prompts.py)
   sources: [chatgpt]             # only these folders are model-triaged; others
                                  # pass through as worthwhile (curated by dropping)
