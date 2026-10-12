@@ -6,14 +6,15 @@ import pytest
 
 from second_brain.llm import ModelErrorKind, classify_status
 
-_UNREACHABLE_REASON = "Couldn't reach the model provider"
-_KEY_REJECTED_REASON = "The API key was rejected"
-_OUT_OF_CREDITS_REASON = "Out of API credits"
-_NO_MODEL_ACCESS_REASON = "The API key doesn't have access to this model"
-_MODEL_UNAVAILABLE_REASON = "This model isn't available to your account"
-_TOO_LARGE_REASON = "The source is too large for the model"
-_RATE_LIMIT_REASON = "The model provider is rate limiting requests"
-_PROVIDER_UNAVAILABLE_REASON = "The model provider is unavailable"
+_UNREACHABLE_REASON = "Couldn't reach the model provider. Check your internet connection."
+_KEY_REJECTED_REASON = "Your API key was rejected. Check it in Settings."
+_OUT_OF_CREDITS_REASON = "Your API account is out of credits."
+_NO_MODEL_ACCESS_REASON = "Your API key doesn't have access to this model."
+_MODEL_UNAVAILABLE_REASON = "This model isn't available to your API account."
+_TOO_LARGE_REASON = "The source is too large for the model."
+_RATE_LIMIT_REASON = "The model provider is rate limiting requests. Try again later."
+_PROVIDER_UNAVAILABLE_REASON = "The model provider is unavailable. Try again later."
+_REJECTED_REASON = "The model provider rejected the request. For details, see logs/pipeline.log."
 
 
 @pytest.mark.parametrize(
@@ -39,15 +40,20 @@ _PROVIDER_UNAVAILABLE_REASON = "The model provider is unavailable"
             "You have reached your specified API usage limits. You will regain access on "
             "2026-11-01 at 00:00 UTC.",
             ModelErrorKind.ACCOUNT,
-            "Reached the API spend limit set on your account",
+            "Your API account reached the spend limit you set.",
         ),
         (
             400,
             "You have reached your specified workspace API usage limits.",
             ModelErrorKind.ACCOUNT,
-            "Reached the API spend limit set on your workspace",
+            "Your API workspace reached the spend limit you set.",
         ),
-        (408, "request timeout", ModelErrorKind.NETWORK, "The model provider timed out"),
+        (
+            408,
+            "request timeout",
+            ModelErrorKind.NETWORK,
+            "The model provider timed out. Try again later.",
+        ),
         (429, "slow down", ModelErrorKind.RATE_LIMIT, _RATE_LIMIT_REASON),
         (529, "overloaded", ModelErrorKind.NETWORK, _PROVIDER_UNAVAILABLE_REASON),
         (504, "timeout_error", ModelErrorKind.NETWORK, _PROVIDER_UNAVAILABLE_REASON),
@@ -55,7 +61,7 @@ _PROVIDER_UNAVAILABLE_REASON = "The model provider is unavailable"
             422,
             "Invalid Parameters",
             ModelErrorKind.REJECTED,
-            "The model provider rejected the request: Invalid Parameters",
+            _REJECTED_REASON,
         ),
         (500, "internal error", ModelErrorKind.NETWORK, _PROVIDER_UNAVAILABLE_REASON),
         (503, "unavailable", ModelErrorKind.NETWORK, _PROVIDER_UNAVAILABLE_REASON),
@@ -63,13 +69,13 @@ _PROVIDER_UNAVAILABLE_REASON = "The model provider is unavailable"
             400,
             "invalid schema",
             ModelErrorKind.REJECTED,
-            "The model provider rejected the request: invalid schema",
+            _REJECTED_REASON,
         ),
         (
             418,
             "I'm a teapot",
             ModelErrorKind.REJECTED,
-            "The model provider rejected the request: I'm a teapot",
+            _REJECTED_REASON,
         ),
     ],
 )
@@ -90,14 +96,10 @@ def test_tier_spend_cap_429_is_an_account_failure_not_a_rate_limit() -> None:
         error_code="enforced_spend_limit_reached",
     )
     assert error.kind is ModelErrorKind.ACCOUNT
-    assert error.reason == "Reached your API account's monthly spend cap"
+    assert error.reason == "Your API account reached its monthly spend limit."
 
 
-def test_rejected_reason_includes_provider_message_trimmed_to_200() -> None:
-    message = "teapot-" + ("x" * 250)
-    error = classify_status(418, f"  {message}  ")
-    assert error.kind is ModelErrorKind.REJECTED
-    assert error.reason.startswith("The model provider rejected the request: teapot-")
-    payload = error.reason.split(": ", 1)[1]
-    assert len(payload) == 200
-    assert payload == message[:200]
+def test_rejected_request_logs_the_provider_message(caplog: pytest.LogCaptureFixture) -> None:
+    error = classify_status(418, "teapot refuses to brew")
+    assert error.reason == _REJECTED_REASON
+    assert "teapot refuses to brew" in caplog.text

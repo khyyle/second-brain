@@ -40,17 +40,19 @@ def test_dismiss_duplicate_is_order_independent_and_idempotent(manifest: Manifes
 
 
 def test_defer_sources_round_trip_and_release(manifest: Manifest) -> None:
-    manifest.defer_sources(["papers/a.md", "papers/b.md"], "did not finish in 20 turns")
+    manifest.defer_sources(["papers/a.md", "papers/b.md"], "did not finish", retryable=True)
     # Re-deferring updates the reason instead of duplicating the row.
-    manifest.defer_sources(["papers/a.md"], "ended without completing")
+    manifest.defer_sources(["papers/a.md"], "too large", retryable=False)
 
     assert manifest.get_deferred_sources() == {
-        "papers/a.md": "ended without completing",
-        "papers/b.md": "did not finish in 20 turns",
+        "papers/a.md": "too large",
+        "papers/b.md": "did not finish",
     }
+    assert manifest.get_unretryable_sources() == {"papers/a.md"}
 
     assert manifest.clear_deferred(["papers/a.md", "papers/missing.md"]) == 1
-    assert manifest.get_deferred_sources() == {"papers/b.md": "did not finish in 20 turns"}
+    assert manifest.get_deferred_sources() == {"papers/b.md": "did not finish"}
+    assert manifest.get_unretryable_sources() == set()
     assert manifest.clear_deferred([]) == 0
 
 
@@ -83,7 +85,7 @@ def test_reingesting_a_source_releases_its_deferral(manifest: Manifest, tmp_path
     source = tmp_path / "notes.md"
     source.write_text("v2 of the notes", encoding="utf-8")
     manifest.mark_processing(source, "documents")
-    manifest.defer_sources(["documents/notes.md"], "did not finish in 20 turns")
+    manifest.defer_sources(["documents/notes.md"], "did not finish", retryable=True)
 
     manifest.mark_complete(source, raw_output="documents/notes.md")
 
@@ -328,3 +330,23 @@ def test_migration_drops_legacy_page_cache_confidence(tmp_path: Path) -> None:
     manifest.put_cached_page("h", "chandra", "md")
     hit = manifest.get_cached_page("h")
     assert hit is not None and hit.raw_markdown == "md"
+
+
+def test_migration_marks_old_too_large_deferrals_unretryable(tmp_path: Path) -> None:
+    db_path = tmp_path / "manifest.db"
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "CREATE TABLE deferred_sources "
+            "(raw_path TEXT PRIMARY KEY, reason TEXT NOT NULL, deferred_at TEXT NOT NULL)"
+        )
+        conn.executemany(
+            "INSERT INTO deferred_sources VALUES (?, ?, ?)",
+            [
+                ("huge.md", "too large to compile in one run (~601k tokens)", "2026-09-30"),
+                ("long.md", "failed to compile within 20 agent turns", "2026-09-30"),
+            ],
+        )
+
+    manifest = Manifest(db_path)
+
+    assert manifest.get_unretryable_sources() == {"huge.md"}

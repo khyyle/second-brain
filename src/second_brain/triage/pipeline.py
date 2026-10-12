@@ -23,11 +23,22 @@ logger = logging.getLogger(__name__)
 
 
 class TriageInterruptedError(OllamaUnavailableError):
-    """Ollama stopped answering partway through sorting chats."""
+    """
+    Ollama stopped answering partway through triaging chats.
 
-    def __init__(self, unsorted_count: int) -> None:
-        super().__init__(f"Ollama stopped answering; {unsorted_count} chats left unsorted")
-        self.unsorted_count = unsorted_count
+    Parameters
+    ----------
+    untriaged_count: int
+        Chats left without a decision
+    """
+
+    def __init__(self, untriaged_count: int) -> None:
+        noun = "chat" if untriaged_count == 1 else "chats"
+        super().__init__(
+            f"Couldn't triage {untriaged_count} {noun} because Ollama isn't responding. "
+            "Start Ollama and try again."
+        )
+        self.untriaged_count = untriaged_count
 
 
 def _source_of(rel_path: str) -> str:
@@ -97,8 +108,7 @@ def triage_pending(config: Config, manifest: Manifest) -> dict[str, int]:
     Raises
     ------
     TriageInterruptedError
-        When Ollama stops answering. ``unsorted_count`` is the chats left
-        undecided; they are sorted on the next run.
+        When Ollama stops answering.
     """
     if not config.triage.enabled:
         return {"worthwhile": 0, "review": 0, "skip": 0}
@@ -179,7 +189,7 @@ def worthwhile_sources(config: Config, manifest: Manifest, sources: list[str]) -
 
     Review and skip decisions are excluded. When triage is enabled, a source
     in a triaged lane with no decision yet is also excluded, so an interrupted
-    or skipped triage cannot send unsorted chats to a paid build. Sources in
+    or skipped triage cannot send untriaged chats to a paid build. Sources in
     untriaged lanes, and every undecided source when triage is disabled, pass
     through.
 

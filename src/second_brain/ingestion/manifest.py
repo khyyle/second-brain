@@ -134,10 +134,12 @@ class Manifest:
                 CREATE TABLE IF NOT EXISTS deferred_sources (
                     raw_path     TEXT PRIMARY KEY,
                     reason       TEXT NOT NULL,
-                    deferred_at  TEXT NOT NULL
+                    deferred_at  TEXT NOT NULL,
+                    retryable    INTEGER NOT NULL DEFAULT 1
                 )
             """)
             self._migrate_add_content_hash(conn)
+            self._migrate_add_deferred_retryable(conn)
 
     @staticmethod
     def _migrate_add_content_hash(conn: sqlite3.Connection) -> None:
@@ -149,6 +151,23 @@ class Manifest:
         cols = {row["name"] for row in conn.execute("PRAGMA table_info(manifest)")}
         if "content_hash" not in cols:
             conn.execute("ALTER TABLE manifest ADD COLUMN content_hash TEXT")
+
+    @staticmethod
+    def _migrate_add_deferred_retryable(conn: sqlite3.Connection) -> None:
+        """Add `deferred_sources.retryable` to pre-existing databases.
+
+        Rows written before the column existed carry only their reason text,
+        and the only sources a retry cannot fix were recorded as "too large".
+        """
+        cols = {row["name"] for row in conn.execute("PRAGMA table_info(deferred_sources)")}
+        if "retryable" in cols:
+            return
+        conn.execute(
+            "ALTER TABLE deferred_sources ADD COLUMN retryable INTEGER NOT NULL DEFAULT 1"
+        )
+        conn.execute(
+            "UPDATE deferred_sources SET retryable = 0 WHERE lower(reason) LIKE 'too large%'"
+        )
 
     @staticmethod
     def _migrate_drop_page_cache_confidence(conn: sqlite3.Connection) -> None:
@@ -625,7 +644,7 @@ class Manifest:
             rows = conn.execute("SELECT raw_path FROM compiled").fetchall()
         return {r["raw_path"] for r in rows}
 
-    def defer_sources(self, raw_paths: list[str], reason: str) -> None:
+    def defer_sources(self, raw_paths: list[str], reason: str, *, retryable: bool) -> None:
         """Record sources as set aside. Re-deferring updates the reason.
 
         Parameters
@@ -634,14 +653,17 @@ class Manifest:
             Paths relative to the raw directory.
         reason: str
             Human-readable cause.
+        retryable: bool
+            Whether building the same source again could succeed.
         """
         now = datetime.now(UTC).isoformat()
         with self._conn() as conn:
             conn.executemany(
-                "INSERT INTO deferred_sources (raw_path, reason, deferred_at) "
-                "VALUES (?, ?, ?) ON CONFLICT(raw_path) DO UPDATE SET "
-                "reason = excluded.reason, deferred_at = excluded.deferred_at",
-                [(path, reason, now) for path in raw_paths],
+                "INSERT INTO deferred_sources (raw_path, reason, deferred_at, retryable) "
+                "VALUES (?, ?, ?, ?) ON CONFLICT(raw_path) DO UPDATE SET "
+                "reason = excluded.reason, deferred_at = excluded.deferred_at, "
+                "retryable = excluded.retryable",
+                [(path, reason, now, int(retryable)) for path in raw_paths],
             )
 
     def get_deferred_sources(self) -> dict[str, str]:
@@ -655,6 +677,20 @@ class Manifest:
         with self._conn() as conn:
             rows = conn.execute("SELECT raw_path, reason FROM deferred_sources").fetchall()
         return {r["raw_path"]: r["reason"] for r in rows}
+
+    def get_unretryable_sources(self) -> set[str]:
+        """Return the deferred sources that building again cannot fix.
+
+        Returns
+        -------
+        set[str]
+            Raw paths that must be split before they can be built.
+        """
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT raw_path FROM deferred_sources WHERE retryable = 0"
+            ).fetchall()
+        return {r["raw_path"] for r in rows}
 
     def clear_deferred(self, raw_paths: list[str]) -> int:
         """Release deferred sources back into the compile queue.

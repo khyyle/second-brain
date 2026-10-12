@@ -16,6 +16,7 @@ from pathlib import Path
 
 import yaml
 
+from second_brain.errors import SecondBrainError
 from second_brain.wiki.repo import commit_all
 from second_brain.wiki.schema import remap_schema_domains
 from second_brain.wiki.structure import (
@@ -27,6 +28,10 @@ from second_brain.wiki.structure import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+class DomainNameError(SecondBrainError):
+    """A rename or merge target can't be used as a domain name."""
 
 
 @dataclass(frozen=True)
@@ -109,11 +114,11 @@ def _validate_target(name: str) -> str:
     """Return a cleaned target domain name or raise on an unusable one."""
     cleaned = name.strip()
     if not cleaned:
-        raise ValueError("Domain name cannot be empty")
+        raise DomainNameError("A domain name can't be empty.")
     if "," in cleaned:
         # Domains are stored comma-joined in the search index; a comma would
         # split one domain into two.
-        raise ValueError("Domain name cannot contain a comma")
+        raise DomainNameError("A domain name can't contain a comma.")
     return cleaned
 
 

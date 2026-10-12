@@ -4,6 +4,7 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
+from second_brain.errors import SecondBrainError
 from second_brain.wiki.slugs import (
     _WIKILINK_RE,
     _mask_protected_spans,
@@ -27,7 +28,7 @@ logger = logging.getLogger(__name__)
 _RECORD_SEPARATOR = "\x1e"
 
 
-class WikiRepoError(Exception):
+class WikiRepoError(SecondBrainError):
     """A wiki git operation could not run or would lose work."""
 
 

@@ -30,7 +30,7 @@ from second_brain.llm import (
     resolve_profile,
 )
 from second_brain.ollama import OllamaUnavailableError
-from second_brain.run_record import StageOutcome
+from second_brain.run_record import CRASH_REASON, StageOutcome
 from second_brain.triage.skipped import purge_skipped
 from second_brain.wiki.structure import rebuild_structure
 
@@ -48,10 +48,7 @@ _SOURCE_TOKENS_PER_EXTRA_ITERATION = 4000
 # The prompt fit, but the reply had no room left in the context window.
 _MODEL_CONTEXT_WINDOW_EXCEEDED = "model_context_window_exceeded"
 
-_UNEXPECTED_ERROR_REASON = "An unexpected error stopped the build; see logs/pipeline.log"
-OLLAMA_BUILD_STOPPED_REASON = (
-    "Build stopped because Ollama isn't responding. Start Ollama and build again."
-)
+OLLAMA_BUILD_STOPPED_REASON = "Ollama stopped responding. Start Ollama and build again."
 
 
 class RunOutcome(Enum):
@@ -146,8 +143,8 @@ def _build_work_units(config: Config, raw_dir: Path, new_sources: list[str]) -> 
 
 def _too_large_reason(estimated_tokens: int) -> str:
     return (
-        f"too large to compile in one run (~{estimated_tokens // 1000}k tokens); "
-        "split it into parts and re-drop"
+        f"Too large to build in one run (about {estimated_tokens // 1000}k tokens). "
+        "Split it into smaller files and add them again."
     )
 
 
@@ -202,12 +199,12 @@ def _source_count(count: int) -> str:
 
 def _set_aside_reason(deferred: int) -> str:
     verb = "was" if deferred == 1 else "were"
-    return f"{_source_count(deferred)} {verb} set aside"
+    return f"{_source_count(deferred)} {verb} set aside."
 
 
 def _spend_cap_reason(left: int) -> str:
     """Sentence for a build the spend cap stopped, including sources still staged."""
-    return f"Reached the spend cap with {_source_count(left)} left"
+    return f"Reached the spend cap per build with {_source_count(left)} left."
 
 
 def _finalize_outcome(
@@ -383,7 +380,9 @@ def run_compilation(
                     config.compilation.provider, config.compilation.model
                 ).context_window_tokens
                 if estimated_tokens > int(window * _INLINE_SOURCE_WINDOW_FRACTION):
-                    manifest.defer_sources(unit, _too_large_reason(estimated_tokens))
+                    manifest.defer_sources(
+                        unit, _too_large_reason(estimated_tokens), retryable=False
+                    )
                     logger.warning(
                         "Deferred %s pre-flight: ~%dk tokens exceeds the %dk-token window",
                         ", ".join(unit),
@@ -415,7 +414,7 @@ def run_compilation(
                     # Caught rather than raised so the group in progress is rolled
                     # back below before the build stops.
                     logger.exception("Compile failed for %s", ", ".join(unit))
-                    result = RunResult(0.0, RunOutcome.FAILED, _UNEXPECTED_ERROR_REASON)
+                    result = RunResult(0.0, RunOutcome.FAILED, CRASH_REASON)
                 if stop_requested(config.data_dir):
                     result = RunResult(result.cost, RunOutcome.STOPPED)
 
@@ -452,7 +451,11 @@ def run_compilation(
                 elif result.outcome in (RunOutcome.EXHAUSTED, RunOutcome.TOO_LARGE):
                     # Retrying unattended would fail the same way and re-bill,
                     # so park the group where the user can see why.
-                    manifest.defer_sources(unit, result.reason)
+                    manifest.defer_sources(
+                        unit,
+                        result.reason,
+                        retryable=result.outcome is RunOutcome.EXHAUSTED,
+                    )
                     logger.warning("Deferred %s: %s", ", ".join(unit), result.reason)
                     deferred_count += len(unit)
         finally:
@@ -605,7 +608,7 @@ def _run_agent(
     total_cache_write_tokens = 0
     cur, tot = progress if progress else (0, 0)
     outcome = RunOutcome.EXHAUSTED
-    outcome_reason = f"failed to compile within {max_iterations} agent turns"
+    outcome_reason = f"The model didn't finish within the {max_iterations}-step limit."
 
     for iteration in range(max_iterations):
         # Honor a cancel between turns (the costly call is below), so a
@@ -682,7 +685,7 @@ def _run_agent(
         # paying for further turns.
         if cost_cap > 0 and base_cost + cost >= cost_cap:
             outcome = RunOutcome.COST_CAPPED
-            outcome_reason = "build cost cap reached"
+            outcome_reason = "Reached the spend cap per build."
             logger.warning(
                 "Build cost cap reached (~$%.2f >= $%.2f) after %d iterations — stopping this run",
                 base_cost + cost,
@@ -720,7 +723,8 @@ def _run_agent(
         if not tool_results:
             # Treat a turn that requested no tools but did not end cleanly
             # as not completed.
-            outcome_reason = f"ended without completing (stop_reason={response.stop_reason})"
+            outcome_reason = "The model stopped before finishing this source."
+            logger.warning("Model stopped early (stop_reason=%s)", response.stop_reason)
             break
 
         messages.append({"role": "user", "content": tool_results})

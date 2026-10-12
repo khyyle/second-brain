@@ -6,8 +6,10 @@ import enum
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 
+from second_brain.errors import SecondBrainError
 
-class PageParseError(RuntimeError):
+
+class PageParseError(SecondBrainError):
     """Raised when a parser fails to extract a page.
 
     A document with any failed page is marked failed at ingest and

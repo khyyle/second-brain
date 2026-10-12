@@ -8,7 +8,7 @@ import pytest
 
 from second_brain.config import Config, SourceConfig
 from second_brain.ingestion.manifest import Manifest
-from second_brain.ingestion.watcher import _batch_scan
+from second_brain.ingestion.watcher import batch_scan
 
 CONTENT = "# Notes\n\nSame bytes in every copy.\n"
 
@@ -43,7 +43,7 @@ def _record_ingested(manifest: Manifest, config: Config, path: Path, raw_output:
 
 def _scan(config: Config, manifest: Manifest) -> list[Path]:
     processed: list[Path] = []
-    _batch_scan(config, manifest, lambda path, _source: processed.append(path))
+    batch_scan(config, manifest, lambda path, _source: processed.append(path))
     return processed
 
 

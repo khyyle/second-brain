@@ -13,7 +13,7 @@ Two layers:
 
 The heuristic still filters obviously-thin content when the model is
 down. If Ollama cannot serve a request, that failure propagates so the
-run stops instead of treating unsorted chats as worthwhile. Malformed
+run stops instead of treating untriaged chats as worthwhile. Malformed
 model output is retried, then sent to review for a person to decide.
 """
 

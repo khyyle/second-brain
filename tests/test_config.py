@@ -82,5 +82,20 @@ def test_load_config_raises_config_error_on_invalid_values(tmp_path: Path) -> No
     }
     config_file.write_text(yaml.dump(invalid_yaml), encoding="utf-8")
 
-    with pytest.raises(ConfigError, match="Invalid configuration"):
+    with pytest.raises(ConfigError) as raised:
         load_config(config_file)
+
+    assert raised.value.reason == (
+        "Invalid setting in config.yaml: compilation.provider must be one of "
+        "anthropic, deepseek, not 'unsupported_llm_provider'."
+    )
+
+
+def test_invalid_yaml_names_the_line(tmp_path: Path) -> None:
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text("triage:\n  profile: [unclosed\n", encoding="utf-8")
+
+    with pytest.raises(ConfigError) as raised:
+        load_config(config_file)
+
+    assert raised.value.reason.startswith("config.yaml isn't valid YAML near line")

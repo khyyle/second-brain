@@ -51,7 +51,7 @@ def test_request_turn_translates_status_402_to_account() -> None:
         )
 
     assert exc_info.value.kind is ModelErrorKind.ACCOUNT
-    assert exc_info.value.reason == "Out of API credits"
+    assert exc_info.value.reason == "Your API account is out of credits."
     assert exc_info.value.__cause__ is error
     assert client.messages.kwargs == {
         "model": "claude-sonnet-4-6",
@@ -107,7 +107,9 @@ def test_request_turn_translates_connection_error_to_network() -> None:
         )
 
     assert exc_info.value.kind is ModelErrorKind.NETWORK
-    assert exc_info.value.reason == "Couldn't reach the model provider"
+    assert exc_info.value.reason == (
+        "Couldn't reach the model provider. Check your internet connection."
+    )
     assert exc_info.value.__cause__ is error
 
 
@@ -120,8 +122,7 @@ def test_require_api_key_raises_account_when_unset(monkeypatch: pytest.MonkeyPat
 
     assert exc_info.value.kind is ModelErrorKind.ACCOUNT
     assert exc_info.value.reason == (
-        "ANTHROPIC_API_KEY is not set. Add your anthropic API key "
-        "in the app's Settings, or to a .env file at the repository root, "
-        "then build again."
+        "ANTHROPIC_API_KEY isn't set. Add the API key in Settings, or in .env "
+        "at the repository root, then build again."
     )
     assert str(exc_info.value) == exc_info.value.reason

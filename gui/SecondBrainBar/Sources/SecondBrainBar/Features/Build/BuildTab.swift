@@ -111,14 +111,11 @@ struct BuildTab: View {
             )
         } else {
             PaginatedList(items: store.staged) { source in
-                // A too-large source re-defers on every retry--splitting the
-                // file is the only fix, so no retry is offered for it.
-                let retryable = source.deferReason.map { !$0.hasPrefix("too large") } ?? false
                 StagedRow(
                     name: source.displayName,
                     sizeText: source.sizeText,
                     deferReason: source.deferReason,
-                    onRetry: retryable ? { retry(source.id) } : nil,
+                    onRetry: source.canRetry ? { retry(source.id) } : nil,
                     isChat: isConversation(source.id),
                     onSkip: isConversation(source.id) ? { skip(source.id) } : nil,
                     onOpen: { openRaw(source.id) },

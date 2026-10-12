@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from second_brain.ingestion.chatgpt_parser import process_chatgpt_export
+from second_brain.ingestion.chatgpt_parser import ExportFormatError, process_chatgpt_export
 
 
 def _write_json(path: Path, payload: object) -> Path:
@@ -48,14 +48,22 @@ def test_non_export_json_is_rejected(tmp_path: Path) -> None:
     """A JSON array that isn't conversations should fail, not no-op silently."""
     export = _write_json(tmp_path / "conversations.json", [{"foo": "bar"}, {"baz": 1}])
 
-    with pytest.raises(ValueError, match="ChatGPT"):
+    with pytest.raises(ExportFormatError, match="has no ChatGPT conversations"):
         process_chatgpt_export(export, tmp_path / "out")
 
 
 def test_json_object_is_rejected(tmp_path: Path) -> None:
     export = _write_json(tmp_path / "conversations.json", {"not": "an array"})
 
-    with pytest.raises(ValueError):
+    with pytest.raises(ExportFormatError, match="isn't a ChatGPT export"):
+        process_chatgpt_export(export, tmp_path / "out")
+
+
+def test_malformed_json_is_rejected(tmp_path: Path) -> None:
+    export = tmp_path / "conversations.json"
+    export.write_text("[{not json", encoding="utf-8")
+
+    with pytest.raises(ExportFormatError, match="isn't valid JSON"):
         process_chatgpt_export(export, tmp_path / "out")
 
 
@@ -63,5 +71,5 @@ def test_array_of_non_objects_is_rejected(tmp_path: Path) -> None:
     """Non-dict entries must not crash; they yield no conversations -> error."""
     export = _write_json(tmp_path / "conversations.json", [1, 2, 3])
 
-    with pytest.raises(ValueError, match="ChatGPT"):
+    with pytest.raises(ExportFormatError, match="has no ChatGPT conversations"):
         process_chatgpt_export(export, tmp_path / "out")

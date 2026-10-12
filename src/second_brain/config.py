@@ -16,11 +16,15 @@ from pydantic import (
     model_validator,
 )
 
+from second_brain.errors import SecondBrainError
 from second_brain.llm import SUPPORTED_MODELS
 
 logger = logging.getLogger(__name__)
 
 _DEFAULT_CONFIG_PATH = Path(__file__).resolve().parent.parent.parent / "config" / "config.yaml"
+DEFAULT_DATA_DIR = Path.home() / "second-brain"
+_PYDANTIC_VALUE_ERROR_PREFIX = "Value error, "
+_PYDANTIC_INPUT_PREFIX = "Input should"
 
 
 def _resolve_path(v: str | Path) -> Path:
@@ -60,7 +64,7 @@ class SourceConfig(BaseModel):
     @classmethod
     def _validate_lane(cls, v: str | None) -> str | None:
         if v is not None and v not in ("chandra", "docling"):
-            raise ValueError(f"force_parse_lane must be 'chandra', 'docling', or null — got '{v}'")
+            raise ValueError(f"must be 'chandra' or 'docling', or left out, not '{v}'")
         return v
 
 
@@ -83,7 +87,7 @@ class ParsingConfig(BaseModel):
     @classmethod
     def _validate_precision(cls, v: str) -> str:
         if v not in ("4bit", "8bit"):
-            raise ValueError(f"chandra_precision must be '4bit' or '8bit', got '{v}'")
+            raise ValueError(f"must be '4bit' or '8bit', not '{v}'")
         return v
 
 
@@ -128,13 +132,13 @@ class CompilationConfig(BaseModel):
     def _validate_provider_model(self) -> CompilationConfig:
         if self.provider not in SUPPORTED_MODELS:
             raise ValueError(
-                f"compilation.provider must be one of {tuple(SUPPORTED_MODELS)}, "
-                f"got '{self.provider}'"
+                f"compilation.provider must be one of {', '.join(SUPPORTED_MODELS)}, "
+                f"not '{self.provider}'"
             )
         if self.model not in SUPPORTED_MODELS[self.provider]:
             raise ValueError(
-                f"compilation.model '{self.model}' is not valid for provider "
-                f"'{self.provider}'; choose one of {SUPPORTED_MODELS[self.provider]}"
+                f"compilation.model must be one of {', '.join(SUPPORTED_MODELS[self.provider])} "
+                f"for {self.provider}, not '{self.model}'"
             )
         return self
 
@@ -188,9 +192,7 @@ class ClusteringConfig(BaseModel):
     @classmethod
     def _validate_algorithm(cls, v: str) -> str:
         if v not in _CLUSTERING_ALGORITHMS:
-            raise ValueError(
-                f"clustering.algorithm must be one of {_CLUSTERING_ALGORITHMS}, got '{v}'"
-            )
+            raise ValueError(f"must be one of {', '.join(_CLUSTERING_ALGORITHMS)}, not '{v}'")
         return v
 
 
@@ -262,7 +264,7 @@ class TriageConfig(BaseModel):
     @classmethod
     def _validate_profile(cls, v: str) -> str:
         if v not in _TRIAGE_PROFILES:
-            raise ValueError(f"triage.profile must be one of {_TRIAGE_PROFILES}, got '{v}'")
+            raise ValueError(f"must be one of {', '.join(_TRIAGE_PROFILES)}, not '{v}'")
         return v
 
 
@@ -278,7 +280,7 @@ class ScheduleConfig(BaseModel):
     def _validate_hours(cls, v: tuple[int, ...]) -> tuple[int, ...]:
         for hour in v:
             if not 0 <= hour <= 23:
-                raise ValueError(f"Hour must be 0-23, got {hour}")
+                raise ValueError(f"must list hours from 0 to 23, not {hour}")
         return v
 
 
@@ -293,7 +295,7 @@ class Config(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    data_dir: Path = Field(default_factory=lambda: Path.home() / "second-brain")
+    data_dir: Path = DEFAULT_DATA_DIR
     sources: dict[str, SourceConfig] = Field(default_factory=dict)
     parsing: ParsingConfig = Field(default_factory=ParsingConfig)
     compilation: CompilationConfig = Field(default_factory=CompilationConfig)
@@ -354,8 +356,55 @@ class Config(BaseModel):
             directory.mkdir(parents=True, exist_ok=True)
 
 
-class ConfigError(Exception):
-    """Raised when config.yaml contains invalid or out-of-range values."""
+class ConfigError(SecondBrainError):
+    """Raised when config.yaml can't be read or holds an invalid setting."""
+
+
+def _describe_invalid_setting(config_name: str, error: ValidationError) -> str:
+    """
+    Phrase the first validation problem as one sentence naming the setting.
+
+    Parameters
+    ----------
+    config_name: str
+        File name shown to the user, such as ``config.yaml``.
+    error: ValidationError
+        Pydantic's report for the loaded YAML.
+
+    Returns
+    -------
+    str
+        For example ``Invalid setting in config.yaml: triage.profile must be
+        one of balanced, technical, not 'x'.``
+    """
+    problem = error.errors()[0]
+    setting = ".".join(str(part) for part in problem["loc"])
+    message = problem["msg"]
+    if message.startswith(_PYDANTIC_VALUE_ERROR_PREFIX):
+        detail = message.removeprefix(_PYDANTIC_VALUE_ERROR_PREFIX)
+    elif message.startswith(_PYDANTIC_INPUT_PREFIX):
+        # Pydantic appends its own restatement after a comma.
+        detail = "should" + message.removeprefix(_PYDANTIC_INPUT_PREFIX).split(",")[0]
+    else:
+        detail = f"is invalid ({message.lower()})"
+    # Checks that span several settings name the one at fault themselves.
+    problem_text = detail if detail.startswith(f"{setting}.") else f"{setting} {detail}"
+    return f"Invalid setting in {config_name}: {problem_text}."
+
+
+def _read_yaml(config_path: Path) -> dict:
+    try:
+        with open(config_path) as config_file:
+            raw = yaml.safe_load(config_file) or {}
+    except yaml.YAMLError as exc:
+        mark = getattr(exc, "problem_mark", None)
+        where = f" near line {mark.line + 1}" if mark is not None else ""
+        raise ConfigError(
+            f"{config_path.name} isn't valid YAML{where}. Fix the file and try again."
+        ) from exc
+    if not isinstance(raw, dict):
+        raise ConfigError(f"{config_path.name} must contain settings written as 'name: value'.")
+    return raw
 
 
 def _merge_user_sources(raw: dict) -> dict:
@@ -368,7 +417,7 @@ def _merge_user_sources(raw: dict) -> dict:
     name doesn't already exist in config.yaml, so the built-in drop
     folders always win.
     """
-    data_dir = Path(str(raw.get("data_dir", "~/second-brain"))).expanduser()
+    data_dir = Path(str(raw.get("data_dir", DEFAULT_DATA_DIR))).expanduser()
     sources_file = data_dir / "sources.json"
     if not sources_file.exists():
         return raw
@@ -417,12 +466,11 @@ def load_config(path: Path | None = None) -> Config:
     Raises
     ------
     ConfigError
-        If the YAML file contains invalid or out-of-range values.
+        If the file isn't valid YAML or holds an invalid setting.
     """
     config_path = path or _DEFAULT_CONFIG_PATH
     if config_path.exists():
-        with open(config_path) as config_file:
-            raw = yaml.safe_load(config_file) or {}
+        raw = _read_yaml(config_path)
     else:
         logger.info("No config file at %s — using defaults", config_path)
         raw = {}
@@ -431,5 +479,6 @@ def load_config(path: Path | None = None) -> Config:
 
     try:
         return Config.model_validate(raw)
-    except ValidationError as e:
-        raise ConfigError(f"Invalid configuration in {config_path}:\n{e}") from e
+    except ValidationError as exc:
+        logger.debug("Validation errors in %s: %s", config_path, exc)
+        raise ConfigError(_describe_invalid_setting(config_path.name, exc)) from exc

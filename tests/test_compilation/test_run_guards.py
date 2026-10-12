@@ -16,7 +16,7 @@ from second_brain.ingestion.manifest import Manifest
 from second_brain.llm import resolve_profile
 from second_brain.mcp_server.tools import WikiTools
 from second_brain.ollama import OllamaUnavailableError
-from second_brain.run_record import StageOutcome
+from second_brain.run_record import CRASH_REASON, StageOutcome
 
 
 class FakeUsage:
@@ -151,7 +151,7 @@ def test_iteration_cap_reports_runaway_stop(
 
     assert client.messages.calls == 3
     assert result.outcome is RunOutcome.EXHAUSTED
-    assert "3 agent turns" in result.reason
+    assert result.reason == "The model didn't finish within the 3-step limit."
 
 
 def test_ollama_outage_during_search_fails_the_unit(
@@ -174,9 +174,7 @@ def test_ollama_outage_during_search_fails_the_unit(
     profile = resolve_profile(config.compilation.provider, config.compilation.model)
     assert client.messages.calls == 1
     assert result.outcome is RunOutcome.FAILED
-    assert result.reason == (
-        "Build stopped because Ollama isn't responding. Start Ollama and build again."
-    )
+    assert result.reason == ("Ollama stopped responding. Start Ollama and build again.")
     assert result.cost == profile.estimate_cost(usage.input_tokens, usage.output_tokens)
 
 
@@ -196,7 +194,7 @@ def test_provider_failure_keeps_partial_cost(
 
     assert client.messages.calls == 2
     assert result.outcome is RunOutcome.PROVIDER_FAILED
-    assert result.reason == "Out of API credits"
+    assert result.reason == "Your API account is out of credits."
     assert result.cost > 0
 
 
@@ -212,7 +210,7 @@ def test_context_window_stop_is_too_large(tmp_path: Path, monkeypatch: pytest.Mo
 
     assert client.messages.calls == 1
     assert result.outcome is RunOutcome.TOO_LARGE
-    assert result.reason.startswith("too large")
+    assert result.reason.startswith("Too large to build in one run")
 
 
 def test_cost_cap_stops_midrun(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -266,7 +264,7 @@ def test_build_stops_when_cost_cap_reached(
     assert runs == ["a.md", "b.md"]
     assert stats["sources_compiled"] == 2
     assert stats["outcome"] is StageOutcome.CAPPED
-    assert stats["reason"] == "Reached the spend cap with 1 source left"
+    assert stats["reason"] == "Reached the spend cap per build with 1 source left."
     assert stats["counts"] == {"completed": 2, "deferred": 0, "left": 1}
 
 
@@ -292,10 +290,11 @@ def test_exhausted_unit_is_deferred_not_compiled(
     stats = compiler.run_compilation(config, manifest)
 
     assert manifest.get_deferred_sources() == {"a.md": "failed to compile within 20 agent turns"}
+    assert manifest.get_unretryable_sources() == set()
     assert manifest.get_compiled_raw_paths() == {"b.md"}
     assert stats["sources_compiled"] == 1
     assert stats["outcome"] is StageOutcome.PARTIAL
-    assert stats["reason"] == "1 source was set aside"
+    assert stats["reason"] == "1 source was set aside."
     assert stats["counts"] == {"completed": 1, "deferred": 1, "left": 0}
 
 
@@ -325,7 +324,7 @@ def test_cost_capped_unit_stays_staged_not_deferred(
     assert runs == ["a.md"]
     assert stats["sources_compiled"] == 0
     assert stats["outcome"] is StageOutcome.CAPPED
-    assert stats["reason"] == "Reached the spend cap with 2 sources left"
+    assert stats["reason"] == "Reached the spend cap per build with 2 sources left."
     assert stats["counts"] == {"completed": 0, "deferred": 0, "left": 2}
     assert manifest.get_compiled_raw_paths() == set()
     assert manifest.get_deferred_sources() == {}
@@ -337,7 +336,7 @@ def test_find_new_sources_excludes_deferred(tmp_path: Path) -> None:
     (config.raw_dir / "a.md").write_text("alpha", encoding="utf-8")
     (config.raw_dir / "b.md").write_text("beta", encoding="utf-8")
 
-    manifest.defer_sources(["b.md"], "failed to compile within 20 agent turns")
+    manifest.defer_sources(["b.md"], "The model didn't finish.", retryable=True)
 
     assert compiler.find_new_sources(config, manifest) == ["a.md"]
 
@@ -372,7 +371,8 @@ def test_over_window_unit_defers_preflight_without_api_call(
     assert stats["sources_compiled"] == 0
     deferred = manifest.get_deferred_sources()
     assert set(deferred) == {"huge.md"}
-    assert "split it into parts" in deferred["huge.md"]
+    assert "Split it into smaller files" in deferred["huge.md"]
+    assert manifest.get_unretryable_sources() == {"huge.md"}
 
 
 def test_unexpected_failure_stops_build_and_keeps_units_staged(
@@ -402,7 +402,7 @@ def test_unexpected_failure_stops_build_and_keeps_units_staged(
     assert len(attempts) == 1
     assert stats["sources_compiled"] == 0
     assert stats["outcome"] is StageOutcome.FAILED
-    assert stats["reason"] == "An unexpected error stopped the build; see logs/pipeline.log"
+    assert stats["reason"] == CRASH_REASON
     assert stats["counts"] == {"completed": 0, "deferred": 0, "left": 2}
     assert manifest.get_deferred_sources() == {}
     assert manifest.get_compiled_raw_paths() == set()
@@ -469,7 +469,7 @@ def test_provider_failure_stops_build_and_keeps_curation(
     assert (config.raw_dir / ".skipped" / "chatgpt" / "junk.md").is_file()
     assert (config.data_dir / ".clusters.json").is_file()
     assert stats["outcome"] is StageOutcome.FAILED
-    assert stats["reason"] == "Out of API credits"
+    assert stats["reason"] == "Your API account is out of credits."
     assert stats["counts"] == {"completed": 0, "deferred": 0, "left": 2}
 
 

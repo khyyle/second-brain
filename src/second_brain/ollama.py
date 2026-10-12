@@ -11,11 +11,12 @@ from dataclasses import dataclass
 import httpx
 
 from second_brain.config import Config
+from second_brain.errors import SecondBrainError
 
 PROBE_TIMEOUT_SECONDS = 5.0
 
 
-class OllamaUnavailableError(RuntimeError):
+class OllamaUnavailableError(SecondBrainError):
     """Ollama could not serve a request (server unreachable, timed out, or the
     model is not installed), so every later request in the run would fail the
     same way."""
@@ -42,16 +43,15 @@ class OllamaStatus:
         """A human-readable, actionable description of the current state."""
         if not self.reachable:
             return (
-                f"Ollama is not running at {self.host}. Start it with 'ollama serve' "
-                "(or open the Ollama app), then try again."
+                f"Ollama isn't running at {self.host}. "
+                "Open the Ollama app or run 'ollama serve', then try again."
             )
         if self.missing_models:
-            pulls = " ; ".join(f"ollama pull {model}" for model in self.missing_models)
-            return (
-                f"Ollama is running but missing required model(s): "
-                f"{', '.join(self.missing_models)}. Pull them with: {pulls}"
-            )
-        return f"Ollama is healthy at {self.host}."
+            noun = "model" if len(self.missing_models) == 1 else "models"
+            models = " and ".join(self.missing_models)
+            pulls = " and ".join(f"'ollama pull {model}'" for model in self.missing_models)
+            return f"Ollama is missing the {noun} {models}. Run {pulls}, then try again."
+        return "Ollama is running with the required models."
 
 
 def required_models(config: Config) -> tuple[str, ...]:

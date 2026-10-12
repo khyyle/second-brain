@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import logging
 from enum import Enum
+
+from second_brain.errors import SecondBrainError
+
+logger = logging.getLogger(__name__)
 
 _BAD_REQUEST_STATUS = 400
 _UNAVAILABLE_MIN_STATUS = 500
-_REJECTED_MESSAGE_LIMIT = 200
 
 # Anthropic's documented way to tell a tier's monthly spend cap apart from a
 # rate limit is by checking if the following string is in the error body
@@ -24,7 +28,7 @@ class ModelErrorKind(Enum):
     REJECTED = "rejected"
 
 
-class ModelError(Exception):
+class ModelError(SecondBrainError):
     """
     A provider failure reported as a kind + a sentence the user can act on.
 
@@ -39,24 +43,23 @@ class ModelError(Exception):
     def __init__(self, kind: ModelErrorKind, reason: str) -> None:
         super().__init__(reason)
         self.kind = kind
-        self.reason = reason
-
-    def __str__(self) -> str:
-        return self.reason
 
 
-_OUT_OF_CREDITS = (ModelErrorKind.ACCOUNT, "Out of API credits")
-_SOURCE_TOO_LARGE = (ModelErrorKind.TOO_LARGE, "The source is too large for the model")
-_SPEND_CAP_REACHED = (ModelErrorKind.ACCOUNT, "Reached your API account's monthly spend cap")
+_OUT_OF_CREDITS = (ModelErrorKind.ACCOUNT, "Your API account is out of credits.")
+_SOURCE_TOO_LARGE = (ModelErrorKind.TOO_LARGE, "The source is too large for the model.")
+_SPEND_CAP_REACHED = (ModelErrorKind.ACCOUNT, "Your API account reached its monthly spend limit.")
 
 _STATUS_FAILURES: dict[int, tuple[ModelErrorKind, str]] = {
-    401: (ModelErrorKind.ACCOUNT, "The API key was rejected"),
+    401: (ModelErrorKind.ACCOUNT, "Your API key was rejected. Check it in Settings."),
     402: _OUT_OF_CREDITS,
-    403: (ModelErrorKind.ACCOUNT, "The API key doesn't have access to this model"),
-    404: (ModelErrorKind.ACCOUNT, "This model isn't available to your account"),
-    408: (ModelErrorKind.NETWORK, "The model provider timed out"),
+    403: (ModelErrorKind.ACCOUNT, "Your API key doesn't have access to this model."),
+    404: (ModelErrorKind.ACCOUNT, "This model isn't available to your API account."),
+    408: (ModelErrorKind.NETWORK, "The model provider timed out. Try again later."),
     413: _SOURCE_TOO_LARGE,
-    429: (ModelErrorKind.RATE_LIMIT, "The model provider is rate limiting requests"),
+    429: (
+        ModelErrorKind.RATE_LIMIT,
+        "The model provider is rate limiting requests. Try again later.",
+    ),
 }
 
 # Anthropic reports several unrelated conditions as 400 invalid_request_error,
@@ -66,11 +69,11 @@ _BAD_REQUEST_FAILURES: tuple[tuple[str, tuple[ModelErrorKind, str]], ...] = (
     ("credit balance", _OUT_OF_CREDITS),
     (
         "specified api usage limits",
-        (ModelErrorKind.ACCOUNT, "Reached the API spend limit set on your account"),
+        (ModelErrorKind.ACCOUNT, "Your API account reached the spend limit you set."),
     ),
     (
         "specified workspace api usage limits",
-        (ModelErrorKind.ACCOUNT, "Reached the API spend limit set on your workspace"),
+        (ModelErrorKind.ACCOUNT, "Your API workspace reached the spend limit you set."),
     ),
     ("prompt is too long", _SOURCE_TOO_LARGE),
 )
@@ -88,8 +91,8 @@ def classify_status(
         HTTP status from the provider, or ``None`` when there was no
         response (connection failure or timeout).
     message: str
-        Provider error text. Used to tell apart 400 responses and for the
-        fallback reason.
+        Provider error text. Used to tell apart 400 responses, and logged
+        when no known failure matches.
     error_code: str | None
         Machine-readable code from the error body's ``details``, when the
         provider sends one.
@@ -107,7 +110,10 @@ def classify_status(
     same client.
     """
     if status_code is None:
-        return ModelError(ModelErrorKind.NETWORK, "Couldn't reach the model provider")
+        return ModelError(
+            ModelErrorKind.NETWORK,
+            "Couldn't reach the model provider. Check your internet connection.",
+        )
     if error_code == _SPEND_CAP_ERROR_CODE:
         return ModelError(*_SPEND_CAP_REACHED)
     if status_code == _BAD_REQUEST_STATUS:
@@ -118,10 +124,12 @@ def classify_status(
     if status_code in _STATUS_FAILURES:
         return ModelError(*_STATUS_FAILURES[status_code])
     if status_code >= _UNAVAILABLE_MIN_STATUS:
-        return ModelError(ModelErrorKind.NETWORK, "The model provider is unavailable")
+        return ModelError(
+            ModelErrorKind.NETWORK, "The model provider is unavailable. Try again later."
+        )
 
-    trimmed = message.strip()[:_REJECTED_MESSAGE_LIMIT]
+    logger.error("Model provider rejected the request (HTTP %s): %s", status_code, message)
     return ModelError(
         ModelErrorKind.REJECTED,
-        f"The model provider rejected the request: {trimmed}",
+        "The model provider rejected the request. For details, see logs/pipeline.log.",
     )

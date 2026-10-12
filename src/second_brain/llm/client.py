@@ -45,9 +45,8 @@ def require_api_key(profile: ProviderProfile) -> None:
     if not os.environ.get(profile.api_key_env):
         raise ModelError(
             ModelErrorKind.ACCOUNT,
-            f"{profile.api_key_env} is not set. Add your {profile.name} API key "
-            "in the app's Settings, or to a .env file at the repository root, "
-            "then build again.",
+            f"{profile.api_key_env} isn't set. Add the API key in Settings, or in .env "
+            "at the repository root, then build again.",
         )
 
 

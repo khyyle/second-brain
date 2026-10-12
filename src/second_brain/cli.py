@@ -8,21 +8,20 @@ from pathlib import Path
 
 import click
 
-from second_brain.config import Config, load_config
+from second_brain.config import DEFAULT_DATA_DIR, Config, ConfigError, load_config
+from second_brain.errors import SecondBrainError
 from second_brain.ingestion.manifest import Manifest
 from second_brain.ollama import OllamaUnavailableError
-from second_brain.run_record import StageOutcome, exit_code_for, record_run
+from second_brain.run_record import CRASH_REASON, StageOutcome, exit_code_for, record_run
 from second_brain.status import now_iso
 
 logger = logging.getLogger(__name__)
 
-_INGEST_CRASH_REASON = "The ingest crashed; see logs/pipeline.log"
-_COMPILE_CRASH_REASON = "The build crashed; see logs/pipeline.log"
-_EMPTY_COMPILE_COUNTS: dict[str, int] = {
-    "completed": 0,
-    "failed": 0,
-    "deferred": 0,
-    "left": 0,
+_EMPTY_INGEST_COUNTS: dict[str, int] = {"completed": 0, "failed": 0}
+_EMPTY_COMPILE_COUNTS: dict[str, int] = {"completed": 0, "deferred": 0, "left": 0}
+_EMPTY_COUNTS_BY_STAGE: dict[str, dict[str, int]] = {
+    "ingest": _EMPTY_INGEST_COUNTS,
+    "compile": _EMPTY_COMPILE_COUNTS,
 }
 
 
@@ -119,31 +118,10 @@ def _ingest_outcome(completed: int, failed: int) -> tuple[StageOutcome, str]:
     if failed == 0:
         return StageOutcome.OK, ""
     noun = "file" if failed == 1 else "files"
-    reason = f"{failed} {noun} failed to ingest"
+    reason = f"{failed} {noun} failed."
     if completed == 0:
         return StageOutcome.FAILED, reason
     return StageOutcome.PARTIAL, reason
-
-
-def _triage_interrupted_reason(unsorted_count: int) -> str:
-    """
-    Phrase the reason sorting stopped with chats still undecided.
-
-    Parameters
-    ----------
-    unsorted_count: int
-        Chats left without a decision.
-
-    Returns
-    -------
-    str
-        A one-sentence reason. One chat is named in the singular.
-    """
-    noun = "chat" if unsorted_count == 1 else "chats"
-    return (
-        f"Couldn't sort {unsorted_count} {noun} because Ollama isn't responding. "
-        "Start Ollama and try again."
-    )
 
 
 def _exit_for_stage(
@@ -188,7 +166,17 @@ def _sync_search_index(config: Config) -> None:
     SearchIndex(config.search_db_path, config.search).sync_from_wiki(config.wiki_dir)
 
 
-@click.group()
+class _CliGroup(click.Group):
+    """Shows an expected failure as its one-line reason instead of a traceback."""
+
+    def invoke(self, ctx: click.Context) -> object:
+        try:
+            return super().invoke(ctx)
+        except SecondBrainError as exc:
+            raise click.ClickException(exc.reason) from exc
+
+
+@click.group(cls=_CliGroup)
 @click.option("--config", "config_path", default=None, help="Path to config.yaml")
 @click.option("-v", "--verbose", is_flag=True, help="Enable debug logging")
 @click.pass_context
@@ -196,7 +184,37 @@ def main(ctx: click.Context, config_path: str | None, verbose: bool) -> None:
     """Second Brain — local knowledge base pipeline."""
     _setup_logging(verbose)
     ctx.ensure_object(dict)
-    ctx.obj["config"] = _load_config(config_path)
+    try:
+        ctx.obj["config"] = _load_config(config_path)
+    except ConfigError as exc:
+        _record_unstartable_run(ctx.invoked_subcommand, exc.reason)
+        raise
+
+
+def _record_unstartable_run(command: str | None, reason: str) -> None:
+    """
+    Record an ingest or build that couldn't start because the config is broken.
+
+    Without a config the vault location is unknown, so the record goes to the
+    default vault, which is the one the app reads.
+
+    Parameters
+    ----------
+    command: str | None
+        The subcommand that was about to run.
+    reason: str
+        Why the config couldn't be loaded.
+    """
+    if command not in _EMPTY_COUNTS_BY_STAGE:
+        return
+    record_run(
+        DEFAULT_DATA_DIR,
+        command,
+        StageOutcome.FAILED,
+        reason,
+        _EMPTY_COUNTS_BY_STAGE[command],
+        now_iso(),
+    )
 
 
 @main.command()
@@ -217,6 +235,7 @@ def ingest(
     drops_only: bool,
 ) -> None:
     """Process pending files from watched directories."""
+    from second_brain.ingestion.dispatch import ingest_file
     from second_brain.ingestion.manifest import Manifest
     from second_brain.state import emit_state
     from second_brain.triage.pipeline import TriageInterruptedError
@@ -226,6 +245,14 @@ def ingest(
     completed = 0
     failed = 0
     watched = False
+
+    def record_failure(reason: str) -> None:
+        # Watch mode never ends on its own, so it has no outcome to record.
+        if watched:
+            return
+        counts = {"completed": completed, "failed": failed}
+        record_run(config.data_dir, "ingest", StageOutcome.FAILED, reason, counts, started_at)
+
     try:
         config.ensure_directories()
         _preflight_check()
@@ -247,7 +274,7 @@ def ingest(
             completed = len(paths)
             emit_state(config)
         elif file_path:
-            ingested = _ingest_single(Path(file_path).expanduser().resolve(), config, manifest)
+            ingested = ingest_file(Path(file_path).expanduser().resolve(), config, manifest)
             if ingested:
                 completed = 1
             else:
@@ -260,19 +287,21 @@ def ingest(
             watch_sources(
                 config,
                 manifest,
-                lambda p, s: _ingest_single(p, config, manifest, source_type=s),
+                lambda path, source_type: ingest_file(
+                    path, config, manifest, source_type=source_type
+                ),
             )
         else:
-            from second_brain.ingestion.watcher import _batch_scan
+            from second_brain.ingestion.watcher import batch_scan
 
             def _process(path: Path, source_type: str) -> None:
                 nonlocal completed, failed
-                if _ingest_single(path, config, manifest, source_type=source_type):
+                if ingest_file(path, config, manifest, source_type=source_type):
                     completed += 1
                 else:
                     failed += 1
 
-            count = _batch_scan(config, manifest, _process, drops_only=drops_only)
+            count = batch_scan(config, manifest, _process, drops_only=drops_only)
             click.echo(f"Processed {count} files")
 
             # Triage runs here (local Gemma, free) rather than at the paid compile
@@ -286,41 +315,14 @@ def ingest(
                     f"{triaged['review']} review, {triaged['skip']} skip"
                 )
             emit_state(config)
-    except TriageInterruptedError as exc:
-        # Files parsed before the sort stopped still changed what is staged.
-        emit_state(config)
-        reason = _triage_interrupted_reason(exc.unsorted_count)
-        if not watched:
-            record_run(
-                config.data_dir,
-                "ingest",
-                StageOutcome.FAILED,
-                reason,
-                {"completed": completed, "failed": failed},
-                started_at,
-            )
-        raise click.ClickException(reason) from exc
-    except click.ClickException as exc:
-        if not watched:
-            record_run(
-                config.data_dir,
-                "ingest",
-                StageOutcome.FAILED,
-                str(exc),
-                {"completed": completed, "failed": failed},
-                started_at,
-            )
+    except SecondBrainError as exc:
+        if isinstance(exc, TriageInterruptedError):
+            # Files parsed before the sort stopped still changed what is staged.
+            emit_state(config)
+        record_failure(exc.reason)
         raise
     except Exception:
-        if not watched:
-            record_run(
-                config.data_dir,
-                "ingest",
-                StageOutcome.FAILED,
-                _INGEST_CRASH_REASON,
-                {"completed": completed, "failed": failed},
-                started_at,
-            )
+        record_failure(CRASH_REASON)
         raise
 
     if watched:
@@ -338,145 +340,6 @@ def ingest(
     _exit_for_stage(ctx, outcome, reason, failure_message=reason)
 
 
-def _ingest_single(
-    file_path: Path,
-    config: Config,
-    manifest: Manifest,
-    source_type: str = "document",
-) -> bool:
-    """
-    Route a single file to the appropriate parser and record the result.
-
-    Parameters
-    ----------
-    file_path: Path
-        Absolute path to the file to ingest.
-    config: Config
-        Application configuration (used for output directories).
-    manifest: Manifest
-        Ingestion manifest to record processing status.
-    source_type: str
-        Source category label (e.g. ``"document"``, ``"chatgpt"``).
-
-    Returns
-    -------
-    bool
-        ``True`` when the file was ingested. ``False`` when it was missing
-        or marked failed. Those cases are recorded and then return, so a
-        raised exception is not the failure signal.
-    """
-    if not file_path.exists():
-        click.echo(f"File not found: {file_path}", err=True)
-        return False
-
-    source_cfg = config.sources.get(source_type)
-    force_lane = source_cfg.force_parse_lane if source_cfg else None
-
-    manifest.mark_processing(file_path, source_type)
-
-    ingested = False
-    try:
-        suffix = file_path.suffix.lower()
-
-        if suffix == ".pdf":
-            from second_brain.ingestion.pdf_handler import process_pdf_sync
-
-            rel = _relative_output_dir(file_path, config)
-            output_dir = config.raw_dir / rel
-            ingest = process_pdf_sync(
-                file_path,
-                output_dir,
-                config,
-                force_lane=force_lane,
-                manifest=manifest,
-            )
-            lane_label = force_lane or "auto"
-            manifest.mark_complete(
-                file_path,
-                parse_lane=lane_label,
-                raw_output=str(ingest.md_path.relative_to(config.raw_dir)),
-                content_hash=ingest.content_hash,
-            )
-            if ingest.cache_stats is not None and ingest.cache_stats.pages_total > 0:
-                stats = ingest.cache_stats
-                click.echo(
-                    f"  cache: {stats.pages_from_cache}/{stats.pages_total} hits"
-                    f" ({stats.pages_ocrd} OCR'd)"
-                )
-            if ingest.content_unchanged:
-                click.echo("  content unchanged — compilation can skip this file")
-            ingested = True
-        elif suffix in (".md", ".txt", ".tex"):
-            from second_brain.ingestion.text_handler import process_text_file
-
-            rel = _relative_output_dir(file_path, config)
-            output_dir = config.raw_dir / rel
-            md_path = process_text_file(file_path, output_dir)
-            manifest.mark_complete(
-                file_path,
-                parse_lane="passthrough",
-                raw_output=str(md_path.relative_to(config.raw_dir)),
-            )
-            ingested = True
-        elif suffix == ".json":
-            from second_brain.ingestion.chatgpt_parser import process_chatgpt_export
-
-            output_dir = config.raw_dir / "chatgpt"
-            paths = process_chatgpt_export(file_path, output_dir)
-            for p in paths:
-                manifest.mark_complete(
-                    file_path,
-                    parse_lane="passthrough",
-                    raw_output=str(p.relative_to(config.raw_dir)),
-                )
-            ingested = True
-        else:
-            click.echo(f"Unsupported file type: {suffix}", err=True)
-            manifest.mark_failed(file_path, f"unsupported type: {suffix}")
-
-    except Exception as e:
-        manifest.mark_failed(file_path, str(e))
-
-        from second_brain.ingestion.pdf_handler import ParserNotAvailableError
-
-        if isinstance(e, ParserNotAvailableError):
-            click.echo(f"SKIP {file_path.name}: {e}", err=True)
-        else:
-            logger.exception("Failed to ingest %s", file_path)
-            click.echo(f"Error processing {file_path.name}: {e}", err=True)
-
-    if ingested:
-        from second_brain.ingestion.watcher import remove_drop_copy
-
-        remove_drop_copy(file_path, config)
-    return ingested
-
-
-def _relative_output_dir(file_path: Path, config: Config) -> str:
-    """
-    Determine the output subdirectory based on which source owns the file.
-
-    Parameters
-    ----------
-    file_path: Path
-        Absolute path to the ingested file.
-    config: Config
-        Application configuration with registered sources.
-
-    Returns
-    -------
-    str
-        Source name if matched, otherwise ``"documents"``.
-    """
-    for name, source in config.sources.items():
-        try:
-            file_path.relative_to(source.path)
-            return name
-        except ValueError:
-            continue
-    return "documents"
-
-
 @main.command()
 @click.option("--full", is_flag=True, help="Force full recompilation")
 @click.option("--dry-run", is_flag=True, help="Show changes without writing")
@@ -485,11 +348,21 @@ def compile(ctx: click.Context, full: bool, dry_run: bool) -> None:
     """Compile new/changed sources into the wiki."""
     from second_brain.compilation.compiler import OLLAMA_BUILD_STOPPED_REASON, run_compilation
     from second_brain.ingestion.manifest import Manifest
-    from second_brain.llm import ModelError
     from second_brain.state import emit_state
 
     config: Config = ctx.obj["config"]
     started_at = now_iso()
+
+    def record_failure(reason: str) -> None:
+        record_run(
+            config.data_dir,
+            "compile",
+            StageOutcome.FAILED,
+            reason,
+            _EMPTY_COMPILE_COUNTS,
+            started_at,
+        )
+
     try:
         config.ensure_directories()
         _require_ollama(config)
@@ -506,45 +379,18 @@ def compile(ctx: click.Context, full: bool, dry_run: bool) -> None:
             summary = ", ".join(f"{name} ({count})" for name, count in sorted(domains.items()))
             click.echo(f"Domains: {summary}")
         emit_state(config)
-    except OllamaUnavailableError as exc:
-        record_run(
-            config.data_dir,
-            "compile",
-            StageOutcome.FAILED,
-            OLLAMA_BUILD_STOPPED_REASON,
-            _EMPTY_COMPILE_COUNTS,
-            started_at,
+    except SecondBrainError as exc:
+        # The low-level Ollama message doesn't say the build stopped or what to do.
+        reason = (
+            OLLAMA_BUILD_STOPPED_REASON if isinstance(exc, OllamaUnavailableError) else exc.reason
         )
-        raise click.ClickException(OLLAMA_BUILD_STOPPED_REASON) from exc
-    except ModelError as exc:
-        record_run(
-            config.data_dir,
-            "compile",
-            StageOutcome.FAILED,
-            exc.reason,
-            _EMPTY_COMPILE_COUNTS,
-            started_at,
-        )
-        raise click.ClickException(exc.reason) from exc
+        record_failure(reason)
+        raise click.ClickException(reason) from exc
     except click.ClickException as exc:
-        record_run(
-            config.data_dir,
-            "compile",
-            StageOutcome.FAILED,
-            str(exc),
-            _EMPTY_COMPILE_COUNTS,
-            started_at,
-        )
+        record_failure(str(exc))
         raise
     except Exception:
-        record_run(
-            config.data_dir,
-            "compile",
-            StageOutcome.FAILED,
-            _COMPILE_CRASH_REASON,
-            _EMPTY_COMPILE_COUNTS,
-            started_at,
-        )
+        record_failure(CRASH_REASON)
         raise
 
     if not dry_run:
@@ -809,10 +655,7 @@ def domain_rename(ctx: click.Context, old: str, new: str) -> None:
     config: Config = ctx.obj["config"]
     from second_brain.wiki.domain_ops import rename_domain
 
-    try:
-        changed = rename_domain(config.wiki_dir, old, new)
-    except ValueError as exc:
-        raise click.ClickException(str(exc)) from exc
+    changed = rename_domain(config.wiki_dir, old, new)
     _sync_search_index(config)
     click.echo(f"Renamed '{old}' to '{new}' across {changed} page(s)")
 
@@ -826,10 +669,7 @@ def domain_merge(ctx: click.Context, dest: str, sources: tuple[str, ...]) -> Non
     config: Config = ctx.obj["config"]
     from second_brain.wiki.domain_ops import merge_domains
 
-    try:
-        changed = merge_domains(config.wiki_dir, list(sources), dest)
-    except ValueError as exc:
-        raise click.ClickException(str(exc)) from exc
+    changed = merge_domains(config.wiki_dir, list(sources), dest)
     _sync_search_index(config)
     click.echo(f"Merged {', '.join(sources)} into '{dest}' across {changed} page(s)")
 
@@ -859,13 +699,10 @@ def wiki() -> None:
 def wiki_log(ctx: click.Context, limit: int) -> None:
     """List the wiki's most recent build commits."""
     config: Config = ctx.obj["config"]
-    from second_brain.wiki.repo import WikiRepoError, count_commits, list_commits
+    from second_brain.wiki.repo import count_commits, list_commits
 
-    try:
-        commits = list_commits(config.wiki_dir, limit)
-        total = count_commits(config.wiki_dir)
-    except WikiRepoError as exc:
-        raise click.ClickException(str(exc)) from exc
+    commits = list_commits(config.wiki_dir, limit)
+    total = count_commits(config.wiki_dir)
     if not commits:
         click.echo("No wiki commits yet.")
         return
@@ -885,7 +722,7 @@ def wiki_log(ctx: click.Context, limit: int) -> None:
 def wiki_rollback(ctx: click.Context, count: int, yes: bool) -> None:
     """Undo the last COUNT wiki build commits and requeue their sources."""
     config: Config = ctx.obj["config"]
-    from second_brain.wiki.repo import WikiRepoError, rollback
+    from second_brain.wiki.repo import rollback
     from second_brain.wiki.structure import rebuild_structure
 
     if not yes:
@@ -894,10 +731,7 @@ def wiki_rollback(ctx: click.Context, count: int, yes: bool) -> None:
             "discarded and their sources recompile on the next build.",
             abort=True,
         )
-    try:
-        sources = rollback(config.wiki_dir, count)
-    except WikiRepoError as exc:
-        raise click.ClickException(str(exc)) from exc
+    sources = rollback(config.wiki_dir, count)
 
     # the wiki records sources as raw/<path>; the manifest keys on <path>
     manifest = Manifest(config.manifest_db_path)
@@ -917,14 +751,11 @@ def wiki_rollback(ctx: click.Context, count: int, yes: bool) -> None:
 def wiki_repair_links(ctx: click.Context, dry_run: bool) -> None:
     """Repoint links to pages that were renamed outside the pipeline."""
     config: Config = ctx.obj["config"]
-    from second_brain.wiki.repo import WikiRepoError, detect_renames, repair_links
+    from second_brain.wiki.repo import detect_renames, repair_links
     from second_brain.wiki.structure import rebuild_structure
 
-    try:
-        mapping = detect_renames(config.wiki_dir)
-        repairs = repair_links(config.wiki_dir, mapping, dry_run=dry_run)
-    except WikiRepoError as exc:
-        raise click.ClickException(str(exc)) from exc
+    mapping = detect_renames(config.wiki_dir)
+    repairs = repair_links(config.wiki_dir, mapping, dry_run=dry_run)
 
     if not mapping:
         click.echo("No renamed pages detected.")
@@ -955,12 +786,9 @@ def wiki_merge(ctx: click.Context, dest: str, sources: tuple[str, ...]) -> None:
     retired pages' provenance and relationships, not their body text.
     """
     config: Config = ctx.obj["config"]
-    from second_brain.wiki.repo import WikiRepoError, merge_pages
+    from second_brain.wiki.repo import merge_pages
 
-    try:
-        repairs = merge_pages(config.wiki_dir, dest, list(sources))
-    except WikiRepoError as exc:
-        raise click.ClickException(str(exc)) from exc
+    repairs = merge_pages(config.wiki_dir, dest, list(sources))
 
     _sync_search_index(config)
     from second_brain.state import emit_state

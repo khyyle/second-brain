@@ -160,7 +160,7 @@ def watch_sources(
         continuously.
     """
     if run_once:
-        _batch_scan(config, manifest, process_callback)
+        batch_scan(config, manifest, process_callback)
         return
 
     observer = Observer()
@@ -241,7 +241,7 @@ def remove_drop_copy(file_path: Path, config: Config) -> None:
         logger.warning("Could not remove drop copy %s: %s", file_path, exc)
 
 
-def _batch_scan(
+def batch_scan(
     config: Config,
     manifest: Manifest,
     process_callback: Callable[[Path, str], None],
@@ -344,7 +344,7 @@ async def batch_scan_async(
     manifest: Manifest,
     process_callback: Callable[[Path, str], None],
 ) -> int:
-    """Async wrapper around :func:`_batch_scan` for pipeline integration.
+    """Async wrapper around :func:`batch_scan` for pipeline integration.
 
     Parameters
     ----------
@@ -361,4 +361,4 @@ async def batch_scan_async(
         Total number of files successfully processed.
     """
     loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(None, _batch_scan, config, manifest, process_callback)
+    return await loop.run_in_executor(None, batch_scan, config, manifest, process_callback)

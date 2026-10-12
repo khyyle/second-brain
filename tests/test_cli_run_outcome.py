@@ -10,11 +10,13 @@ from click.testing import CliRunner, Result
 
 from second_brain import cli
 from second_brain.clustering.preview import CLUSTERS_FILENAME
-from second_brain.config import Config
+from second_brain.config import Config, ConfigError
+from second_brain.ingestion.pdf_handler import ParserNotAvailableError
 from second_brain.ollama import OllamaStatus, OllamaUnavailableError
-from second_brain.run_record import RUN_RECORD_FILENAME, StageOutcome
+from second_brain.run_record import CRASH_REASON, RUN_RECORD_FILENAME, StageOutcome
 from second_brain.status import STATUS_FILENAME
 from second_brain.triage.pipeline import TriageInterruptedError
+from second_brain.wiki.repo import WikiRepoError
 
 
 def _compile_stats(outcome: StageOutcome, reason: str) -> dict[str, object]:
@@ -52,22 +54,22 @@ def test_compile_partial_exits_2_and_records(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     result, record = _invoke_compile(
-        tmp_path, monkeypatch, _compile_stats(StageOutcome.PARTIAL, "1 source was set aside")
+        tmp_path, monkeypatch, _compile_stats(StageOutcome.PARTIAL, "1 source was set aside.")
     )
 
     assert result.exit_code == 2
-    assert "1 source was set aside" in result.output
+    assert "1 source was set aside." in result.output
     assert record["compile"]["outcome"] == "partial"
-    assert record["compile"]["reason"] == "1 source was set aside"
+    assert record["compile"]["reason"] == "1 source was set aside."
     assert record["compile"]["started_at"]
     assert record["compile"]["finished_at"]
 
 
 def test_ingest_outcome_phrases() -> None:
     assert cli._ingest_outcome(2, 0) == (StageOutcome.OK, "")
-    assert cli._ingest_outcome(3, 1) == (StageOutcome.PARTIAL, "1 file failed to ingest")
-    assert cli._ingest_outcome(1, 2) == (StageOutcome.PARTIAL, "2 files failed to ingest")
-    assert cli._ingest_outcome(0, 2) == (StageOutcome.FAILED, "2 files failed to ingest")
+    assert cli._ingest_outcome(3, 1) == (StageOutcome.PARTIAL, "1 file failed.")
+    assert cli._ingest_outcome(1, 2) == (StageOutcome.PARTIAL, "2 files failed.")
+    assert cli._ingest_outcome(0, 2) == (StageOutcome.FAILED, "2 files failed.")
 
 
 def test_ingest_document_does_not_require_ollama(
@@ -98,22 +100,22 @@ def test_ingest_document_does_not_require_ollama(
 
 
 @pytest.mark.parametrize(
-    ("unsorted_count", "reason"),
+    ("untriaged_count", "reason"),
     [
         (
             2,
-            "Couldn't sort 2 chats because Ollama isn't responding. Start Ollama and try again.",
+            "Couldn't triage 2 chats because Ollama isn't responding. Start Ollama and try again.",
         ),
         (
             1,
-            "Couldn't sort 1 chat because Ollama isn't responding. Start Ollama and try again.",
+            "Couldn't triage 1 chat because Ollama isn't responding. Start Ollama and try again.",
         ),
     ],
 )
 def test_ingest_triage_interrupted_exits_1_and_records(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    unsorted_count: int,
+    untriaged_count: int,
     reason: str,
 ) -> None:
     config = Config(data_dir=tmp_path / "vault")
@@ -121,10 +123,10 @@ def test_ingest_triage_interrupted_exits_1_and_records(
     monkeypatch.setattr(cli, "_load_config", lambda _path: config)
     monkeypatch.setattr(cli, "_preflight_check", lambda: None)
     monkeypatch.setattr("second_brain.state.emit_state", emitted.append)
-    monkeypatch.setattr("second_brain.ingestion.watcher._batch_scan", lambda *_args, **_kwargs: 0)
+    monkeypatch.setattr("second_brain.ingestion.watcher.batch_scan", lambda *_args, **_kwargs: 0)
 
     def _triage(*_args: object, **_kwargs: object) -> dict[str, int]:
-        raise TriageInterruptedError(unsorted_count=unsorted_count)
+        raise TriageInterruptedError(untriaged_count=untriaged_count)
 
     monkeypatch.setattr("second_brain.triage.pipeline.triage_pending", _triage)
 
@@ -143,7 +145,7 @@ def test_compile_ollama_unavailable_exits_1_and_records(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     config = Config(data_dir=tmp_path / "vault")
-    reason = "Build stopped because Ollama isn't responding. Start Ollama and build again."
+    reason = "Ollama stopped responding. Start Ollama and build again."
     monkeypatch.setattr(cli, "_load_config", lambda _path: config)
     monkeypatch.setattr(cli, "_require_ollama", lambda _config: None)
     monkeypatch.setattr("second_brain.state.emit_state", lambda _config: None)
@@ -160,7 +162,6 @@ def test_compile_ollama_unavailable_exits_1_and_records(
     assert reason in result.output
     assert record["compile"]["outcome"] == "failed"
     assert record["compile"]["reason"] == reason
-    assert "crashed" not in record["compile"]["reason"]
 
 
 def test_preview_clusters_ollama_unavailable_leaves_preview(
@@ -194,10 +195,97 @@ def test_compile_failed_exits_1_and_records(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     result, record = _invoke_compile(
-        tmp_path, monkeypatch, _compile_stats(StageOutcome.FAILED, "Out of API credits")
+        tmp_path,
+        monkeypatch,
+        _compile_stats(StageOutcome.FAILED, "Your API account is out of credits."),
     )
 
     assert result.exit_code == 1
-    assert "Build stopped: Out of API credits" in result.output
+    assert "Build stopped: Your API account is out of credits." in result.output
     assert record["compile"]["outcome"] == "failed"
-    assert record["compile"]["reason"] == "Out of API credits"
+    assert record["compile"]["reason"] == "Your API account is out of credits."
+
+
+@pytest.mark.parametrize(
+    ("error", "reason"),
+    [
+        (
+            WikiRepoError("git is not installed or not on PATH"),
+            "git is not installed or not on PATH",
+        ),
+        (KeyError("bug"), CRASH_REASON),
+    ],
+)
+def test_compile_records_expected_errors_by_reason_and_bugs_as_crashes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, error: Exception, reason: str
+) -> None:
+    config = Config(data_dir=tmp_path / "vault")
+    monkeypatch.setattr(cli, "_load_config", lambda _path: config)
+    monkeypatch.setattr(cli, "_require_ollama", lambda _config: None)
+
+    def _compile(*_args: object, **_kwargs: object) -> dict[str, object]:
+        raise error
+
+    monkeypatch.setattr("second_brain.compilation.compiler.run_compilation", _compile)
+
+    result = CliRunner().invoke(cli.main, ["compile"])
+    record = json.loads((config.data_dir / RUN_RECORD_FILENAME).read_text(encoding="utf-8"))
+
+    assert result.exit_code == 1
+    assert record["compile"]["outcome"] == "failed"
+    assert record["compile"]["reason"] == reason
+
+
+def test_ingest_records_an_expected_error_by_its_reason(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = Config(data_dir=tmp_path / "vault")
+    reason = "Parser 'docling' requires package docling"
+    monkeypatch.setattr(cli, "_load_config", lambda _path: config)
+    monkeypatch.setattr(cli, "_preflight_check", lambda: None)
+
+    def _scan(*_args: object, **_kwargs: object) -> int:
+        raise ParserNotAvailableError(reason)
+
+    monkeypatch.setattr("second_brain.ingestion.watcher.batch_scan", _scan)
+
+    result = CliRunner().invoke(cli.main, ["ingest"])
+    record = json.loads((config.data_dir / RUN_RECORD_FILENAME).read_text(encoding="utf-8"))
+
+    assert result.exit_code == 1
+    assert reason in result.output
+    assert record["ingest"]["outcome"] == "failed"
+    assert record["ingest"]["reason"] == reason
+
+
+def test_a_broken_config_is_recorded_for_the_app(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    reason = "Invalid setting in config.yaml: triage.profile must be one of balanced, not 'x'."
+    monkeypatch.setattr(cli, "DEFAULT_DATA_DIR", tmp_path)
+
+    def _broken(_path: object) -> Config:
+        raise ConfigError(reason)
+
+    monkeypatch.setattr(cli, "_load_config", _broken)
+
+    result = CliRunner().invoke(cli.main, ["compile"])
+    record = json.loads((tmp_path / RUN_RECORD_FILENAME).read_text(encoding="utf-8"))
+
+    assert result.exit_code == 1
+    assert reason in result.output
+    assert record["compile"]["outcome"] == "failed"
+    assert record["compile"]["reason"] == reason
+
+
+def test_any_command_shows_an_expected_failure_as_its_reason(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = Config(data_dir=tmp_path / "vault")
+    monkeypatch.setattr(cli, "_load_config", lambda _path: config)
+
+    result = CliRunner().invoke(cli.main, ["domain", "rename", "math", " "])
+
+    assert result.exit_code == 1
+    assert "A domain name can't be empty." in result.output
+    assert result.exception is None or isinstance(result.exception, SystemExit)

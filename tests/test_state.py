@@ -86,3 +86,16 @@ def test_compute_state_counts_skipped(config: Config, manifest: Manifest) -> Non
     state = compute_state(config, manifest)
 
     assert state["skipped"] == 1
+
+
+def test_set_aside_sources_say_whether_a_retry_can_help(
+    config: Config, manifest: Manifest
+) -> None:
+    _seed(config, "long.md", "huge.md")
+    manifest.defer_sources(["documents/long.md"], "The model didn't finish.", retryable=True)
+    manifest.defer_sources(["documents/huge.md"], "Too large to build.", retryable=False)
+
+    state = compute_state(config, manifest)
+
+    retryable = {entry["rel"]: entry["retryable"] for entry in state["staged"]}
+    assert retryable == {"documents/huge.md": False, "documents/long.md": True}

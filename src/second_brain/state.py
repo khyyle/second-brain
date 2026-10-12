@@ -41,14 +41,24 @@ def _staged_with_sizes(raw_dir: Path, rels: list[str]) -> list[dict]:
     return sized
 
 
-def _deferred_entries(raw_dir: Path, deferred: dict[str, str]) -> list[dict]:
-    """Staged-list entries for parked sources, each carrying its reason."""
+def _deferred_entries(
+    raw_dir: Path, deferred: dict[str, str], unretryable: set[str]
+) -> list[dict]:
+    """Staged-list entries for parked sources, each with its reason and whether
+    a retry could succeed."""
     entries: list[dict] = []
     for rel, reason in sorted(deferred.items()):
         path = raw_dir / rel
         if not path.exists():
             continue
-        entries.append({"rel": rel, "bytes": path.stat().st_size, "defer_reason": reason})
+        entries.append(
+            {
+                "rel": rel,
+                "bytes": path.stat().st_size,
+                "defer_reason": reason,
+                "retryable": rel not in unretryable,
+            }
+        )
     return entries
 
 
@@ -110,7 +120,7 @@ def compute_state(config: Config, manifest: Manifest) -> dict:
     preview = load_preview(config.data_dir)
     stale = preview is not None and preview_members(preview) != set(queue)
     staged = _staged_with_sizes(config.raw_dir, queue) + _deferred_entries(
-        config.raw_dir, manifest.get_deferred_sources()
+        config.raw_dir, manifest.get_deferred_sources(), manifest.get_unretryable_sources()
     )
     needs_review, skipped = _triage_counts(config.raw_dir, manifest.get_triage_decisions())
     return {

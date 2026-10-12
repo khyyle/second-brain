@@ -7,11 +7,17 @@ import logging
 from datetime import UTC, datetime
 from pathlib import Path
 
+from second_brain.errors import SecondBrainError
 from second_brain.parsing.output import write_parse_output
 from second_brain.parsing.provider import ParseBlock, ParseLane, ParseResult
 from second_brain.wiki.slugs import slugify
 
 logger = logging.getLogger(__name__)
+
+
+class ExportFormatError(SecondBrainError):
+    """A dropped file or folder is not a readable ChatGPT export."""
+
 
 # Cap source slugs so nested dirs + the conversation-ID suffix stay under the
 # macOS 1024-byte path limit.
@@ -188,16 +194,18 @@ def _resolve_conversation_files(export_path: Path) -> list[Path]:
 
     Raises
     ------
-    ValueError
-        If *export_path* is not a ``.json`` file or directory.
-    FileNotFoundError
-        If no conversation files are found.
+    ExportFormatError
+        If *export_path* is not a ``.json`` file or a folder holding
+        ``conversations.json`` or ``conversations-*.json``.
     """
     if export_path.suffix == ".json" and export_path.is_file():
         return [export_path]
 
     if not export_path.is_dir():
-        raise ValueError(f"Expected .json file or directory, got: {export_path}")
+        raise ExportFormatError(
+            f"{export_path.name} isn't a ChatGPT export. "
+            "Choose the .json file or the export folder."
+        )
 
     single = export_path / "conversations.json"
     if single.exists():
@@ -207,7 +215,7 @@ def _resolve_conversation_files(export_path: Path) -> list[Path]:
     if split_files:
         return split_files
 
-    raise FileNotFoundError(f"No conversations.json or conversations-*.json in {export_path}")
+    raise ExportFormatError(f"No conversations.json found in {export_path.name}.")
 
 
 def process_chatgpt_export(
@@ -234,21 +242,21 @@ def process_chatgpt_export(
 
     Raises
     ------
-    ValueError
-        If *export_path* is not a ``.json`` file or directory, a file is
-        not a JSON array, or no conversations could be parsed (i.e. it is
-        not a ChatGPT export).
-    FileNotFoundError
-        If ``conversations.json`` cannot be located.
+    ExportFormatError
+        If the export can't be located, a file isn't valid JSON or a JSON
+        array, or no conversations could be parsed.
     """
     json_paths = _resolve_conversation_files(export_path)
 
     conversations: list[dict] = []
     for json_path in json_paths:
-        with open(json_path, encoding="utf-8") as json_file:
-            parsed = json.load(json_file)
+        try:
+            with open(json_path, encoding="utf-8") as json_file:
+                parsed = json.load(json_file)
+        except json.JSONDecodeError as exc:
+            raise ExportFormatError(f"{json_path.name} isn't valid JSON.") from exc
         if not isinstance(parsed, list):
-            raise ValueError(f"Expected a JSON array in {json_path.name}")
+            raise ExportFormatError(f"{json_path.name} isn't a ChatGPT export.")
         conversations.extend(parsed)
 
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -273,10 +281,7 @@ def process_chatgpt_export(
     # ChatGPT export. Fail loudly so it surfaces for the user rather than
     # vanishing as a silent no-op.
     if not output_paths:
-        raise ValueError(
-            f"No conversations found in {export_path.name} — "
-            "expected a ChatGPT conversations export"
-        )
+        raise ExportFormatError(f"{export_path.name} has no ChatGPT conversations.")
 
     logger.info(
         "Parsed %d conversations (%d skipped) from %s",

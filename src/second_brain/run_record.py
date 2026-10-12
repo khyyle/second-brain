@@ -19,6 +19,7 @@ from second_brain.status import now_iso
 logger = logging.getLogger(__name__)
 
 RUN_RECORD_FILENAME = ".last-run.json"
+CRASH_REASON = "An unexpected error occurred. For details, see logs/pipeline.log."
 
 
 class StageOutcome(Enum):
@@ -109,4 +110,4 @@ def record_run(
         temp_path.write_text(json.dumps(record), encoding="utf-8")
         temp_path.replace(path)
     except OSError as exc:
-        logger.debug("Could not write run record: %s", exc)
+        logger.warning("Could not write run record: %s", exc)

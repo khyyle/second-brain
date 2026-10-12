@@ -25,6 +25,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from second_brain.config import Config
+from second_brain.errors import SecondBrainError
 from second_brain.ingestion.manifest import Manifest
 from second_brain.parsing.chandra_parser import (
     PAGE_SEPARATOR,
@@ -48,7 +49,7 @@ _INSTALL_HINTS = {
 }
 
 
-class ParserNotAvailableError(RuntimeError):
+class ParserNotAvailableError(SecondBrainError):
     """Raised when a required parser package is not installed."""
 
 

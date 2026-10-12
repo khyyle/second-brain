@@ -30,7 +30,10 @@ def test_unreachable_server(config: Config, monkeypatch: pytest.MonkeyPatch) -> 
     assert not status.reachable
     assert not status.healthy
     assert status.missing_models == status.required_models
-    assert "not running" in status.message()
+    assert status.message() == (
+        f"Ollama isn't running at {status.host}. "
+        "Open the Ollama app or run 'ollama serve', then try again."
+    )
 
 
 def test_healthy_when_all_models_present(config: Config, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -54,7 +57,10 @@ def test_reports_missing_model(config: Config, monkeypatch: pytest.MonkeyPatch) 
     assert status.reachable
     assert not status.healthy
     assert status.missing_models == ("nomic-embed-text",)
-    assert "missing required model" in status.message()
+    assert status.message() == (
+        "Ollama is missing the model nomic-embed-text. "
+        "Run 'ollama pull nomic-embed-text', then try again."
+    )
 
 
 def test_wrong_gemma_tag_is_missing(config: Config, monkeypatch: pytest.MonkeyPatch) -> None:

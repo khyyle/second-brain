@@ -79,7 +79,7 @@ def test_triage_stops_when_ollama_stops(
     with pytest.raises(pipeline_mod.TriageInterruptedError) as raised:
         pipeline_mod.triage_pending(config, manifest)
 
-    assert raised.value.unsorted_count == 2
+    assert raised.value.untriaged_count == 2
     assert isinstance(raised.value.__cause__, OllamaUnavailableError)
 
     decisions = manifest.get_triage_decisions()

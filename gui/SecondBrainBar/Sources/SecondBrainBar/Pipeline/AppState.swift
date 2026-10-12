@@ -27,6 +27,7 @@ struct AppState: Decodable {
         let rel: String
         let bytes: Int64
         let defer_reason: String?
+        let retryable: Bool?
     }
 
     init(from decoder: Decoder) throws {
@@ -34,7 +35,11 @@ struct AppState: Decodable {
         staged = try container.decode([RawStaged].self, forKey: .staged).map { raw in
             let stem = ((raw.rel as NSString).lastPathComponent as NSString).deletingPathExtension
             return StagedSource(
-                id: raw.rel, displayName: stem, bytes: raw.bytes, deferReason: raw.defer_reason
+                id: raw.rel,
+                displayName: stem,
+                bytes: raw.bytes,
+                deferReason: raw.defer_reason,
+                canRetry: raw.retryable ?? false
             )
         }
         builtCount = try container.decode(Int.self, forKey: .builtCount)
@@ -58,6 +63,9 @@ struct StagedSource: Identifiable, Hashable {
     let displayName: String
     let bytes: Int64
     var deferReason: String? = nil
+    /// Whether a set-aside source could build on a retry. Too-large sources
+    /// can't; only splitting the file helps.
+    var canRetry = false
 
     var sizeText: String {
         ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
