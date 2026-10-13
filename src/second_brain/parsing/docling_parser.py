@@ -18,6 +18,10 @@ from second_brain.parsing.provider import (
 
 logger = logging.getLogger(__name__)
 
+# Currently profiled to run at ~0.4 s per formula. Note that the CPU version
+# of this takes 40s/formula, so MLX formats should be preferred.
+FORMULA_MODEL_MLX_WEIGHTS = "mlx-community/CodeFormulaV2-mlx-q8"
+
 _BLOCK_TYPE_MAP = {
     "paragraph": "text",
     "heading": "heading",
@@ -45,9 +49,25 @@ class DoclingParser(DocumentParser):
         if self._converter is not None:
             return self._converter
 
-        from docling.document_converter import DocumentConverter
+        from docling.datamodel.base_models import InputFormat
+        from docling.datamodel.pipeline_options import CodeFormulaVlmOptions, PdfPipelineOptions
+        from docling.datamodel.stage_model_specs import EngineModelConfig, VlmEngineType
+        from docling.document_converter import DocumentConverter, PdfFormatOption
 
-        self._converter = DocumentConverter()
+        formula_options = CodeFormulaVlmOptions.from_preset("codeformulav2")
+        engine_overrides = {
+            **formula_options.model_spec.engine_overrides,
+            VlmEngineType.MLX: EngineModelConfig(repo_id=FORMULA_MODEL_MLX_WEIGHTS),
+        }
+        formula_options.model_spec = formula_options.model_spec.model_copy(
+            update={"engine_overrides": engine_overrides}
+        )
+        pipeline_options = PdfPipelineOptions(
+            do_formula_enrichment=True, code_formula_options=formula_options
+        )
+        self._converter = DocumentConverter(
+            format_options={InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_options)}
+        )
         return self._converter
 
     async def parse(self, file_path: str) -> ParseResult:

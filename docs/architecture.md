@@ -53,8 +53,8 @@ The compiled wiki is stored as plain Markdown under `~/second-brain/wiki/`, so i
 
 | Work | Where it runs |
 | --- | --- |
-| PDF layout and typed-page parsing (Docling) | Local |
-| Handwriting and scanned-page OCR (Chandra) | Local, on the MLX backend on Apple Silicon |
+| PDF layout and typed-page parsing (Docling) | Local, across MLX and Apple MPS |
+| Handwriting and scanned-page OCR (Chandra) | Local, on MLX backend on Apple Silicon |
 | Triage classification (Gemma) | Local, via Ollama |
 | Semantic-search and clustering embeddings | Local, via Ollama |
 | Grouping chats into clusters | Local (threshold or HDBSCAN over embeddings) |
