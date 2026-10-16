@@ -70,6 +70,17 @@ class DoclingParser(DocumentParser):
         )
         return self._converter
 
+    def load_models(self) -> None:
+        """
+        Download and load the layout, table, and formula models.
+
+        Docling otherwise fetches them on the first typed PDF, which then
+        needs a network connection and takes noticeably longer.
+        """
+        from docling.datamodel.base_models import InputFormat
+
+        self._get_converter().initialize_pipeline(InputFormat.PDF)
+
     async def parse(self, file_path: str) -> ParseResult:
         """
         Parse a born-digital PDF into structured blocks via Docling.
