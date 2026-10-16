@@ -16,7 +16,7 @@ Two kinds of sources can be ingested:
 
 ## The tabs
 
-**Ingest** turns raw source files into Markdown, staging them for compilation into the actual wiki. Files that fail to parse stay behind so you can retry or remove them. Ingestion runs locally and is free.
+**Ingest** turns raw source files into Markdown, staging them for compilation into the actual wiki. Files that fail to parse stay behind, marked "Failed" along with the reason, so you can retry or remove them. Ingestion runs locally and is free.
 
 Imported ChatGPT conversations get one more pass. Chat history is noisy, so a small local model sorts each conversation into kept, review, or skip before anything reaches the build (see [architecture](architecture.md)). Conversations the model was unsure about wait in "Needs review" at the top of the Ingest tab for your call, and a count on the tab shows how many are waiting.
 

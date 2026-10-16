@@ -2,6 +2,7 @@ import SwiftUI
 
 struct QueueRow: View {
     let item: QueueItem
+    var failureReason: String? = nil
     let onOpen: () -> Void
     let onRemove: () -> Void
     var onRetry: (() -> Void)? = nil
@@ -25,6 +26,14 @@ struct QueueRow: View {
                 .foregroundStyle(Theme.Colors.textPrimary)
                 .lineLimit(1).truncationMode(.middle)
                 .openableTitle(cleanName(item.displayName))
+            if item.state == .failed, let failureReason {
+                ReasonBadge(
+                    label: "Failed",
+                    tint: Theme.Colors.danger,
+                    note: "This file couldn't be parsed: \(failureReason)",
+                    accessibilityHint: "Shows why this file failed"
+                )
+            }
             Spacer(minLength: 6)
             if item.state == .failed, let onRetry {
                 Button("Retry", action: onRetry)

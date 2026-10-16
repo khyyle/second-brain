@@ -2,8 +2,8 @@ import Foundation
 
 /// The derived state the Python side writes to `.state.json`: the authoritative
 /// staged set, per-model build cost, count of built pages, needs-review and
-/// skipped counts, and whether a reviewed grouping has drifted from staging.
-/// The app renders this rather than recomputing it.
+/// skipped counts, whether a reviewed grouping has drifted from staging, and
+/// why each failed file failed. The app renders this rather than recomputing it.
 struct AppState: Decodable {
     let staged: [StagedSource]
     let builtCount: Int
@@ -11,6 +11,8 @@ struct AppState: Decodable {
     let stale: Bool
     let needsReviewCount: Int
     let skippedCount: Int
+    /// Absolute path of a dropped file to why its last ingest failed.
+    let ingestFailures: [String: String]
     let generatedAt: String
 
     private enum CodingKeys: String, CodingKey {
@@ -20,6 +22,7 @@ struct AppState: Decodable {
         case builtCount = "built_count"
         case needsReviewCount = "needs_review"
         case skippedCount = "skipped"
+        case ingestFailures = "ingest_failures"
         case generatedAt = "generated_at"
     }
 
@@ -47,6 +50,9 @@ struct AppState: Decodable {
         stale = try container.decode(Bool.self, forKey: .stale)
         needsReviewCount = try container.decodeIfPresent(Int.self, forKey: .needsReviewCount) ?? 0
         skippedCount = try container.decodeIfPresent(Int.self, forKey: .skippedCount) ?? 0
+        ingestFailures = try container.decodeIfPresent(
+            [String: String].self, forKey: .ingestFailures
+        ) ?? [:]
         generatedAt = try container.decodeIfPresent(String.self, forKey: .generatedAt) ?? ""
     }
 

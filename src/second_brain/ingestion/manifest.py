@@ -139,6 +139,7 @@ class Manifest:
                 )
             """)
             self._migrate_add_content_hash(conn)
+            self._migrate_add_manifest_error(conn)
             self._migrate_add_deferred_retryable(conn)
 
     @staticmethod
@@ -151,6 +152,16 @@ class Manifest:
         cols = {row["name"] for row in conn.execute("PRAGMA table_info(manifest)")}
         if "content_hash" not in cols:
             conn.execute("ALTER TABLE manifest ADD COLUMN content_hash TEXT")
+
+    @staticmethod
+    def _migrate_add_manifest_error(conn: sqlite3.Connection) -> None:
+        """Add `manifest.error` to pre-existing databases.
+
+        Rows that failed before the column existed keep a NULL reason.
+        """
+        cols = {row["name"] for row in conn.execute("PRAGMA table_info(manifest)")}
+        if "error" not in cols:
+            conn.execute("ALTER TABLE manifest ADD COLUMN error TEXT")
 
     @staticmethod
     def _migrate_add_deferred_retryable(conn: sqlite3.Connection) -> None:
@@ -339,6 +350,7 @@ class Manifest:
                    ON CONFLICT(file_path) DO UPDATE SET
                      sha256 = excluded.sha256,
                      status = 'processing',
+                     error = NULL,
                      updated_at = excluded.updated_at""",
                 (str(file_path), sha, source_type, now, now),
             )
@@ -433,18 +445,33 @@ class Manifest:
         file_path: Path
             File that failed processing.
         error: str | None
-            Optional error message to log.
+            One-sentence reason shown to the user, or None if unknown.
         """
         now = datetime.now(UTC).isoformat()
         with self._conn() as conn:
             conn.execute(
                 """UPDATE manifest
-                   SET status = 'failed', updated_at = ?
+                   SET status = 'failed', error = ?, updated_at = ?
                    WHERE file_path = ?""",
-                (now, str(file_path)),
+                (error, now, str(file_path)),
             )
         if error:
             logger.error("Ingestion failed for %s: %s", file_path, error)
+
+    def get_ingest_failures(self) -> dict[str, str]:
+        """Return each failed file that has a recorded reason.
+
+        Returns
+        -------
+        dict[str, str]
+            Absolute file path mapped to why its last ingest failed.
+        """
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT file_path, error FROM manifest "
+                "WHERE status = 'failed' AND error IS NOT NULL"
+            ).fetchall()
+        return {r["file_path"]: r["error"] for r in rows}
 
     def get_entry(self, file_path: Path) -> ManifestEntry | None:
         """Look up a single file's manifest record.

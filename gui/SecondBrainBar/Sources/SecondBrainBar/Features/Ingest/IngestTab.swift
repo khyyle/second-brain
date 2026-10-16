@@ -49,6 +49,7 @@ struct IngestTab: View {
                 PaginatedList(items: failed) { item in
                     QueueRow(
                         item: item,
+                        failureReason: store.ingestFailureReason(for: item.id),
                         onOpen: { open(item.id) },
                         onRemove: { remove(item.id) },
                         onRetry: { retry(item.id) }

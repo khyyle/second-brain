@@ -22,9 +22,19 @@ from pathlib import Path
 
 import fitz
 
+from second_brain.errors import SecondBrainError
 from second_brain.parsing.provider import ParseLane
 
 logger = logging.getLogger(__name__)
+
+UNREADABLE_PDF_REASON = (
+    "The PDF can't be opened. It may be damaged or incomplete, so export or download it again."
+)
+
+
+class UnreadablePdfError(SecondBrainError):
+    """Raised when a PDF can't be opened at all, such as a damaged or truncated file."""
+
 
 # A born-digital page with a real text layer has well over this many
 # characters. Near-empty pages are either blank or scanned images.
@@ -93,9 +103,17 @@ def classify_pdf_pages(pdf_path: str | Path) -> list[ParseLane]:
     list[ParseLane]
         One lane per page, in document order. Empty list for a
         zero-page PDF.
+
+    Raises
+    ------
+    UnreadablePdfError
+        If the file isn't a PDF that can be opened.
     """
     pdf_path = Path(pdf_path)
-    doc = fitz.open(str(pdf_path))
+    try:
+        doc = fitz.open(str(pdf_path))
+    except fitz.FileDataError as exc:
+        raise UnreadablePdfError(UNREADABLE_PDF_REASON) from exc
     try:
         lanes = [classify_page(page) for page in doc]
     finally:

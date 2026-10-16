@@ -11,8 +11,6 @@ struct StagedRow: View {
     let onOpen: () -> Void
     let onRemove: () -> Void
     @State private var hovering = false
-    @State private var badgeHovering = false
-    @State private var showingDeferReason = false
     @EnvironmentObject private var store: PipelineStore
 
     var body: some View {
@@ -32,7 +30,12 @@ struct StagedRow: View {
                     .foregroundStyle(Theme.Colors.textTertiary)
             }
             if let deferReason {
-                deferBadge(deferReason)
+                ReasonBadge(
+                    label: "Set aside",
+                    tint: Theme.Colors.accentAmber,
+                    note: "Builds will skip this source: \(deferReason)",
+                    accessibilityHint: "Shows why builds will skip this source"
+                )
             }
             Spacer(minLength: 6)
             TrailingReserve(hovering: hovering) {
@@ -64,24 +67,5 @@ struct StagedRow: View {
         .contentShape(Rectangle())
         .onTapGesture(perform: onOpen)
         .onHover { hovering = $0 }
-    }
-
-    /// Opens the reason on click rather than behind a delayed hover tooltip.
-    private func deferBadge(_ reason: String) -> some View {
-        Button { showingDeferReason.toggle() } label: {
-            Text("Set aside")
-                .font(Theme.Font.meta(9.5).weight(.medium))
-                .foregroundStyle(Theme.Colors.accentAmber)
-                .padding(.horizontal, 6).padding(.vertical, 2)
-                .background(
-                    Capsule().fill(Theme.Colors.accentAmber.opacity(badgeHovering ? 0.24 : 0.14))
-                )
-        }
-        .buttonStyle(.plain)
-        .onHover { badgeHovering = $0 }
-        .accessibilityHint("Shows why builds will skip this source")
-        .popover(isPresented: $showingDeferReason, arrowEdge: .bottom) {
-            PopoverNote(text: "Builds will skip this source: \(reason)")
-        }
     }
 }

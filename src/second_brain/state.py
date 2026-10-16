@@ -112,8 +112,8 @@ def compute_state(config: Config, manifest: Manifest) -> dict:
     -------
     dict
         The staged sources with sizes, the count of built pages, per-model
-        build cost, needs-review and skipped counts, and whether a reviewed
-        grouping has drifted from staging.
+        build cost, needs-review and skipped counts, whether a reviewed
+        grouping has drifted from staging, and why each failed file failed.
     """
     queue = worthwhile_sources(config, manifest, find_new_sources(config, manifest))
     work_units = reconcile_work_units(config.data_dir, queue) or [[rel] for rel in queue]
@@ -131,6 +131,7 @@ def compute_state(config: Config, manifest: Manifest) -> dict:
         "stale": stale,
         "needs_review": needs_review,
         "skipped": skipped,
+        "ingest_failures": manifest.get_ingest_failures(),
     }
 
 

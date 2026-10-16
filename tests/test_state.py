@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 from second_brain.clustering.preview import CLUSTERS_FILENAME
 from second_brain.config import Config
@@ -99,3 +100,16 @@ def test_set_aside_sources_say_whether_a_retry_can_help(
 
     retryable = {entry["rel"]: entry["retryable"] for entry in state["staged"]}
     assert retryable == {"documents/huge.md": False, "documents/long.md": True}
+
+
+def test_failed_ingests_carry_their_reason(
+    config: Config, manifest: Manifest, tmp_path: Path
+) -> None:
+    drop = tmp_path / "scan.pdf"
+    drop.write_bytes(b"%PDF-1.4\n")
+    manifest.mark_processing(drop, "documents")
+    manifest.mark_failed(drop, "Chandra failed on page 3")
+
+    state = compute_state(config, manifest)
+
+    assert state["ingest_failures"] == {str(drop): "Chandra failed on page 3"}

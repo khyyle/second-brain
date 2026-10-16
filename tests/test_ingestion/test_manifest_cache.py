@@ -270,8 +270,21 @@ def test_reingest_invalidates_compiled(manifest: Manifest, sample_file: Path) ->
     assert "documents/sample.md" not in manifest.get_compiled_raw_paths()
 
 
-def test_migration_adds_content_hash_to_legacy_db(tmp_path: Path) -> None:
-    """An existing manifest table without content_hash should gain the column on open."""
+def test_failure_reason_is_kept_until_the_file_is_retried(
+    manifest: Manifest, sample_file: Path
+) -> None:
+    manifest.mark_processing(sample_file, "documents")
+    manifest.mark_failed(sample_file, "Chandra failed on page 3")
+
+    assert manifest.get_ingest_failures() == {str(sample_file): "Chandra failed on page 3"}
+
+    manifest.mark_processing(sample_file, "documents")
+
+    assert manifest.get_ingest_failures() == {}
+
+
+def test_migration_adds_columns_to_legacy_manifest(tmp_path: Path) -> None:
+    """An existing manifest table gains content_hash and error on open."""
     db_path = tmp_path / "legacy.db"
     conn = sqlite3.connect(db_path)
     conn.execute(
@@ -300,7 +313,7 @@ def test_migration_adds_content_hash_to_legacy_db(tmp_path: Path) -> None:
     cols = {row[1] for row in inspect.execute("PRAGMA table_info(manifest)")}
     inspect.close()
 
-    assert "content_hash" in cols
+    assert {"content_hash", "error"} <= cols
 
 
 def test_migration_drops_legacy_page_cache_confidence(tmp_path: Path) -> None:

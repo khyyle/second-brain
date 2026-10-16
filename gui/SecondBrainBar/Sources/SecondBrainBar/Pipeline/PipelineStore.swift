@@ -51,6 +51,8 @@ final class PipelineStore: ObservableObject {
 
     func cost(for model: String) -> Double { state?.costs[model] ?? 0 }
 
+    func ingestFailureReason(for path: String) -> String? { state?.ingestFailures[path] }
+
     /// Ask the running compile to stop, shown as a disabled "Stopping" until
     /// the heartbeat reports the run has ended.
     func requestStop() {
