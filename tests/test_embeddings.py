@@ -10,10 +10,10 @@ from __future__ import annotations
 import httpx
 import pytest
 
+from second_brain import embeddings as embeddings_mod
 from second_brain import ollama
 from second_brain.config import SearchConfig
-from second_brain.mcp_server import embeddings as embeddings_mod
-from second_brain.mcp_server.embeddings import (
+from second_brain.embeddings import (
     EMBED_CHUNK_CHARS,
     EMBED_MAX_CHUNKS,
     EmbeddingRole,

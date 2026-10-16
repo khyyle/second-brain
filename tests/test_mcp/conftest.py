@@ -12,12 +12,6 @@ from second_brain.mcp_server.tools import WikiTools
 
 
 @pytest.fixture
-def search_config() -> SearchConfig:
-    """3-dimensional search config for deterministic testing."""
-    return SearchConfig(embedding_dimensions=3)
-
-
-@pytest.fixture
 def search_index(tmp_path: Path, search_config: SearchConfig) -> SearchIndex:
     """Fresh SearchIndex with 3-d vectors in a temporary directory."""
     return SearchIndex(tmp_path / "search.db", search_config)

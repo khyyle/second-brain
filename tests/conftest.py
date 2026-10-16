@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from second_brain.config import Config
+from second_brain.config import Config, SearchConfig
 from second_brain.ingestion.manifest import Manifest
 
 
@@ -20,6 +20,12 @@ def config(tmp_path: Path) -> Config:
 def manifest(config: Config) -> Manifest:
     """Fresh manifest matching the test's isolated config."""
     return Manifest(config.manifest_db_path)
+
+
+@pytest.fixture
+def search_config() -> SearchConfig:
+    """3-dimensional search config for deterministic testing."""
+    return SearchConfig(embedding_dimensions=3)
 
 
 @pytest.fixture(autouse=True)

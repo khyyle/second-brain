@@ -14,7 +14,7 @@ from second_brain.clustering import (
 )
 from second_brain.clustering import sources as sources_mod
 from second_brain.config import ClusteringConfig, SearchConfig
-from second_brain.mcp_server.embeddings import EmbeddingRole
+from second_brain.embeddings import EmbeddingRole
 from second_brain.ollama import OllamaUnavailableError
 
 

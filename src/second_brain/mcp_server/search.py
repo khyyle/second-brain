@@ -18,8 +18,8 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
+from second_brain import embeddings
 from second_brain.config import SearchConfig
-from second_brain.mcp_server import embeddings
 from second_brain.ollama import OllamaUnavailableError
 from second_brain.wiki.structure import LINK_KINDS, extract_typed_edges
 
