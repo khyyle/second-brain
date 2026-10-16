@@ -89,34 +89,6 @@ class Manifest:
                 h.update(chunk)
         return h.hexdigest()
 
-    def is_unchanged(self, file_path: Path) -> bool:
-        """Check whether a file already exists in the manifest with a
-        matching hash and completed status.
-
-        A file that previously failed with the same hash still needs
-        reprocessing, so both hash and status must match.
-
-        Parameters
-        ----------
-        file_path: Path
-            File to check.
-
-        Returns
-        -------
-        bool
-            ``True`` if the file is already ingested with the same
-            hash.
-        """
-        current_hash = self.compute_hash(file_path)
-        with self._conn() as conn:
-            row = conn.execute(
-                "SELECT sha256, status FROM manifest WHERE file_path = ?",
-                (str(file_path),),
-            ).fetchone()
-        if row is None:
-            return False
-        return row["sha256"] == current_hash and row["status"] == "complete"
-
     def needs_processing(self, file_path: Path, raw_dir: Path | None = None) -> bool:
         """Check whether a file is new, changed, or previously failed.
 
@@ -417,56 +389,6 @@ class Manifest:
             conn.execute("DELETE FROM manifest WHERE raw_output = ?", (raw_output,))
             conn.execute("DELETE FROM compiled WHERE raw_path = ?", (raw_output,))
             conn.execute("DELETE FROM triage WHERE raw_path = ?", (raw_output,))
-
-    def get_all(
-        self,
-        status: str | None = None,
-        limit: int | None = None,
-    ) -> list[ManifestEntry]:
-        """Return all manifest entries, optionally filtered by status.
-
-        Parameters
-        ----------
-        status: str | None
-            If provided, only entries with this status are returned.
-        limit: int | None
-            If provided, cap the number of returned entries (most
-            recently updated first).
-
-        Returns
-        -------
-        list[ManifestEntry]
-            Entries ordered by most recently updated first.
-        """
-        sql = "SELECT * FROM manifest"
-        params: tuple = ()
-        if status:
-            sql += " WHERE status = ?"
-            params = (status,)
-        sql += " ORDER BY updated_at DESC"
-        if limit is not None:
-            sql += " LIMIT ?"
-            params = (*params, limit)
-
-        with self._conn() as conn:
-            rows = conn.execute(sql, params).fetchall()
-        return [_row_to_entry(r) for r in rows]
-
-    def get_completed_raw_paths(self) -> set[str]:
-        """Return raw output paths for all completed ingestions.
-
-        Returns
-        -------
-        set[str]
-            Paths to raw markdown files that have been successfully
-            ingested.
-        """
-        with self._conn() as conn:
-            rows = conn.execute(
-                "SELECT raw_output FROM manifest "
-                "WHERE status = 'complete' AND raw_output IS NOT NULL"
-            ).fetchall()
-        return {r["raw_output"] for r in rows}
 
     def mark_compiled(self, raw_paths: list[str]) -> None:
         """Record that the given raw files were compiled into the wiki.

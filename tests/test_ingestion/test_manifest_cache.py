@@ -165,17 +165,6 @@ def test_content_hash_preserved_on_partial_complete(manifest: Manifest, sample_f
     assert manifest.get_content_hash(sample_file) == "d" * 64
 
 
-def test_get_all_with_limit(manifest: Manifest, tmp_path: Path) -> None:
-    """The new `limit` parameter should cap returned rows."""
-    for i in range(5):
-        f = tmp_path / f"f{i}.pdf"
-        f.write_bytes(f"pdf {i}".encode())
-        manifest.mark_processing(f, "research_papers")
-
-    rows = manifest.get_all(limit=3)
-    assert len(rows) == 3
-
-
 def test_identical_content_at_new_path_is_skipped(manifest: Manifest, tmp_path: Path) -> None:
     """A duplicate file (same bytes, different name) should not need processing."""
     original = tmp_path / "paper.pdf"
