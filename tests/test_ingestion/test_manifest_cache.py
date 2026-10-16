@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import sqlite3
 from pathlib import Path
 
 import pytest
@@ -281,85 +280,3 @@ def test_failure_reason_is_kept_until_the_file_is_retried(
     manifest.mark_processing(sample_file, "documents")
 
     assert manifest.get_ingest_failures() == {}
-
-
-def test_migration_adds_columns_to_legacy_manifest(tmp_path: Path) -> None:
-    """An existing manifest table gains content_hash and error on open."""
-    db_path = tmp_path / "legacy.db"
-    conn = sqlite3.connect(db_path)
-    conn.execute(
-        """CREATE TABLE manifest (
-            file_path    TEXT PRIMARY KEY,
-            sha256       TEXT NOT NULL,
-            source_type  TEXT NOT NULL,
-            status       TEXT NOT NULL DEFAULT 'pending',
-            parse_lane   TEXT,
-            raw_output   TEXT,
-            ingested_at  TEXT NOT NULL,
-            updated_at   TEXT NOT NULL
-        )"""
-    )
-    conn.execute(
-        """INSERT INTO manifest VALUES
-           ('/legacy.pdf', 'oldhash', 'documents', 'complete', 'docling',
-            'documents/legacy.md', '2026-01-01T00:00:00', '2026-01-01T00:00:00')"""
-    )
-    conn.commit()
-    conn.close()
-
-    Manifest(db_path)
-
-    inspect = sqlite3.connect(db_path)
-    cols = {row[1] for row in inspect.execute("PRAGMA table_info(manifest)")}
-    inspect.close()
-
-    assert {"content_hash", "error"} <= cols
-
-
-def test_migration_drops_legacy_page_cache_confidence(tmp_path: Path) -> None:
-    """A legacy page_cache with a confidence column is rebuilt without it."""
-    db_path = tmp_path / "legacy_cache.db"
-    conn = sqlite3.connect(db_path)
-    conn.execute(
-        """CREATE TABLE page_cache (
-            page_hash    TEXT PRIMARY KEY,
-            parse_lane   TEXT NOT NULL,
-            raw_markdown TEXT NOT NULL,
-            confidence   REAL NOT NULL,
-            parsed_at    TEXT NOT NULL
-        )"""
-    )
-    conn.commit()
-    conn.close()
-
-    manifest = Manifest(db_path)
-
-    inspect = sqlite3.connect(db_path)
-    cols = {row[1] for row in inspect.execute("PRAGMA table_info(page_cache)")}
-    inspect.close()
-
-    assert "confidence" not in cols
-    # The rebuilt table still works.
-    manifest.put_cached_page("h", "chandra", "md")
-    hit = manifest.get_cached_page("h")
-    assert hit is not None and hit.raw_markdown == "md"
-
-
-def test_migration_marks_old_too_large_deferrals_unretryable(tmp_path: Path) -> None:
-    db_path = tmp_path / "manifest.db"
-    with sqlite3.connect(db_path) as conn:
-        conn.execute(
-            "CREATE TABLE deferred_sources "
-            "(raw_path TEXT PRIMARY KEY, reason TEXT NOT NULL, deferred_at TEXT NOT NULL)"
-        )
-        conn.executemany(
-            "INSERT INTO deferred_sources VALUES (?, ?, ?)",
-            [
-                ("huge.md", "too large to compile in one run (~601k tokens)", "2026-09-30"),
-                ("long.md", "failed to compile within 20 agent turns", "2026-09-30"),
-            ],
-        )
-
-    manifest = Manifest(db_path)
-
-    assert manifest.get_unretryable_sources() == {"huge.md"}

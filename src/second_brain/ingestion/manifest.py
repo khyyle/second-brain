@@ -5,11 +5,12 @@ from __future__ import annotations
 import hashlib
 import logging
 import sqlite3
-from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+
+from second_brain.db import connect, migrate
 
 logger = logging.getLogger(__name__)
 
@@ -63,155 +64,10 @@ class Manifest:
 
     def __init__(self, db_path: Path) -> None:
         self._db_path = db_path
-        self._init_db()
+        migrate(db_path)
 
-    def _init_db(self) -> None:
-        """Create the manifest schema and apply any column-additive migrations."""
-        with self._conn() as conn:
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS manifest (
-                    file_path    TEXT PRIMARY KEY,
-                    sha256       TEXT NOT NULL,
-                    source_type  TEXT NOT NULL,
-                    status       TEXT NOT NULL DEFAULT 'pending',
-                    parse_lane   TEXT,
-                    raw_output   TEXT,
-                    ingested_at  TEXT NOT NULL,
-                    updated_at   TEXT NOT NULL
-                )
-            """)
-            conn.execute("""
-                CREATE INDEX IF NOT EXISTS idx_manifest_status
-                ON manifest(status)
-            """)
-            conn.execute("""
-                CREATE INDEX IF NOT EXISTS idx_manifest_hash
-                ON manifest(sha256)
-            """)
-            # Per-page OCR cache lets us skip re-OCRing pages whose rendered
-            # bytes are unchanged across full-file re-exports (the Goodnotes
-            # case: edit one page, the whole PDF binary changes).
-            self._migrate_drop_page_cache_confidence(conn)
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS page_cache (
-                    page_hash    TEXT PRIMARY KEY,
-                    parse_lane   TEXT NOT NULL,
-                    raw_markdown TEXT NOT NULL,
-                    parsed_at    TEXT NOT NULL
-                )
-            """)
-            # Triage decisions keyed by the raw source path, so review/skip
-            # verdicts persist and aren't re-evaluated on every compile run.
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS triage (
-                    raw_path    TEXT PRIMARY KEY,
-                    decision    TEXT NOT NULL,
-                    confidence  REAL NOT NULL,
-                    reason      TEXT,
-                    triaged_at  TEXT NOT NULL
-                )
-            """)
-            # Which raw files the compilation agent has consumed into the
-            # wiki. Tracked separately from ingestion as a raw file being
-            # produced (ingested) is not the same as it being compiled.
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS compiled (
-                    raw_path     TEXT PRIMARY KEY,
-                    compiled_at  TEXT NOT NULL
-                )
-            """)
-            # Duplicate-pair verdicts
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS dismissed_duplicates (
-                    stem_a       TEXT NOT NULL,
-                    stem_b       TEXT NOT NULL,
-                    dismissed_at TEXT NOT NULL,
-                    PRIMARY KEY (stem_a, stem_b)
-                )
-            """)
-            # Sources whose compile run ended without completing
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS deferred_sources (
-                    raw_path     TEXT PRIMARY KEY,
-                    reason       TEXT NOT NULL,
-                    deferred_at  TEXT NOT NULL,
-                    retryable    INTEGER NOT NULL DEFAULT 1
-                )
-            """)
-            self._migrate_add_content_hash(conn)
-            self._migrate_add_manifest_error(conn)
-            self._migrate_add_deferred_retryable(conn)
-
-    @staticmethod
-    def _migrate_add_content_hash(conn: sqlite3.Connection) -> None:
-        """Add `manifest.content_hash` to pre-existing databases.
-
-        SQLite has no `ADD COLUMN IF NOT EXISTS`, so we inspect the
-        current schema and add the column only when absent.
-        """
-        cols = {row["name"] for row in conn.execute("PRAGMA table_info(manifest)")}
-        if "content_hash" not in cols:
-            conn.execute("ALTER TABLE manifest ADD COLUMN content_hash TEXT")
-
-    @staticmethod
-    def _migrate_add_manifest_error(conn: sqlite3.Connection) -> None:
-        """Add `manifest.error` to pre-existing databases.
-
-        Rows that failed before the column existed keep a NULL reason.
-        """
-        cols = {row["name"] for row in conn.execute("PRAGMA table_info(manifest)")}
-        if "error" not in cols:
-            conn.execute("ALTER TABLE manifest ADD COLUMN error TEXT")
-
-    @staticmethod
-    def _migrate_add_deferred_retryable(conn: sqlite3.Connection) -> None:
-        """Add `deferred_sources.retryable` to pre-existing databases.
-
-        Rows written before the column existed carry only their reason text,
-        and the only sources a retry cannot fix were recorded as "too large".
-        """
-        cols = {row["name"] for row in conn.execute("PRAGMA table_info(deferred_sources)")}
-        if "retryable" in cols:
-            return
-        conn.execute(
-            "ALTER TABLE deferred_sources ADD COLUMN retryable INTEGER NOT NULL DEFAULT 1"
-        )
-        conn.execute(
-            "UPDATE deferred_sources SET retryable = 0 WHERE lower(reason) LIKE 'too large%'"
-        )
-
-    @staticmethod
-    def _migrate_drop_page_cache_confidence(conn: sqlite3.Connection) -> None:
-        """Drop the legacy `page_cache.confidence` column.
-
-        The page cache is disposable (re-derivable by re-OCRing), so the
-        simplest migration off the old schema is to drop the table and let
-        it rebuild without the column.
-        """
-        cols = {row["name"] for row in conn.execute("PRAGMA table_info(page_cache)")}
-        if "confidence" in cols:
-            conn.execute("DROP TABLE page_cache")
-
-    @contextmanager
-    def _conn(self) -> Iterator[sqlite3.Connection]:
-        """Yield a connection that auto-commits on clean exit.
-
-        Opens a fresh connection each call rather than holding one
-        open — SQLite handles file-level locking, and this avoids stale
-        state across long-running watcher sessions.
-
-        Yields
-        ------
-        sqlite3.Connection
-            A connection with ``Row`` row factory configured.
-        """
-        conn = sqlite3.connect(self._db_path)
-        conn.row_factory = sqlite3.Row
-        try:
-            yield conn
-            conn.commit()
-        finally:
-            conn.close()
+    def _conn(self) -> AbstractContextManager[sqlite3.Connection]:
+        return connect(self._db_path)
 
     @staticmethod
     def compute_hash(file_path: Path) -> str:
@@ -901,16 +757,7 @@ class Manifest:
 
 
 def _row_to_entry(row: sqlite3.Row) -> ManifestEntry:
-    """Convert a SQLite manifest row to a :class:`ManifestEntry`.
-
-    Tolerates rows missing ``content_hash`` so older databases still
-    deserialize after a fresh checkout but before any new write.
-    """
-    content_hash: str | None
-    try:
-        content_hash = row["content_hash"]
-    except (IndexError, KeyError):
-        content_hash = None
+    """Convert a SQLite manifest row to a :class:`ManifestEntry`."""
     return ManifestEntry(
         file_path=row["file_path"],
         sha256=row["sha256"],
@@ -920,5 +767,5 @@ def _row_to_entry(row: sqlite3.Row) -> ManifestEntry:
         raw_output_path=row["raw_output"],
         ingested_at=row["ingested_at"],
         updated_at=row["updated_at"],
-        content_hash=content_hash,
+        content_hash=row["content_hash"],
     )
