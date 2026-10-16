@@ -8,11 +8,11 @@ from pathlib import Path
 import pytest
 
 from second_brain.config import Config
-from second_brain.ingestion.manifest import Manifest
 from second_brain.ollama import OllamaUnavailableError
 from second_brain.status import STATUS_FILENAME
 from second_brain.triage import pipeline as pipeline_mod
 from second_brain.triage.gemma import TriageDecision, TriageResult
+from second_brain.triage.store import TriageStore
 
 
 def _write(raw_dir: Path, rel: str, text: str) -> None:
@@ -22,7 +22,7 @@ def _write(raw_dir: Path, rel: str, text: str) -> None:
 
 
 def test_triage_only_touches_scoped_lanes(
-    config: Config, manifest: Manifest, monkeypatch: pytest.MonkeyPatch
+    config: Config, triage_store: TriageStore, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _write(config.raw_dir, "chatgpt/chat.md", "chat body " * 100)
     _write(config.raw_dir, "documents/doc.md", "doc body " * 100)
@@ -33,16 +33,16 @@ def test_triage_only_touches_scoped_lanes(
         lambda path, cfg: TriageResult(decision=TriageDecision.WORTHWHILE, confidence=0.9),
     )
 
-    counts = pipeline_mod.triage_pending(config, manifest)
+    counts = pipeline_mod.triage_pending(config)
 
-    decisions = manifest.get_triage_decisions()
+    decisions = triage_store.get_decisions()
     assert "chatgpt/chat.md" in decisions  # in-scope lane is triaged
     assert "documents/doc.md" not in decisions  # out-of-scope lane gets no row
     assert counts["worthwhile"] == 1  # only the chat is counted
 
 
 def test_triage_skips_a_vanished_source(
-    config: Config, manifest: Manifest, monkeypatch: pytest.MonkeyPatch
+    config: Config, triage_store: TriageStore, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # A source deleted mid-run must be skipped, not crash the whole pass.
     _write(config.raw_dir, "chatgpt/present.md", "body " * 100)
@@ -55,16 +55,16 @@ def test_triage_skips_a_vanished_source(
 
     monkeypatch.setattr(pipeline_mod, "triage_file", fake_triage)
 
-    counts = pipeline_mod.triage_pending(config, manifest)
+    counts = pipeline_mod.triage_pending(config)
 
-    decisions = manifest.get_triage_decisions()
+    decisions = triage_store.get_decisions()
     assert "chatgpt/present.md" in decisions  # the good one still recorded
     assert "chatgpt/vanished.md" not in decisions  # skipped, not crashed
     assert counts["worthwhile"] == 1
 
 
 def test_triage_stops_when_ollama_stops(
-    config: Config, manifest: Manifest, monkeypatch: pytest.MonkeyPatch
+    config: Config, triage_store: TriageStore, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     for name in ("a.md", "b.md", "c.md"):
         _write(config.raw_dir, f"chatgpt/{name}", "body " * 100)
@@ -77,12 +77,12 @@ def test_triage_stops_when_ollama_stops(
     monkeypatch.setattr(pipeline_mod, "triage_file", fake_triage)
 
     with pytest.raises(pipeline_mod.TriageInterruptedError) as raised:
-        pipeline_mod.triage_pending(config, manifest)
+        pipeline_mod.triage_pending(config)
 
     assert raised.value.untriaged_count == 2
     assert isinstance(raised.value.__cause__, OllamaUnavailableError)
 
-    decisions = manifest.get_triage_decisions()
+    decisions = triage_store.get_decisions()
     assert "chatgpt/a.md" in decisions
     assert "chatgpt/b.md" not in decisions
     assert "chatgpt/c.md" not in decisions
@@ -90,12 +90,12 @@ def test_triage_stops_when_ollama_stops(
     assert status["running"] is False
 
 
-def test_worthwhile_sources_holds_undecided_chats(config: Config, manifest: Manifest) -> None:
+def test_worthwhile_sources_holds_undecided_chats(config: Config) -> None:
     sources = ["chatgpt/chat.md", "documents/doc.md"]
 
-    assert pipeline_mod.worthwhile_sources(config, manifest, sources) == ["documents/doc.md"]
+    assert pipeline_mod.worthwhile_sources(config, sources) == ["documents/doc.md"]
 
     disabled = config.model_copy(
         update={"triage": config.triage.model_copy(update={"enabled": False})}
     )
-    assert pipeline_mod.worthwhile_sources(disabled, manifest, sources) == sources
+    assert pipeline_mod.worthwhile_sources(disabled, sources) == sources

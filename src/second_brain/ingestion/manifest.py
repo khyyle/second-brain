@@ -372,188 +372,6 @@ class Manifest:
                 deleted += cur.rowcount
         return deleted
 
-    def forget_source(self, raw_output: str) -> None:
-        """Fully un-ingest a source: drop its manifest, compiled, and triage
-        rows so it leaves both the staged and built sets.
-
-        This clears only the database records. Deleting the raw markdown
-        file on disk is the caller's responsibility.
-
-        Parameters
-        ----------
-        raw_output: str
-            Raw output path relative to the raw directory, e.g.
-            ``"documents/notes.md"``.
-        """
-        with self._conn() as conn:
-            conn.execute("DELETE FROM manifest WHERE raw_output = ?", (raw_output,))
-            conn.execute("DELETE FROM compiled WHERE raw_path = ?", (raw_output,))
-            conn.execute("DELETE FROM triage WHERE raw_path = ?", (raw_output,))
-
-    def mark_compiled(self, raw_paths: list[str]) -> None:
-        """Record that the given raw files were compiled into the wiki.
-
-        Parameters
-        ----------
-        raw_paths: list[str]
-            Raw file paths (relative to the raw directory) consumed by
-            the compilation agent in a successful run.
-        """
-        if not raw_paths:
-            return
-        now = datetime.now(UTC).isoformat()
-        with self._conn() as conn:
-            for rel in raw_paths:
-                conn.execute(
-                    "INSERT INTO compiled (raw_path, compiled_at) VALUES (?, ?) "
-                    "ON CONFLICT(raw_path) DO UPDATE SET compiled_at = excluded.compiled_at",
-                    (rel, now),
-                )
-
-    def unmark_compiled(self, raw_paths: list[str]) -> int:
-        """
-        Clear the compiled record for the given raw files.
-
-        These sources become eligible for the next normal build again, while
-        their manifest and triage rows stay intact unlike ``forget_source``,
-        which un-ingests a source entirely.
-
-        Parameters
-        ----------
-        raw_paths: list[str]
-            Raw file paths (relative to the raw directory) to unmark.
-
-        Returns
-        -------
-        int
-            Number of compiled records actually cleared.
-        """
-        if not raw_paths:
-            return 0
-        cleared = 0
-        with self._conn() as conn:
-            for rel in raw_paths:
-                cursor = conn.execute("DELETE FROM compiled WHERE raw_path = ?", (rel,))
-                cleared += cursor.rowcount
-        return cleared
-
-    def get_compiled_raw_paths(self) -> set[str]:
-        """Return the set of raw file paths already compiled into the wiki.
-
-        Returns
-        -------
-        set[str]
-            Relative raw paths that the compilation agent has consumed.
-        """
-        with self._conn() as conn:
-            rows = conn.execute("SELECT raw_path FROM compiled").fetchall()
-        return {r["raw_path"] for r in rows}
-
-    def defer_sources(self, raw_paths: list[str], reason: str, *, retryable: bool) -> None:
-        """Record sources as set aside. Re-deferring updates the reason.
-
-        Parameters
-        ----------
-        raw_paths: list[str]
-            Paths relative to the raw directory.
-        reason: str
-            Human-readable cause.
-        retryable: bool
-            Whether building the same source again could succeed.
-        """
-        now = datetime.now(UTC).isoformat()
-        with self._conn() as conn:
-            conn.executemany(
-                "INSERT INTO deferred_sources (raw_path, reason, deferred_at, retryable) "
-                "VALUES (?, ?, ?, ?) ON CONFLICT(raw_path) DO UPDATE SET "
-                "reason = excluded.reason, deferred_at = excluded.deferred_at, "
-                "retryable = excluded.retryable",
-                [(path, reason, now, int(retryable)) for path in raw_paths],
-            )
-
-    def get_deferred_sources(self) -> dict[str, str]:
-        """Return every deferred source as a raw_path -> reason mapping.
-
-        Returns
-        -------
-        dict[str, str]
-            Deferred raw paths and why each was parked.
-        """
-        with self._conn() as conn:
-            rows = conn.execute("SELECT raw_path, reason FROM deferred_sources").fetchall()
-        return {r["raw_path"]: r["reason"] for r in rows}
-
-    def get_unretryable_sources(self) -> set[str]:
-        """Return the deferred sources that building again cannot fix.
-
-        Returns
-        -------
-        set[str]
-            Raw paths that must be split before they can be built.
-        """
-        with self._conn() as conn:
-            rows = conn.execute(
-                "SELECT raw_path FROM deferred_sources WHERE retryable = 0"
-            ).fetchall()
-        return {r["raw_path"] for r in rows}
-
-    def clear_deferred(self, raw_paths: list[str]) -> int:
-        """Release deferred sources back into the compile queue.
-
-        Parameters
-        ----------
-        raw_paths: list[str]
-            Paths relative to the raw directory.
-
-        Returns
-        -------
-        int
-            Number of rows removed.
-        """
-        if not raw_paths:
-            return 0
-        with self._conn() as conn:
-            cursor = conn.execute(
-                "DELETE FROM deferred_sources WHERE raw_path IN "
-                f"({','.join('?' * len(raw_paths))})",
-                raw_paths,
-            )
-        return cursor.rowcount
-
-    def dismiss_duplicate(self, stem_a: str, stem_b: str) -> None:
-        """Record that two pages are not duplicates of each other.
-
-        The pair is stored order-independently, so dismissing (a, b) also
-        covers (b, a). Dismissing an already-dismissed pair is a no-op.
-
-        Parameters
-        ----------
-        stem_a: str
-            One page's stem.
-        stem_b: str
-            The other page's stem.
-        """
-        first, second = sorted((stem_a, stem_b))
-        now = datetime.now(UTC).isoformat()
-        with self._conn() as conn:
-            conn.execute(
-                "INSERT OR IGNORE INTO dismissed_duplicates "
-                "(stem_a, stem_b, dismissed_at) VALUES (?, ?, ?)",
-                (first, second, now),
-            )
-
-    def get_dismissed_duplicates(self) -> set[tuple[str, str]]:
-        """Return every dismissed pair, each as a sorted stem tuple.
-
-        Returns
-        -------
-        set[tuple[str, str]]
-            Pairs a human marked as not duplicates.
-        """
-        with self._conn() as conn:
-            rows = conn.execute("SELECT stem_a, stem_b FROM dismissed_duplicates").fetchall()
-        return {(r["stem_a"], r["stem_b"]) for r in rows}
-
     def count_by_status(self) -> dict[str, int]:
         """Aggregate manifest entries by status.
 
@@ -632,51 +450,6 @@ class Manifest:
             row = conn.execute("SELECT COUNT(*) AS cnt FROM page_cache").fetchone()
         return int(row["cnt"]) if row else 0
 
-    def record_triage(
-        self,
-        raw_path: str,
-        decision: str,
-        confidence: float,
-        reason: str = "",
-    ) -> None:
-        """Persist a triage verdict for a raw source path (upsert).
-
-        Parameters
-        ----------
-        raw_path: str
-            Raw source path (relative to the raw directory).
-        decision: str
-            One of ``"worthwhile"``, ``"review"``, ``"skip"``.
-        confidence: float
-            Triage model confidence for the decision.
-        reason: str
-            Short human-readable rationale for logs/digests.
-        """
-        now = datetime.now(UTC).isoformat()
-        with self._conn() as conn:
-            conn.execute(
-                """INSERT INTO triage (raw_path, decision, confidence, reason, triaged_at)
-                   VALUES (?, ?, ?, ?, ?)
-                   ON CONFLICT(raw_path) DO UPDATE SET
-                     decision = excluded.decision,
-                     confidence = excluded.confidence,
-                     reason = excluded.reason,
-                     triaged_at = excluded.triaged_at""",
-                (raw_path, decision, confidence, reason, now),
-            )
-
-    def get_triage_decisions(self) -> dict[str, str]:
-        """Return the recorded triage decision for every triaged raw path.
-
-        Returns
-        -------
-        dict[str, str]
-            Mapping of raw source path to decision label.
-        """
-        with self._conn() as conn:
-            rows = conn.execute("SELECT raw_path, decision FROM triage").fetchall()
-        return {r["raw_path"]: r["decision"] for r in rows}
-
 
 def _row_to_entry(row: sqlite3.Row) -> ManifestEntry:
     """Convert a SQLite manifest row to a :class:`ManifestEntry`."""
@@ -691,3 +464,17 @@ def _row_to_entry(row: sqlite3.Row) -> ManifestEntry:
         updated_at=row["updated_at"],
         content_hash=row["content_hash"],
     )
+
+
+def forget_ingested(conn: sqlite3.Connection, raw_output: str) -> None:
+    """
+    Delete the manifest rows that produced a raw source, on the caller's connection.
+
+    Parameters
+    ----------
+    conn: sqlite3.Connection
+        Open connection whose transaction the caller commits.
+    raw_output: str
+        Raw output path relative to the raw directory.
+    """
+    conn.execute("DELETE FROM manifest WHERE raw_output = ?", (raw_output,))

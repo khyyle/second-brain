@@ -1,4 +1,4 @@
-"""Tests for the page cache and content-hash additions to the manifest."""
+"""Tests for ingestion's manifest: file rows, failures, and the page cache."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from second_brain.compilation.store import BuildStore
 from second_brain.ingestion.manifest import Manifest
 
 
@@ -15,44 +16,6 @@ def sample_file(tmp_path: Path) -> Path:
     p = tmp_path / "sample.pdf"
     p.write_bytes(b"%PDF-1.4\n% sample content\n")
     return p
-
-
-def test_unmark_compiled_requeues_without_forgetting(manifest: Manifest) -> None:
-    """Unmarking clears only the compiled record, and reports how many it hit."""
-    manifest.mark_compiled(["chatgpt/a.md", "chatgpt/b.md"])
-
-    cleared = manifest.unmark_compiled(["chatgpt/a.md", "chatgpt/never-compiled.md"])
-
-    assert cleared == 1  # only the path that was actually compiled
-    assert manifest.get_compiled_raw_paths() == {"chatgpt/b.md"}
-
-
-def test_unmark_compiled_empty_list_is_noop(manifest: Manifest) -> None:
-    assert manifest.unmark_compiled([]) == 0
-
-
-def test_dismiss_duplicate_is_order_independent_and_idempotent(manifest: Manifest) -> None:
-    manifest.dismiss_duplicate("water-electrolysis", "electrolysis")
-    manifest.dismiss_duplicate("electrolysis", "water-electrolysis")
-
-    assert manifest.get_dismissed_duplicates() == {("electrolysis", "water-electrolysis")}
-
-
-def test_defer_sources_round_trip_and_release(manifest: Manifest) -> None:
-    manifest.defer_sources(["papers/a.md", "papers/b.md"], "did not finish", retryable=True)
-    # Re-deferring updates the reason instead of duplicating the row.
-    manifest.defer_sources(["papers/a.md"], "too large", retryable=False)
-
-    assert manifest.get_deferred_sources() == {
-        "papers/a.md": "too large",
-        "papers/b.md": "did not finish",
-    }
-    assert manifest.get_unretryable_sources() == {"papers/a.md"}
-
-    assert manifest.clear_deferred(["papers/a.md", "papers/missing.md"]) == 1
-    assert manifest.get_deferred_sources() == {"papers/b.md": "did not finish"}
-    assert manifest.get_unretryable_sources() == set()
-    assert manifest.clear_deferred([]) == 0
 
 
 def test_mark_duplicate_records_terminal_state(manifest: Manifest, tmp_path: Path) -> None:
@@ -78,17 +41,19 @@ def test_mark_duplicate_records_terminal_state(manifest: Manifest, tmp_path: Pat
     assert manifest.needs_processing(copy) is True
 
 
-def test_reingesting_a_source_releases_its_deferral(manifest: Manifest, tmp_path: Path) -> None:
+def test_reingesting_a_source_releases_its_deferral(
+    manifest: Manifest, build_store: BuildStore, tmp_path: Path
+) -> None:
     # The content that failed to compile is no longer the content on disk,
     # so an updated drop gets a fresh attempt instead of staying parked.
     source = tmp_path / "notes.md"
     source.write_text("v2 of the notes", encoding="utf-8")
     manifest.mark_processing(source, "documents")
-    manifest.defer_sources(["documents/notes.md"], "did not finish", retryable=True)
+    build_store.defer_sources(["documents/notes.md"], "did not finish", retryable=True)
 
     manifest.mark_complete(source, raw_output="documents/notes.md")
 
-    assert manifest.get_deferred_sources() == {}
+    assert build_store.get_deferred_sources() == {}
 
 
 def test_page_cache_round_trip(manifest: Manifest) -> None:
@@ -223,39 +188,25 @@ def test_remove_entries_empty_is_noop(manifest: Manifest) -> None:
     assert manifest.remove_entries([]) == 0
 
 
-def test_compiled_tracking_is_separate_from_ingestion(
-    manifest: Manifest, sample_file: Path
+def test_reingest_invalidates_compiled(
+    manifest: Manifest, build_store: BuildStore, sample_file: Path
 ) -> None:
-    """Ingestion completion must NOT mark a raw file as compiled."""
-    manifest.mark_processing(sample_file, "documents")
-    manifest.mark_complete(sample_file, parse_lane="docling", raw_output="documents/sample.md")
-    # Ingested, but never compiled.
-    assert manifest.get_compiled_raw_paths() == set()
-
-    manifest.mark_compiled(["documents/sample.md"])
-    assert "documents/sample.md" in manifest.get_compiled_raw_paths()
-
-
-def test_mark_compiled_is_idempotent(manifest: Manifest) -> None:
-    manifest.mark_compiled(["a.md", "b.md"])
-    manifest.mark_compiled(["a.md"])  # repeat
-    assert manifest.get_compiled_raw_paths() == {"a.md", "b.md"}
-
-
-def test_mark_compiled_empty_is_noop(manifest: Manifest) -> None:
-    manifest.mark_compiled([])
-    assert manifest.get_compiled_raw_paths() == set()
-
-
-def test_reingest_invalidates_compiled(manifest: Manifest, sample_file: Path) -> None:
     """Re-ingesting a source clears its compiled marker so it recompiles."""
-    manifest.mark_compiled(["documents/sample.md"])
-    assert "documents/sample.md" in manifest.get_compiled_raw_paths()
+    build_store.mark_compiled(["documents/sample.md"])
 
     manifest.mark_processing(sample_file, "documents")
     manifest.mark_complete(sample_file, parse_lane="docling", raw_output="documents/sample.md")
 
-    assert "documents/sample.md" not in manifest.get_compiled_raw_paths()
+    assert "documents/sample.md" not in build_store.get_compiled_raw_paths()
+
+
+def test_ingesting_a_source_does_not_mark_it_compiled(
+    manifest: Manifest, build_store: BuildStore, sample_file: Path
+) -> None:
+    manifest.mark_processing(sample_file, "documents")
+    manifest.mark_complete(sample_file, parse_lane="docling", raw_output="documents/sample.md")
+
+    assert build_store.get_compiled_raw_paths() == set()
 
 
 def test_failure_reason_is_kept_until_the_file_is_retried(

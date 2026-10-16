@@ -1,7 +1,7 @@
 """Authoritative derived state for the menu bar app.
 
 The pipeline and the GUI mutation commands write this file after they change
-the manifest or the cluster preview; the app reads it instead of recomputing
+the pipeline database or the cluster preview; the app reads it instead of recomputing
 the staged set, build cost, stale flag, and review and skipped counts itself.
 Mirrors the ``.status.json`` heartbeat pattern, for slower-changing state.
 """
@@ -21,10 +21,12 @@ from second_brain.clustering.preview import (
     reconcile_work_units,
 )
 from second_brain.compilation.compiler import find_new_sources
+from second_brain.compilation.store import BuildStore
 from second_brain.config import Config
 from second_brain.ingestion.manifest import Manifest
 from second_brain.triage.pipeline import worthwhile_sources
 from second_brain.triage.skipped import SKIPPED_DIRNAME
+from second_brain.triage.store import TriageStore
 from second_brain.wiki.structure import CONTENT_DIRS
 
 logger = logging.getLogger(__name__)
@@ -42,12 +44,12 @@ def _staged_with_sizes(raw_dir: Path, rels: list[str]) -> list[dict]:
 
 
 def _deferred_entries(
-    raw_dir: Path, deferred: dict[str, str], unretryable: set[str]
+    raw_dir: Path, deferred_reasons: dict[str, str], unretryable_sources: set[str]
 ) -> list[dict]:
     """Staged-list entries for parked sources, each with its reason and whether
     a retry could succeed."""
     entries: list[dict] = []
-    for rel, reason in sorted(deferred.items()):
+    for rel, reason in sorted(deferred_reasons.items()):
         path = raw_dir / rel
         if not path.exists():
             continue
@@ -56,7 +58,7 @@ def _deferred_entries(
                 "rel": rel,
                 "bytes": path.stat().st_size,
                 "defer_reason": reason,
-                "retryable": rel not in unretryable,
+                "retryable": rel not in unretryable_sources,
             }
         )
     return entries
@@ -97,7 +99,7 @@ def _triage_counts(raw_dir: Path, decisions: dict[str, str]) -> tuple[int, int]:
     return needs_review, skipped
 
 
-def compute_state(config: Config, manifest: Manifest) -> dict:
+def compute_state(config: Config) -> dict:
     """
     Build the authoritative derived state the app renders.
 
@@ -105,8 +107,6 @@ def compute_state(config: Config, manifest: Manifest) -> dict:
     ----------
     config: Config
         Application configuration (paths and model selection).
-    manifest: Manifest
-        Ingestion manifest holding compiled and triage records.
 
     Returns
     -------
@@ -115,14 +115,17 @@ def compute_state(config: Config, manifest: Manifest) -> dict:
         build cost, needs-review and skipped counts, whether a reviewed
         grouping has drifted from staging, and why each failed file failed.
     """
-    queue = worthwhile_sources(config, manifest, find_new_sources(config, manifest))
+    build_store = BuildStore(config.manifest_db_path)
+    queue = worthwhile_sources(config, find_new_sources(config))
     work_units = reconcile_work_units(config.data_dir, queue) or [[rel] for rel in queue]
     preview = load_preview(config.data_dir)
     stale = preview is not None and preview_members(preview) != set(queue)
     staged = _staged_with_sizes(config.raw_dir, queue) + _deferred_entries(
-        config.raw_dir, manifest.get_deferred_sources(), manifest.get_unretryable_sources()
+        config.raw_dir, build_store.get_deferred_sources(), build_store.get_unretryable_sources()
     )
-    needs_review, skipped = _triage_counts(config.raw_dir, manifest.get_triage_decisions())
+    needs_review, skipped = _triage_counts(
+        config.raw_dir, TriageStore(config.manifest_db_path).get_decisions()
+    )
     return {
         "generated_at": datetime.now(UTC).isoformat(),
         "staged": staged,
@@ -131,22 +134,17 @@ def compute_state(config: Config, manifest: Manifest) -> dict:
         "stale": stale,
         "needs_review": needs_review,
         "skipped": skipped,
-        "ingest_failures": manifest.get_ingest_failures(),
+        "ingest_failures": Manifest(config.manifest_db_path).get_ingest_failures(),
     }
 
 
-def write_state(config: Config, manifest: Manifest) -> None:
+def emit_state(config: Config) -> None:
     """Atomically write the derived state file. Best-effort; never raises."""
     try:
         config.data_dir.mkdir(parents=True, exist_ok=True)
         path = config.data_dir / STATE_FILENAME
         temp_path = path.with_suffix(".json.tmp")
-        temp_path.write_text(json.dumps(compute_state(config, manifest)), encoding="utf-8")
+        temp_path.write_text(json.dumps(compute_state(config)), encoding="utf-8")
         temp_path.replace(path)
     except OSError as exc:
         logger.debug("Could not write state file: %s", exc)
-
-
-def emit_state(config: Config) -> None:
-    """Recompute and write the state file with a fresh manifest handle."""
-    write_state(config, Manifest(config.manifest_db_path))

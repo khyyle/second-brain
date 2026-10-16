@@ -4,8 +4,10 @@ from pathlib import Path
 
 import pytest
 
+from second_brain.compilation.store import BuildStore
 from second_brain.config import Config, SearchConfig
 from second_brain.ingestion.manifest import Manifest
+from second_brain.triage.store import TriageStore
 
 
 @pytest.fixture
@@ -20,6 +22,18 @@ def config(tmp_path: Path) -> Config:
 def manifest(config: Config) -> Manifest:
     """Fresh manifest matching the test's isolated config."""
     return Manifest(config.manifest_db_path)
+
+
+@pytest.fixture
+def build_store(config: Config) -> BuildStore:
+    """Build records in the test's isolated database."""
+    return BuildStore(config.manifest_db_path)
+
+
+@pytest.fixture
+def triage_store(config: Config) -> TriageStore:
+    """Triage verdicts in the test's isolated database."""
+    return TriageStore(config.manifest_db_path)
 
 
 @pytest.fixture

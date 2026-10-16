@@ -10,7 +10,6 @@ import click
 
 from second_brain.config import DEFAULT_DATA_DIR, Config, ConfigError, load_config
 from second_brain.errors import SecondBrainError
-from second_brain.ingestion.manifest import Manifest
 from second_brain.ollama import OllamaUnavailableError
 from second_brain.run_record import CRASH_REASON, StageOutcome, exit_code_for, record_run
 from second_brain.status import now_iso
@@ -305,10 +304,10 @@ def ingest(
             click.echo(f"Processed {count} files")
 
             # Triage runs here (local Gemma, free) rather than at the paid compile
-            # step, so every ingested source has a decision before the user builds.
+            # step, so every ingested source has a decision before the user build_store.
             from second_brain.triage.pipeline import triage_pending
 
-            triaged = triage_pending(config, manifest)
+            triaged = triage_pending(config)
             if sum(triaged.values()):
                 click.echo(
                     f"Triaged: {triaged['worthwhile']} worthwhile, "
@@ -347,7 +346,6 @@ def ingest(
 def compile(ctx: click.Context, full: bool, dry_run: bool) -> None:
     """Compile new/changed sources into the wiki."""
     from second_brain.compilation.compiler import OLLAMA_BUILD_STOPPED_REASON, run_compilation
-    from second_brain.ingestion.manifest import Manifest
     from second_brain.state import emit_state
 
     config: Config = ctx.obj["config"]
@@ -367,8 +365,7 @@ def compile(ctx: click.Context, full: bool, dry_run: bool) -> None:
         config.ensure_directories()
         _require_ollama(config)
 
-        manifest = Manifest(config.manifest_db_path)
-        stats = run_compilation(config, manifest, force_full=full, dry_run=dry_run)
+        stats = run_compilation(config, force_full=full, dry_run=dry_run)
         click.echo(f"Sources compiled: {stats['sources_compiled']}")
         click.echo(f"Wiki pages: {stats['total_pages']}")
         click.echo(f"Total links: {stats['total_links']}")
@@ -419,15 +416,17 @@ def recompile(ctx: click.Context, raw_paths: tuple[str, ...]) -> None:
     Clears a source's compiled mark and any deferral, so the next build
     redoes it. Paths are relative to the raw directory.
     """
+    from second_brain.compilation.store import BuildStore
+
     config: Config = ctx.obj["config"]
-    manifest = Manifest(config.manifest_db_path)
+    build_store = BuildStore(config.manifest_db_path)
 
     for raw_path in raw_paths:
         if not (config.raw_dir / raw_path).exists():
             click.echo(f"Warning: {raw_path} not found under raw/", err=True)
 
-    released = manifest.clear_deferred(list(raw_paths))
-    uncompiled = manifest.unmark_compiled(list(raw_paths))
+    released = build_store.clear_deferred(list(raw_paths))
+    uncompiled = build_store.unmark_compiled(list(raw_paths))
 
     from second_brain.state import emit_state
 
@@ -448,10 +447,7 @@ def preview_clusters(ctx: click.Context) -> None:
     config.ensure_directories()
 
     from second_brain.clustering.preview import write_preview
-    from second_brain.ingestion.manifest import Manifest
     from second_brain.status import clear_status, now_iso, touch_status, write_status
-
-    manifest = Manifest(config.manifest_db_path)
 
     # Embedding the staged set can take minutes; report per-source progress
     # (with a keepalive between, for the occasional slow multi-chunk source)
@@ -473,7 +469,7 @@ def preview_clusters(ctx: click.Context) -> None:
     heartbeat = threading.Thread(target=_keepalive, daemon=True)
     heartbeat.start()
     try:
-        artifact = write_preview(config, manifest, progress=_on_progress)
+        artifact = write_preview(config, progress=_on_progress)
     except OllamaUnavailableError as exc:
         raise click.ClickException(
             "Couldn't group chats because Ollama isn't responding. Your grouping wasn't changed."
@@ -554,15 +550,15 @@ def status(ctx: click.Context, sources: bool) -> None:
 @click.argument("raw_path")
 @click.pass_context
 def forget(ctx: click.Context, raw_path: str) -> None:
-    """Un-ingest a source: clear its manifest, compiled, and triage records.
+    """Un-ingest a source: clear its ingestion, triage, and build records.
 
     RAW_PATH is relative to the raw directory (e.g. documents/notes.md). This
     clears database records only; deleting the raw file on disk is separate.
     """
     config: Config = ctx.obj["config"]
-    from second_brain.ingestion.manifest import Manifest
+    from second_brain.sources import forget_source
 
-    Manifest(config.manifest_db_path).forget_source(raw_path)
+    forget_source(config, raw_path)
     click.echo(f"Forgot {raw_path}")
     from second_brain.state import emit_state
 
@@ -607,9 +603,9 @@ def triage() -> None:
 def triage_set(ctx: click.Context, raw_path: str, decision: str) -> None:
     """Override the triage DECISION for RAW_PATH (a manual Keep/Skip)."""
     config: Config = ctx.obj["config"]
-    from second_brain.ingestion.manifest import Manifest
+    from second_brain.triage.store import TriageStore
 
-    Manifest(config.manifest_db_path).record_triage(
+    TriageStore(config.manifest_db_path).record(
         raw_path, decision, confidence=1.0, reason="manual override"
     )
     click.echo(f"Set {raw_path} -> {decision}")
@@ -733,9 +729,11 @@ def wiki_rollback(ctx: click.Context, count: int, yes: bool) -> None:
         )
     sources = rollback(config.wiki_dir, count)
 
-    # the wiki records sources as raw/<path>; the manifest keys on <path>
-    manifest = Manifest(config.manifest_db_path)
-    requeued = manifest.unmark_compiled([s.removeprefix("raw/") for s in sources])
+    from second_brain.compilation.store import BuildStore
+
+    # the wiki records sources as raw/<path>; build records key on <path>
+    build_store = BuildStore(config.manifest_db_path)
+    requeued = build_store.unmark_compiled([s.removeprefix("raw/") for s in sources])
 
     rebuild_structure(config.wiki_dir)
     _sync_search_index(config)
@@ -809,10 +807,11 @@ def wiki_dismiss(ctx: click.Context, page_a: str, page_b: str) -> None:
     """Mark PAGE_A and PAGE_B as not duplicates, hiding the suggestion."""
     config: Config = ctx.obj["config"]
     from second_brain.wiki.slugs import normalize_link_target
+    from second_brain.wiki.store import DuplicateStore
 
     stem_a = normalize_link_target(page_a)
     stem_b = normalize_link_target(page_b)
-    Manifest(config.manifest_db_path).dismiss_duplicate(stem_a, stem_b)
+    DuplicateStore(config.manifest_db_path).dismiss(stem_a, stem_b)
     click.echo(f"Dismissed duplicate suggestion: {stem_a} + {stem_b}")
 
 
@@ -927,9 +926,10 @@ def health(ctx: click.Context, as_json: bool) -> None:
 
     from second_brain.mcp_server.search import SearchIndex
     from second_brain.wiki.health import MERGE_THRESHOLD, SPLIT_THRESHOLD, run_health_check
+    from second_brain.wiki.store import DuplicateStore
 
     search = SearchIndex(config.search_db_path, config.search)
-    dismissed = Manifest(config.manifest_db_path).get_dismissed_duplicates()
+    dismissed = DuplicateStore(config.manifest_db_path).get_dismissed()
     report = run_health_check(
         config.wiki_dir,
         duplicate_pairs=search.near_duplicate_pairs(exclude=dismissed),

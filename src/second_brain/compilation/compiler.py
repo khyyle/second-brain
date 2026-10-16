@@ -19,8 +19,8 @@ from second_brain.compilation.agent import (
     compact_history,
     explore_tool_schemas,
 )
+from second_brain.compilation.store import BuildStore
 from second_brain.config import Config
-from second_brain.ingestion.manifest import Manifest
 from second_brain.llm import (
     ModelError,
     ModelErrorKind,
@@ -154,19 +154,17 @@ def _estimate_unit_tokens(raw_dir: Path, unit: list[str]) -> int:
     return total_bytes // 4
 
 
-def find_new_sources(config: Config, manifest: Manifest) -> list[str]:
+def find_new_sources(config: Config) -> list[str]:
     """
     Find raw source files that haven't been compiled yet.
 
     Deferred sources (a prior run ended without completing) are excluded,
-    so scheduled builds don't retry them unattended.
+    so scheduled build_store don't retry them unattended.
 
     Parameters
     ----------
     config: Config
         Application configuration.
-    manifest: Manifest
-        Ingestion manifest tracking compiled paths.
 
     Returns
     -------
@@ -177,8 +175,9 @@ def find_new_sources(config: Config, manifest: Manifest) -> list[str]:
     if not raw_dir.exists():
         return []
 
-    compiled = manifest.get_compiled_raw_paths()
-    deferred = manifest.get_deferred_sources()
+    build_store = BuildStore(config.manifest_db_path)
+    compiled_sources = build_store.get_compiled_raw_paths()
+    deferred_sources = build_store.get_deferred_sources()
     new_sources: list[str] = []
 
     for md_file in raw_dir.rglob("*.md"):
@@ -186,7 +185,7 @@ def find_new_sources(config: Config, manifest: Manifest) -> list[str]:
         if any(part.startswith(".") for part in relative.parts):
             continue  # skip the .skipped/ holding folder and other dotfiles
         rel = str(relative)
-        if rel not in compiled and rel not in deferred:
+        if rel not in compiled_sources and rel not in deferred_sources:
             new_sources.append(rel)
 
     return sorted(new_sources)
@@ -250,7 +249,6 @@ def _outcome_fields(
 
 def run_compilation(
     config: Config,
-    manifest: Manifest,
     force_full: bool = False,
     dry_run: bool = False,
 ) -> dict:
@@ -264,11 +262,9 @@ def run_compilation(
     ----------
     config: Config
         Application configuration.
-    manifest: Manifest
-        Ingestion manifest tracking compiled paths.
     force_full: bool
         If ``True``, recompile all sources regardless of
-        manifest state.
+        what is already built.
     dry_run: bool
         If ``True``, skip agent execution and git commit.
 
@@ -282,6 +278,7 @@ def run_compilation(
     """
     wiki_dir = config.wiki_dir
     raw_dir = config.raw_dir
+    build_store = BuildStore(config.manifest_db_path)
 
     from second_brain.wiki.schema import write_default_schema
 
@@ -291,7 +288,7 @@ def run_compilation(
     if force_full:
         new_sources = sorted(str(f.relative_to(raw_dir)) for f in raw_dir.rglob("*.md"))
     else:
-        new_sources = find_new_sources(config, manifest)
+        new_sources = find_new_sources(config)
 
     if not new_sources:
         logger.info("No new sources to compile")
@@ -305,8 +302,8 @@ def run_compilation(
         from second_brain.triage.pipeline import triage_pending, worthwhile_sources
 
         # Catch anything ingested before triage existed.
-        triage_pending(config, manifest)
-        new_sources = worthwhile_sources(config, manifest, new_sources)
+        triage_pending(config)
+        new_sources = worthwhile_sources(config, new_sources)
 
     if not new_sources:
         logger.info("Nothing worthwhile to compile")
@@ -380,7 +377,7 @@ def run_compilation(
                     config.compilation.provider, config.compilation.model
                 ).context_window_tokens
                 if estimated_tokens > int(window * _INLINE_SOURCE_WINDOW_FRACTION):
-                    manifest.defer_sources(
+                    build_store.defer_sources(
                         unit, _too_large_reason(estimated_tokens), retryable=False
                     )
                     logger.warning(
@@ -420,7 +417,7 @@ def run_compilation(
 
                 cumulative_cost += result.cost
                 if result.outcome is RunOutcome.COMPLETED:
-                    manifest.mark_compiled(unit)
+                    build_store.mark_compiled(unit)
                     _git_commit(wiki_dir)
                     compiled_count += len(unit)
                     continue
@@ -451,7 +448,7 @@ def run_compilation(
                 elif result.outcome in (RunOutcome.EXHAUSTED, RunOutcome.TOO_LARGE):
                     # Retrying unattended would fail the same way and re-bill,
                     # so park the group where the user can see why.
-                    manifest.defer_sources(
+                    build_store.defer_sources(
                         unit,
                         result.reason,
                         retryable=result.outcome is RunOutcome.EXHAUSTED,

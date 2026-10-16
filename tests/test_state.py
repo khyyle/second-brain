@@ -6,9 +6,11 @@ import json
 from pathlib import Path
 
 from second_brain.clustering.preview import CLUSTERS_FILENAME
+from second_brain.compilation.store import BuildStore
 from second_brain.config import Config
 from second_brain.ingestion.manifest import Manifest
 from second_brain.state import compute_state
+from second_brain.triage.store import TriageStore
 
 
 def _seed(config: Config, *names: str) -> None:
@@ -18,10 +20,10 @@ def _seed(config: Config, *names: str) -> None:
         (raw / name).write_text("body " * 50, encoding="utf-8")
 
 
-def test_compute_state_lists_staged_sources(config: Config, manifest: Manifest) -> None:
+def test_compute_state_lists_staged_sources(config: Config) -> None:
     _seed(config, "a.md", "b.md")
 
-    state = compute_state(config, manifest)
+    state = compute_state(config)
 
     assert sorted(s["rel"] for s in state["staged"]) == ["documents/a.md", "documents/b.md"]
     assert all(s["bytes"] > 0 for s in state["staged"])
@@ -30,29 +32,29 @@ def test_compute_state_lists_staged_sources(config: Config, manifest: Manifest) 
     assert state["costs"] and all(cost >= 0 for cost in state["costs"].values())
 
 
-def test_compute_state_excludes_undecided_chat(config: Config, manifest: Manifest) -> None:
+def test_compute_state_excludes_undecided_chat(config: Config) -> None:
     chat = config.raw_dir / "chatgpt"
     chat.mkdir(parents=True, exist_ok=True)
     (chat / "chat.md").write_text("body " * 50, encoding="utf-8")
     _seed(config, "doc.md")
 
-    state = compute_state(config, manifest)
+    state = compute_state(config)
 
     rels = [entry["rel"] for entry in state["staged"]]
     assert "chatgpt/chat.md" not in rels
     assert "documents/doc.md" in rels
 
 
-def test_compute_state_excludes_skipped(config: Config, manifest: Manifest) -> None:
+def test_compute_state_excludes_skipped(config: Config, triage_store: TriageStore) -> None:
     _seed(config, "a.md", "b.md")
-    manifest.record_triage("documents/b.md", "skip", confidence=1.0, reason="manual")
+    triage_store.record("documents/b.md", "skip", confidence=1.0, reason="manual")
 
-    state = compute_state(config, manifest)
+    state = compute_state(config)
 
     assert [s["rel"] for s in state["staged"]] == ["documents/a.md"]
 
 
-def test_compute_state_flags_drifted_preview(config: Config, manifest: Manifest) -> None:
+def test_compute_state_flags_drifted_preview(config: Config) -> None:
     _seed(config, "a.md", "b.md")
     # A preview that covers only one of the two staged sources is stale.
     artifact = {
@@ -60,43 +62,43 @@ def test_compute_state_flags_drifted_preview(config: Config, manifest: Manifest)
     }
     (config.data_dir / CLUSTERS_FILENAME).write_text(json.dumps(artifact), encoding="utf-8")
 
-    state = compute_state(config, manifest)
+    state = compute_state(config)
 
     assert state["stale"] is True
 
 
-def test_compute_state_counts_needs_review(config: Config, manifest: Manifest) -> None:
+def test_compute_state_counts_needs_review(config: Config, triage_store: TriageStore) -> None:
     _seed(config, "present.md")
-    manifest.record_triage("documents/present.md", "review", confidence=1.0, reason="unsure")
-    manifest.record_triage("documents/missing.md", "review", confidence=1.0, reason="unsure")
+    triage_store.record("documents/present.md", "review", confidence=1.0, reason="unsure")
+    triage_store.record("documents/missing.md", "review", confidence=1.0, reason="unsure")
 
-    state = compute_state(config, manifest)
+    state = compute_state(config)
 
     assert state["needs_review"] == 1
 
 
-def test_compute_state_counts_skipped(config: Config, manifest: Manifest) -> None:
+def test_compute_state_counts_skipped(config: Config, triage_store: TriageStore) -> None:
     _seed(config, "in_raw.md")
     skipped = config.raw_dir / ".skipped" / "documents"
     skipped.mkdir(parents=True, exist_ok=True)
     (skipped / "in_skipped.md").write_text("body " * 50, encoding="utf-8")
-    manifest.record_triage("documents/in_raw.md", "skip", confidence=1.0, reason="manual")
-    manifest.record_triage("documents/in_skipped.md", "skip", confidence=1.0, reason="manual")
-    manifest.record_triage("documents/gone.md", "skip", confidence=1.0, reason="manual")
+    triage_store.record("documents/in_raw.md", "skip", confidence=1.0, reason="manual")
+    triage_store.record("documents/in_skipped.md", "skip", confidence=1.0, reason="manual")
+    triage_store.record("documents/gone.md", "skip", confidence=1.0, reason="manual")
 
-    state = compute_state(config, manifest)
+    state = compute_state(config)
 
     assert state["skipped"] == 1
 
 
 def test_set_aside_sources_say_whether_a_retry_can_help(
-    config: Config, manifest: Manifest
+    config: Config, build_store: BuildStore
 ) -> None:
     _seed(config, "long.md", "huge.md")
-    manifest.defer_sources(["documents/long.md"], "The model didn't finish.", retryable=True)
-    manifest.defer_sources(["documents/huge.md"], "Too large to build.", retryable=False)
+    build_store.defer_sources(["documents/long.md"], "The model didn't finish.", retryable=True)
+    build_store.defer_sources(["documents/huge.md"], "Too large to build.", retryable=False)
 
-    state = compute_state(config, manifest)
+    state = compute_state(config)
 
     retryable = {entry["rel"]: entry["retryable"] for entry in state["staged"]}
     assert retryable == {"documents/huge.md": False, "documents/long.md": True}
@@ -110,6 +112,6 @@ def test_failed_ingests_carry_their_reason(
     manifest.mark_processing(drop, "documents")
     manifest.mark_failed(drop, "Chandra failed on page 3")
 
-    state = compute_state(config, manifest)
+    state = compute_state(config)
 
     assert state["ingest_failures"] == {str(drop): "Chandra failed on page 3"}

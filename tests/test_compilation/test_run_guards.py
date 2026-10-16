@@ -11,8 +11,8 @@ import pytest
 
 from second_brain.compilation import compiler
 from second_brain.compilation.compiler import RunOutcome, RunResult
+from second_brain.compilation.store import BuildStore
 from second_brain.config import CompilationConfig, Config, TriageConfig
-from second_brain.ingestion.manifest import Manifest
 from second_brain.llm import resolve_profile
 from second_brain.mcp_server.tools import WikiTools
 from second_brain.ollama import OllamaUnavailableError
@@ -243,7 +243,6 @@ def test_build_stops_when_cost_cap_reached(
 ) -> None:
     """run_compilation stops before the source that would cross the cost cap."""
     config = _build_config(tmp_path)
-    manifest = Manifest(config.manifest_db_path)
 
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
     monkeypatch.setattr(compiler, "find_new_sources", lambda *_: ["a.md", "b.md", "c.md"])
@@ -258,7 +257,7 @@ def test_build_stops_when_cost_cap_reached(
 
     monkeypatch.setattr(compiler, "_run_agent", fake_run_agent)
 
-    stats = compiler.run_compilation(config, manifest)
+    stats = compiler.run_compilation(config)
 
     # a -> $1, b -> $2, then cumulative ($2) hits the cap before c.
     assert runs == ["a.md", "b.md"]
@@ -273,7 +272,7 @@ def test_exhausted_unit_is_deferred_not_compiled(
 ) -> None:
     """A run that never finishes parks its unit and the build moves on."""
     config = _build_config(tmp_path)
-    manifest = Manifest(config.manifest_db_path)
+    build_store = BuildStore(config.manifest_db_path)
 
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
     monkeypatch.setattr(compiler, "find_new_sources", lambda *_: ["a.md", "b.md"])
@@ -287,11 +286,13 @@ def test_exhausted_unit_is_deferred_not_compiled(
 
     monkeypatch.setattr(compiler, "_run_agent", fake_run_agent)
 
-    stats = compiler.run_compilation(config, manifest)
+    stats = compiler.run_compilation(config)
 
-    assert manifest.get_deferred_sources() == {"a.md": "failed to compile within 20 agent turns"}
-    assert manifest.get_unretryable_sources() == set()
-    assert manifest.get_compiled_raw_paths() == {"b.md"}
+    assert build_store.get_deferred_sources() == {
+        "a.md": "failed to compile within 20 agent turns"
+    }
+    assert build_store.get_unretryable_sources() == set()
+    assert build_store.get_compiled_raw_paths() == {"b.md"}
     assert stats["sources_compiled"] == 1
     assert stats["outcome"] is StageOutcome.PARTIAL
     assert stats["reason"] == "1 source was set aside."
@@ -303,7 +304,7 @@ def test_cost_capped_unit_stays_staged_not_deferred(
 ) -> None:
     """A cap-stopped unit is retried next build (fresh budget), never parked."""
     config = _build_config(tmp_path)
-    manifest = Manifest(config.manifest_db_path)
+    build_store = BuildStore(config.manifest_db_path)
 
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
     monkeypatch.setattr(compiler, "find_new_sources", lambda *_: ["a.md", "b.md"])
@@ -318,7 +319,7 @@ def test_cost_capped_unit_stays_staged_not_deferred(
 
     monkeypatch.setattr(compiler, "_run_agent", fake_run_agent)
 
-    stats = compiler.run_compilation(config, manifest)
+    stats = compiler.run_compilation(config)
 
     # The capped unit ends the build; nothing after it runs.
     assert runs == ["a.md"]
@@ -326,19 +327,19 @@ def test_cost_capped_unit_stays_staged_not_deferred(
     assert stats["outcome"] is StageOutcome.CAPPED
     assert stats["reason"] == "Reached the spend cap per build with 2 sources left."
     assert stats["counts"] == {"completed": 0, "deferred": 0, "left": 2}
-    assert manifest.get_compiled_raw_paths() == set()
-    assert manifest.get_deferred_sources() == {}
+    assert build_store.get_compiled_raw_paths() == set()
+    assert build_store.get_deferred_sources() == {}
 
 
 def test_find_new_sources_excludes_deferred(tmp_path: Path) -> None:
     config = _build_config(tmp_path)
-    manifest = Manifest(config.manifest_db_path)
+    build_store = BuildStore(config.manifest_db_path)
     (config.raw_dir / "a.md").write_text("alpha", encoding="utf-8")
     (config.raw_dir / "b.md").write_text("beta", encoding="utf-8")
 
-    manifest.defer_sources(["b.md"], "The model didn't finish.", retryable=True)
+    build_store.defer_sources(["b.md"], "The model didn't finish.", retryable=True)
 
-    assert compiler.find_new_sources(config, manifest) == ["a.md"]
+    assert compiler.find_new_sources(config) == ["a.md"]
 
 
 def test_over_window_unit_defers_preflight_without_api_call(
@@ -346,7 +347,7 @@ def test_over_window_unit_defers_preflight_without_api_call(
 ) -> None:
     """A source too large for the model's window parks before any spend."""
     config = _build_config(tmp_path)
-    manifest = Manifest(config.manifest_db_path)
+    build_store = BuildStore(config.manifest_db_path)
 
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
     monkeypatch.setattr(compiler, "rebuild_structure", lambda *_: {})
@@ -366,13 +367,13 @@ def test_over_window_unit_defers_preflight_without_api_call(
 
     monkeypatch.setattr(compiler, "_run_agent", fail_run_agent)
 
-    stats = compiler.run_compilation(config, manifest)
+    stats = compiler.run_compilation(config)
 
     assert stats["sources_compiled"] == 0
-    deferred = manifest.get_deferred_sources()
-    assert set(deferred) == {"huge.md"}
-    assert "Split it into smaller files" in deferred["huge.md"]
-    assert manifest.get_unretryable_sources() == {"huge.md"}
+    deferred_sources = build_store.get_deferred_sources()
+    assert set(deferred_sources) == {"huge.md"}
+    assert "Split it into smaller files" in deferred_sources["huge.md"]
+    assert build_store.get_unretryable_sources() == {"huge.md"}
 
 
 def test_unexpected_failure_stops_build_and_keeps_units_staged(
@@ -380,7 +381,7 @@ def test_unexpected_failure_stops_build_and_keeps_units_staged(
 ) -> None:
     """An unexpected failure in our own code stops the build and leaves every unit staged."""
     config = _build_config(tmp_path)
-    manifest = Manifest(config.manifest_db_path)
+    build_store = BuildStore(config.manifest_db_path)
 
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
     monkeypatch.setattr(compiler, "find_new_sources", lambda *_: ["a.md", "b.md"])
@@ -397,15 +398,15 @@ def test_unexpected_failure_stops_build_and_keeps_units_staged(
 
     monkeypatch.setattr(compiler, "_run_agent", raise_unexpected)
 
-    stats = compiler.run_compilation(config, manifest)
+    stats = compiler.run_compilation(config)
 
     assert len(attempts) == 1
     assert stats["sources_compiled"] == 0
     assert stats["outcome"] is StageOutcome.FAILED
     assert stats["reason"] == CRASH_REASON
     assert stats["counts"] == {"completed": 0, "deferred": 0, "left": 2}
-    assert manifest.get_deferred_sources() == {}
-    assert manifest.get_compiled_raw_paths() == set()
+    assert build_store.get_deferred_sources() == {}
+    assert build_store.get_compiled_raw_paths() == set()
 
 
 def test_prompt_too_long_rejection_defers_not_retries(
@@ -413,7 +414,7 @@ def test_prompt_too_long_rejection_defers_not_retries(
 ) -> None:
     """The API's own too-long rejection parks the unit instead of retry-looping."""
     config = _build_config(tmp_path)
-    manifest = Manifest(config.manifest_db_path)
+    build_store = BuildStore(config.manifest_db_path)
 
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
     monkeypatch.setattr(compiler, "find_new_sources", lambda *_: ["a.md"])
@@ -428,11 +429,11 @@ def test_prompt_too_long_rejection_defers_not_retries(
         error=error,
     )
 
-    stats = compiler.run_compilation(config, manifest)
+    stats = compiler.run_compilation(config)
 
     assert client.messages.calls == 1
     assert stats["sources_compiled"] == 0
-    assert set(manifest.get_deferred_sources()) == {"a.md"}
+    assert set(build_store.get_deferred_sources()) == {"a.md"}
 
 
 def test_provider_failure_stops_build_and_keeps_curation(
@@ -440,7 +441,7 @@ def test_provider_failure_stops_build_and_keeps_curation(
 ) -> None:
     """An account failure stops the build and leaves skipped files and the preview."""
     config = _build_config(tmp_path)
-    manifest = Manifest(config.manifest_db_path)
+    build_store = BuildStore(config.manifest_db_path)
     skipped = config.raw_dir / ".skipped" / "chatgpt"
     skipped.mkdir(parents=True)
     (skipped / "junk.md").write_text("y", encoding="utf-8")
@@ -461,11 +462,11 @@ def test_provider_failure_stops_build_and_keeps_curation(
         error=_status_error(402, "credit balance is too low"),
     )
 
-    stats = compiler.run_compilation(config, manifest)
+    stats = compiler.run_compilation(config)
 
     assert client.messages.calls == 1
-    assert manifest.get_compiled_raw_paths() == set()
-    assert manifest.get_deferred_sources() == {}
+    assert build_store.get_compiled_raw_paths() == set()
+    assert build_store.get_deferred_sources() == {}
     assert (config.raw_dir / ".skipped" / "chatgpt" / "junk.md").is_file()
     assert (config.data_dir / ".clusters.json").is_file()
     assert stats["outcome"] is StageOutcome.FAILED
@@ -478,7 +479,6 @@ def test_stop_before_first_unit_is_stopped(
 ) -> None:
     """A stop requested before the first unit ends the build with nothing run."""
     config = _build_config(tmp_path)
-    manifest = Manifest(config.manifest_db_path)
 
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
     monkeypatch.setattr(compiler, "find_new_sources", lambda *_: ["a.md", "b.md"])
@@ -491,7 +491,7 @@ def test_stop_before_first_unit_is_stopped(
 
     monkeypatch.setattr(compiler, "_run_agent", fail_if_called)
 
-    stats = compiler.run_compilation(config, manifest)
+    stats = compiler.run_compilation(config)
 
     assert stats["outcome"] is StageOutcome.STOPPED
     assert stats["reason"] == ""
@@ -504,7 +504,6 @@ def test_full_build_purges_skipped_holding(
 ) -> None:
     """A build that compiles every staged source clears the holding folder."""
     config = _build_config(tmp_path)
-    manifest = Manifest(config.manifest_db_path)
     skipped = config.raw_dir / ".skipped" / "chatgpt"
     skipped.mkdir(parents=True, exist_ok=True)
     (skipped / "junk.md").write_text("y", encoding="utf-8")
@@ -517,7 +516,7 @@ def test_full_build_purges_skipped_holding(
         compiler, "_run_agent", lambda *_a, **_k: RunResult(0.1, RunOutcome.COMPLETED)
     )
 
-    stats = compiler.run_compilation(config, manifest)
+    stats = compiler.run_compilation(config)
 
     assert stats["outcome"] is StageOutcome.OK
     assert stats["reason"] == ""
@@ -530,7 +529,6 @@ def test_incomplete_build_keeps_skipped_holding(
 ) -> None:
     """A failed unit leaves the holding folder for the next attempt."""
     config = _build_config(tmp_path)
-    manifest = Manifest(config.manifest_db_path)
     skipped = config.raw_dir / ".skipped" / "chatgpt"
     skipped.mkdir(parents=True, exist_ok=True)
     (skipped / "junk.md").write_text("y", encoding="utf-8")
@@ -544,7 +542,7 @@ def test_incomplete_build_keeps_skipped_holding(
         compiler, "_run_agent", lambda *_a, **_k: RunResult(0.0, RunOutcome.FAILED)
     )
 
-    compiler.run_compilation(config, manifest)
+    compiler.run_compilation(config)
 
     assert (config.raw_dir / ".skipped" / "chatgpt" / "junk.md").is_file()
 

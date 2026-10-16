@@ -19,7 +19,6 @@ from pathlib import Path
 from second_brain.clustering import get_clusterer
 from second_brain.clustering.sources import cluster_scoped_sources
 from second_brain.config import Config
-from second_brain.ingestion.manifest import Manifest
 from second_brain.llm import SUPPORTED_MODELS, resolve_profile
 
 logger = logging.getLogger(__name__)
@@ -104,15 +103,13 @@ def model_prices() -> dict[str, tuple[float, float]]:
     return prices
 
 
-def _staged_sources(config: Config, manifest: Manifest) -> list[str]:
+def _staged_sources(config: Config) -> list[str]:
     """Return the raw paths the build would compile: new and worthwhile.
 
     Parameters
     ----------
     config: Config
         Application configuration.
-    manifest: Manifest
-        Ingestion manifest holding compiled and triage records.
 
     Returns
     -------
@@ -122,15 +119,14 @@ def _staged_sources(config: Config, manifest: Manifest) -> list[str]:
     from second_brain.compilation.compiler import find_new_sources
     from second_brain.triage.pipeline import worthwhile_sources
 
-    new_sources = find_new_sources(config, manifest)
+    new_sources = find_new_sources(config)
     if config.triage.enabled:
-        new_sources = worthwhile_sources(config, manifest, new_sources)
+        new_sources = worthwhile_sources(config, new_sources)
     return new_sources
 
 
 def build_preview(
     config: Config,
-    manifest: Manifest,
     progress: Callable[[int, int], None] | None = None,
 ) -> dict:
     """Cluster the staged sources and return a preview artifact dict.
@@ -139,8 +135,6 @@ def build_preview(
     ----------
     config: Config
         Application configuration (clustering and embedding settings).
-    manifest: Manifest
-        Ingestion manifest for source selection.
     progress: Callable[[int, int], None] | None
         Called with ``(done, total)`` as sources are embedded, for a live
         progress readout.
@@ -151,7 +145,7 @@ def build_preview(
         The preview artifact: metadata plus a list of group descriptors,
         each with a stable id, representative title, members, and cost.
     """
-    staged = _staged_sources(config, manifest)
+    staged = _staged_sources(config)
     profile = resolve_profile(config.compilation.provider, config.compilation.model)
     prices = model_prices()
     clusters = cluster_scoped_sources(
@@ -201,7 +195,6 @@ def build_preview(
 
 def write_preview(
     config: Config,
-    manifest: Manifest,
     progress: Callable[[int, int], None] | None = None,
 ) -> dict:
     """Compute the preview, write it to the vault, and clear stale overrides.
@@ -210,8 +203,6 @@ def write_preview(
     ----------
     config: Config
         Application configuration.
-    manifest: Manifest
-        Ingestion manifest for source selection.
     progress: Callable[[int, int], None] | None
         Forwarded to :func:`build_preview` for a live progress readout.
 
@@ -220,7 +211,7 @@ def write_preview(
     dict
         The artifact that was written (so callers can report counts/cost).
     """
-    artifact = build_preview(config, manifest, progress=progress)
+    artifact = build_preview(config, progress=progress)
     path = config.data_dir / CLUSTERS_FILENAME
     path.write_text(json.dumps(artifact, indent=2), encoding="utf-8")
     # A fresh grouping invalidates corrections aimed at the previous one.

@@ -2,7 +2,7 @@
 
 Triage runs during ingestion (it uses the local Gemma model, so it is
 free and does not need to wait for the paid compile step). Decisions are
-recorded in the manifest, so by the time the user reviews or builds, every
+recorded in the triage triage_store, so by the time the user reviews or builds, every
 ingested source already has a worthwhile / review / skip verdict.
 """
 
@@ -13,11 +13,11 @@ import shutil
 from pathlib import Path
 
 from second_brain.config import Config
-from second_brain.ingestion.manifest import Manifest
 from second_brain.ollama import OllamaUnavailableError
 from second_brain.status import clear_status, now_iso, write_status
 from second_brain.triage.gemma import TriageDecision, triage_file
 from second_brain.triage.skipped import move_skips_to_holding
+from second_brain.triage.store import TriageStore
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +47,7 @@ def _source_of(rel_path: str) -> str:
     return parts[0] if parts else ""
 
 
-def _find_untriaged(config: Config, manifest: Manifest) -> list[str]:
+def _find_untriaged(config: Config, triage_store: TriageStore) -> list[str]:
     """Return undecided raw .md paths in triage-scoped lanes.
 
     Only lanes listed in ``config.triage.sources`` are triaged. Sources in
@@ -58,8 +58,8 @@ def _find_untriaged(config: Config, manifest: Manifest) -> list[str]:
     ----------
     config: Config
         Application configuration (raw directory and triage scope).
-    manifest: Manifest
-        Manifest holding existing triage decisions.
+    triage_store: TriageStore
+        Store holding existing triage decisions.
 
     Returns
     -------
@@ -69,7 +69,7 @@ def _find_untriaged(config: Config, manifest: Manifest) -> list[str]:
     raw_dir = config.raw_dir
     if not raw_dir.exists():
         return []
-    decided = set(manifest.get_triage_decisions().keys())
+    decided = set(triage_store.get_decisions())
     pending: list[str] = []
     for md_file in raw_dir.rglob("*.md"):
         relative = md_file.relative_to(raw_dir)
@@ -83,7 +83,7 @@ def _find_untriaged(config: Config, manifest: Manifest) -> list[str]:
     return sorted(pending)
 
 
-def triage_pending(config: Config, manifest: Manifest) -> dict[str, int]:
+def triage_pending(config: Config) -> dict[str, int]:
     """Triage every untriaged source in a scoped lane and record decisions.
 
     Review-tier sources are also copied into the inbox for a manual pass.
@@ -97,8 +97,6 @@ def triage_pending(config: Config, manifest: Manifest) -> dict[str, int]:
     ----------
     config: Config
         Application configuration (triage settings, paths).
-    manifest: Manifest
-        Manifest for reading/recording triage decisions.
 
     Returns
     -------
@@ -113,7 +111,8 @@ def triage_pending(config: Config, manifest: Manifest) -> dict[str, int]:
     if not config.triage.enabled:
         return {"worthwhile": 0, "review": 0, "skip": 0}
 
-    pending = _find_untriaged(config, manifest)
+    triage_store = TriageStore(config.manifest_db_path)
+    pending = _find_untriaged(config, triage_store)
     counts = {"worthwhile": 0, "review": 0, "skip": 0}
     interruption: TriageInterruptedError | None = None
     interruption_cause: OllamaUnavailableError | None = None
@@ -143,9 +142,7 @@ def triage_pending(config: Config, manifest: Manifest) -> dict[str, int]:
                     interruption_cause = exc
                     logger.warning("%s", interruption)
                     break
-                manifest.record_triage(
-                    rel, result.decision.value, result.confidence, result.reason
-                )
+                triage_store.record(rel, result.decision.value, result.confidence, result.reason)
                 counts[result.decision.value] += 1
                 if result.decision == TriageDecision.REVIEW:
                     review_paths.append(rel)
@@ -161,7 +158,7 @@ def triage_pending(config: Config, manifest: Manifest) -> dict[str, int]:
             total,
         )
 
-    moved = move_skips_to_holding(config.raw_dir, manifest.get_triage_decisions())
+    moved = move_skips_to_holding(config.raw_dir, triage_store.get_decisions())
     if moved:
         logger.info("Moved %d skipped source(s) into holding folder", moved)
     if interruption is not None and interruption_cause is not None:
@@ -184,7 +181,7 @@ def _route_review_to_inbox(config: Config, review: list[str]) -> None:
             logger.warning("Could not copy %s to inbox: %s", rel, exc)
 
 
-def worthwhile_sources(config: Config, manifest: Manifest, sources: list[str]) -> list[str]:
+def worthwhile_sources(config: Config, sources: list[str]) -> list[str]:
     """Filter sources to those a paid build should compile.
 
     Review and skip decisions are excluded. When triage is enabled, a source
@@ -197,8 +194,6 @@ def worthwhile_sources(config: Config, manifest: Manifest, sources: list[str]) -
     ----------
     config: Config
         Application configuration (triage scope and whether it is on).
-    manifest: Manifest
-        Manifest holding triage decisions.
     sources: list[str]
         Candidate raw source paths.
 
@@ -207,7 +202,7 @@ def worthwhile_sources(config: Config, manifest: Manifest, sources: list[str]) -
     list[str]
         The subset to compile.
     """
-    decisions = manifest.get_triage_decisions()
+    decisions = TriageStore(config.manifest_db_path).get_decisions()
     held = {TriageDecision.REVIEW.value, TriageDecision.SKIP.value}
     triaged_lanes = set(config.triage.sources)
     kept: list[str] = []
