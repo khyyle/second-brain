@@ -20,8 +20,8 @@ from second_brain.clustering.preview import (
     preview_members,
     reconcile_work_units,
 )
-from second_brain.compilation.compiler import find_new_sources
-from second_brain.compilation.store import BuildStore
+from second_brain.compilation.compiler import find_new_sources, find_set_aside_sources
+from second_brain.compilation.store import DeferredSource
 from second_brain.config import Config
 from second_brain.ingestion.manifest import Manifest
 from second_brain.triage.pipeline import worthwhile_sources
@@ -43,25 +43,18 @@ def _staged_with_sizes(raw_dir: Path, rels: list[str]) -> list[dict]:
     return sized
 
 
-def _deferred_entries(
-    raw_dir: Path, deferred_reasons: dict[str, str], unretryable_sources: set[str]
-) -> list[dict]:
-    """Staged-list entries for parked sources, each with its reason and whether
+def _deferred_entries(raw_dir: Path, deferred_sources: dict[str, DeferredSource]) -> list[dict]:
+    """Staged-list entries for set-aside sources, each with its reason and whether
     a retry could succeed."""
-    entries: list[dict] = []
-    for rel, reason in sorted(deferred_reasons.items()):
-        path = raw_dir / rel
-        if not path.exists():
-            continue
-        entries.append(
-            {
-                "rel": rel,
-                "bytes": path.stat().st_size,
-                "defer_reason": reason,
-                "retryable": rel not in unretryable_sources,
-            }
-        )
-    return entries
+    return [
+        {
+            "rel": rel,
+            "bytes": (raw_dir / rel).stat().st_size,
+            "defer_reason": deferred.reason,
+            "retryable": deferred.retryable,
+        }
+        for rel, deferred in sorted(deferred_sources.items())
+    ]
 
 
 def _build_costs(raw_dir: Path, work_units: list[list[str]]) -> dict[str, float]:
@@ -115,13 +108,12 @@ def compute_state(config: Config) -> dict:
         build cost, needs-review and skipped counts, whether a reviewed
         grouping has drifted from staging, and why each failed file failed.
     """
-    build_store = BuildStore(config.manifest_db_path)
     queue = worthwhile_sources(config, find_new_sources(config))
     work_units = reconcile_work_units(config.data_dir, queue) or [[rel] for rel in queue]
     preview = load_preview(config.data_dir)
     stale = preview is not None and preview_members(preview) != set(queue)
     staged = _staged_with_sizes(config.raw_dir, queue) + _deferred_entries(
-        config.raw_dir, build_store.get_deferred_sources(), build_store.get_unretryable_sources()
+        config.raw_dir, find_set_aside_sources(config)
     )
     needs_review, skipped = _triage_counts(
         config.raw_dir, TriageStore(config.manifest_db_path).get_decisions()

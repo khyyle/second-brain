@@ -19,8 +19,9 @@ from second_brain.compilation.agent import (
     compact_history,
     explore_tool_schemas,
 )
-from second_brain.compilation.store import BuildStore
+from second_brain.compilation.store import BuildStore, DeferredSource
 from second_brain.config import Config
+from second_brain.hashing import hash_file
 from second_brain.llm import (
     ModelError,
     ModelErrorKind,
@@ -154,12 +155,36 @@ def _estimate_unit_tokens(raw_dir: Path, unit: list[str]) -> int:
     return total_bytes // 4
 
 
+def _raw_sources(raw_dir: Path) -> list[str]:
+    """Relative paths of every raw markdown source, outside hidden folders such as
+    the skipped holding folder."""
+    if not raw_dir.exists():
+        return []
+    sources: list[str] = []
+    for md_file in raw_dir.rglob("*.md"):
+        relative = md_file.relative_to(raw_dir)
+        if not any(part.startswith(".") for part in relative.parts):
+            sources.append(str(relative))
+    return sorted(sources)
+
+
+def _record_is_current(recorded_hash: str | None, raw_file: Path) -> bool:
+    # Records made before hashes were kept have none; trust them rather than
+    # paying to rebuild every source.
+    return recorded_hash is None or recorded_hash == hash_file(raw_file)
+
+
+def _hash_sources(raw_dir: Path, raw_paths: list[str]) -> dict[str, str]:
+    return {rel: hash_file(raw_dir / rel) for rel in raw_paths}
+
+
 def find_new_sources(config: Config) -> list[str]:
     """
-    Find raw source files that haven't been compiled yet.
+    Find raw source files that haven't been compiled in their current version.
 
-    Deferred sources (a prior run ended without completing) are excluded,
-    so scheduled build_store don't retry them unattended.
+    A source whose file changed since it was built is staged again. Set-aside
+    sources (a prior run ended without completing) are excluded until their
+    file changes, so scheduled builds don't retry them unattended.
 
     Parameters
     ----------
@@ -169,26 +194,46 @@ def find_new_sources(config: Config) -> list[str]:
     Returns
     -------
     list[str]
-        Sorted relative paths of uncompiled raw sources.
+        Sorted relative paths of raw sources to compile.
     """
     raw_dir = config.raw_dir
-    if not raw_dir.exists():
-        return []
-
     build_store = BuildStore(config.manifest_db_path)
-    compiled_sources = build_store.get_compiled_raw_paths()
-    deferred_sources = build_store.get_deferred_sources()
+    compiled_hashes = build_store.get_compiled()
+    deferred_sources = build_store.get_deferred()
+
     new_sources: list[str] = []
+    for rel in _raw_sources(raw_dir):
+        raw_file = raw_dir / rel
+        if rel in deferred_sources and _record_is_current(
+            deferred_sources[rel].content_hash, raw_file
+        ):
+            continue
+        if rel in compiled_hashes and _record_is_current(compiled_hashes[rel], raw_file):
+            continue
+        new_sources.append(rel)
+    return new_sources
 
-    for md_file in raw_dir.rglob("*.md"):
-        relative = md_file.relative_to(raw_dir)
-        if any(part.startswith(".") for part in relative.parts):
-            continue  # skip the .skipped/ holding folder and other dotfiles
-        rel = str(relative)
-        if rel not in compiled_sources and rel not in deferred_sources:
-            new_sources.append(rel)
 
-    return sorted(new_sources)
+def find_set_aside_sources(config: Config) -> dict[str, DeferredSource]:
+    """
+    Find set-aside sources whose file is still the version that was set aside.
+
+    Parameters
+    ----------
+    config: Config
+        Application configuration.
+
+    Returns
+    -------
+    dict[str, DeferredSource]
+        Relative raw path mapped to why the build set it aside.
+    """
+    raw_dir = config.raw_dir
+    return {
+        rel: deferred
+        for rel, deferred in BuildStore(config.manifest_db_path).get_deferred().items()
+        if (raw_dir / rel).exists() and _record_is_current(deferred.content_hash, raw_dir / rel)
+    }
 
 
 def _source_count(count: int) -> str:
@@ -371,6 +416,9 @@ def run_compilation(
                     )
                     outcome = StageOutcome.CAPPED
                     break
+                # Hashed before the agent reads them, so an edit made mid-build
+                # is still staged for the next one.
+                unit_hashes = _hash_sources(raw_dir, unit)
                 # determine if this source can leave working room in model context window
                 estimated_tokens = _estimate_unit_tokens(raw_dir, unit)
                 window = resolve_profile(
@@ -378,7 +426,7 @@ def run_compilation(
                 ).context_window_tokens
                 if estimated_tokens > int(window * _INLINE_SOURCE_WINDOW_FRACTION):
                     build_store.defer_sources(
-                        unit, _too_large_reason(estimated_tokens), retryable=False
+                        unit_hashes, _too_large_reason(estimated_tokens), retryable=False
                     )
                     logger.warning(
                         "Deferred %s pre-flight: ~%dk tokens exceeds the %dk-token window",
@@ -417,7 +465,7 @@ def run_compilation(
 
                 cumulative_cost += result.cost
                 if result.outcome is RunOutcome.COMPLETED:
-                    build_store.mark_compiled(unit)
+                    build_store.mark_compiled(unit_hashes)
                     _git_commit(wiki_dir)
                     compiled_count += len(unit)
                     continue
@@ -449,7 +497,7 @@ def run_compilation(
                     # Retrying unattended would fail the same way and re-bill,
                     # so park the group where the user can see why.
                     build_store.defer_sources(
-                        unit,
+                        unit_hashes,
                         result.reason,
                         retryable=result.outcome is RunOutcome.EXHAUSTED,
                     )

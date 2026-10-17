@@ -38,7 +38,10 @@ def test_migrating_again_changes_nothing(tmp_path: Path) -> None:
     db_path = tmp_path / "manifest.db"
     migrate(db_path)
     with connect(db_path) as conn:
-        conn.execute("INSERT INTO compiled VALUES ('documents/a.md', '2026-01-01T00:00:00')")
+        conn.execute(
+            "INSERT INTO compiled (raw_path, compiled_at) VALUES (?, ?)",
+            ("documents/a.md", "2026-01-01T00:00:00"),
+        )
     version = _version(db_path)
 
     migrate(db_path)

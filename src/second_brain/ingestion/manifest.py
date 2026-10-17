@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import logging
 import sqlite3
 from contextlib import AbstractContextManager
@@ -11,11 +10,9 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from second_brain.db import connect, migrate
+from second_brain.hashing import hash_file
 
 logger = logging.getLogger(__name__)
-
-# 64 KB read buffer to match typical OS page size for efficient disk I/O
-BUF_SIZE = 65536
 
 
 def _raw_output_exists(raw_dir: Path, raw_output: str | None) -> bool:
@@ -69,26 +66,6 @@ class Manifest:
     def _conn(self) -> AbstractContextManager[sqlite3.Connection]:
         return connect(self._db_path)
 
-    @staticmethod
-    def compute_hash(file_path: Path) -> str:
-        """Compute SHA-256 of a file's contents for change detection.
-
-        Parameters
-        ----------
-        file_path: Path
-            File to hash.
-
-        Returns
-        -------
-        str
-            Hex-encoded SHA-256 digest.
-        """
-        h = hashlib.sha256()
-        with open(file_path, "rb") as f:
-            while chunk := f.read(BUF_SIZE):
-                h.update(chunk)
-        return h.hexdigest()
-
     def needs_processing(self, file_path: Path, raw_dir: Path | None = None) -> bool:
         """Check whether a file is new, changed, or previously failed.
 
@@ -107,7 +84,7 @@ class Manifest:
         bool
             ``True`` if the file should be (re-)processed.
         """
-        current_hash = self.compute_hash(file_path)
+        current_hash = hash_file(file_path)
         with self._conn() as conn:
             row = conn.execute(
                 "SELECT sha256, status, raw_output FROM manifest WHERE file_path = ?",
@@ -169,7 +146,7 @@ class Manifest:
             Label for the source (e.g., ``"goodnotes"``).
         """
         now = datetime.now(UTC).isoformat()
-        sha = self.compute_hash(file_path)
+        sha = hash_file(file_path)
         with self._conn() as conn:
             conn.execute(
                 """INSERT INTO manifest
@@ -217,12 +194,6 @@ class Manifest:
                    WHERE file_path = ?""",
                 (parse_lane, raw_output, content_hash, now, str(file_path)),
             )
-            # (Re)ingesting a source invalidates any prior compilation of
-            # its raw output, so an overwritten/updated file is recompiled and
-            # deferrals are released.
-            if raw_output is not None:
-                conn.execute("DELETE FROM compiled WHERE raw_path = ?", (raw_output,))
-                conn.execute("DELETE FROM deferred_sources WHERE raw_path = ?", (raw_output,))
 
     def mark_duplicate(self, file_path: Path, source_type: str) -> None:
         """Record a file whose content was already ingested under another path.
@@ -243,7 +214,7 @@ class Manifest:
             ).fetchone()
         if exists:
             return
-        sha = self.compute_hash(file_path)
+        sha = hash_file(file_path)
         now = datetime.now(UTC).isoformat()
         with self._conn() as conn:
             original = conn.execute(

@@ -3,10 +3,20 @@
 from __future__ import annotations
 
 import sqlite3
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
 from second_brain.db import connect, migrate
+
+
+@dataclass(frozen=True)
+class DeferredSource:
+    """A source a build set aside, and the version of it that was set aside."""
+
+    reason: str
+    retryable: bool
+    content_hash: str | None
 
 
 class BuildStore:
@@ -23,23 +33,24 @@ class BuildStore:
         self._db_path = db_path
         migrate(db_path)
 
-    def mark_compiled(self, raw_paths: list[str]) -> None:
+    def mark_compiled(self, source_hashes: dict[str, str]) -> None:
         """Record that the given raw files were compiled into the wiki.
 
         Parameters
         ----------
-        raw_paths: list[str]
-            Raw file paths (relative to the raw directory) consumed by
-            the compilation agent in a successful run.
+        source_hashes: dict[str, str]
+            Raw file path (relative to the raw directory) mapped to the
+            content hash of the version the build read.
         """
-        if not raw_paths:
+        if not source_hashes:
             return
         now = datetime.now(UTC).isoformat()
         with connect(self._db_path) as conn:
             conn.executemany(
-                "INSERT INTO compiled (raw_path, compiled_at) VALUES (?, ?) "
-                "ON CONFLICT(raw_path) DO UPDATE SET compiled_at = excluded.compiled_at",
-                [(rel, now) for rel in raw_paths],
+                "INSERT INTO compiled (raw_path, compiled_at, content_hash) VALUES (?, ?, ?) "
+                "ON CONFLICT(raw_path) DO UPDATE SET "
+                "compiled_at = excluded.compiled_at, content_hash = excluded.content_hash",
+                [(rel, now, content_hash) for rel, content_hash in source_hashes.items()],
             )
 
     def unmark_compiled(self, raw_paths: list[str]) -> int:
@@ -68,25 +79,29 @@ class BuildStore:
                 cleared += cursor.rowcount
         return cleared
 
-    def get_compiled_raw_paths(self) -> set[str]:
-        """Return the set of raw file paths already compiled into the wiki.
+    def get_compiled(self) -> dict[str, str | None]:
+        """Return every compiled raw file and the content hash it was built from.
 
         Returns
         -------
-        set[str]
-            Relative raw paths that the compilation agent has consumed.
+        dict[str, str | None]
+            Relative raw path mapped to its content hash, or ``None`` for a
+            record made before hashes were kept.
         """
         with connect(self._db_path) as conn:
-            rows = conn.execute("SELECT raw_path FROM compiled").fetchall()
-        return {r["raw_path"] for r in rows}
+            rows = conn.execute("SELECT raw_path, content_hash FROM compiled").fetchall()
+        return {r["raw_path"]: r["content_hash"] for r in rows}
 
-    def defer_sources(self, raw_paths: list[str], reason: str, *, retryable: bool) -> None:
+    def defer_sources(
+        self, source_hashes: dict[str, str], reason: str, *, retryable: bool
+    ) -> None:
         """Record sources as set aside. Re-deferring updates the reason.
 
         Parameters
         ----------
-        raw_paths: list[str]
-            Paths relative to the raw directory.
+        source_hashes: dict[str, str]
+            Raw file path (relative to the raw directory) mapped to the
+            content hash of the version being set aside.
         reason: str
             Human-readable cause.
         retryable: bool
@@ -95,38 +110,38 @@ class BuildStore:
         now = datetime.now(UTC).isoformat()
         with connect(self._db_path) as conn:
             conn.executemany(
-                "INSERT INTO deferred_sources (raw_path, reason, deferred_at, retryable) "
-                "VALUES (?, ?, ?, ?) ON CONFLICT(raw_path) DO UPDATE SET "
+                "INSERT INTO deferred_sources "
+                "(raw_path, reason, deferred_at, retryable, content_hash) "
+                "VALUES (?, ?, ?, ?, ?) ON CONFLICT(raw_path) DO UPDATE SET "
                 "reason = excluded.reason, deferred_at = excluded.deferred_at, "
-                "retryable = excluded.retryable",
-                [(path, reason, now, int(retryable)) for path in raw_paths],
+                "retryable = excluded.retryable, content_hash = excluded.content_hash",
+                [
+                    (rel, reason, now, int(retryable), content_hash)
+                    for rel, content_hash in source_hashes.items()
+                ],
             )
 
-    def get_deferred_sources(self) -> dict[str, str]:
-        """Return every deferred source as a raw_path -> reason mapping.
+    def get_deferred(self) -> dict[str, DeferredSource]:
+        """Return every set-aside source.
 
         Returns
         -------
-        dict[str, str]
-            Deferred raw paths and why each was parked.
-        """
-        with connect(self._db_path) as conn:
-            rows = conn.execute("SELECT raw_path, reason FROM deferred_sources").fetchall()
-        return {r["raw_path"]: r["reason"] for r in rows}
-
-    def get_unretryable_sources(self) -> set[str]:
-        """Return the deferred sources that building again cannot fix.
-
-        Returns
-        -------
-        set[str]
-            Raw paths that must be split before they can be built.
+        dict[str, DeferredSource]
+            Relative raw path mapped to why it was set aside, whether a retry
+            could succeed, and which version was set aside.
         """
         with connect(self._db_path) as conn:
             rows = conn.execute(
-                "SELECT raw_path FROM deferred_sources WHERE retryable = 0"
+                "SELECT raw_path, reason, retryable, content_hash FROM deferred_sources"
             ).fetchall()
-        return {r["raw_path"] for r in rows}
+        return {
+            r["raw_path"]: DeferredSource(
+                reason=r["reason"],
+                retryable=bool(r["retryable"]),
+                content_hash=r["content_hash"],
+            )
+            for r in rows
+        }
 
     def clear_deferred(self, raw_paths: list[str]) -> int:
         """Release deferred sources back into the compile queue.

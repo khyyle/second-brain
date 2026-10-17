@@ -13,6 +13,7 @@ from second_brain.compilation import compiler
 from second_brain.compilation.compiler import RunOutcome, RunResult
 from second_brain.compilation.store import BuildStore
 from second_brain.config import CompilationConfig, Config, TriageConfig
+from second_brain.hashing import hash_file
 from second_brain.llm import resolve_profile
 from second_brain.mcp_server.tools import WikiTools
 from second_brain.ollama import OllamaUnavailableError
@@ -238,6 +239,15 @@ def _build_config(tmp_path: Path) -> Config:
     return cfg
 
 
+def _stage(monkeypatch: pytest.MonkeyPatch, config: Config, raw_paths: list[str]) -> None:
+    """Stage these sources for the build, writing a raw file for any the test didn't."""
+    for rel in raw_paths:
+        raw_file = config.raw_dir / rel
+        if not raw_file.exists():
+            raw_file.write_text(f"# {rel}\n", encoding="utf-8")
+    monkeypatch.setattr(compiler, "find_new_sources", lambda *_: list(raw_paths))
+
+
 def test_build_stops_when_cost_cap_reached(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -245,7 +255,7 @@ def test_build_stops_when_cost_cap_reached(
     config = _build_config(tmp_path)
 
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
-    monkeypatch.setattr(compiler, "find_new_sources", lambda *_: ["a.md", "b.md", "c.md"])
+    _stage(monkeypatch, config, ["a.md", "b.md", "c.md"])
     monkeypatch.setattr(compiler, "rebuild_structure", lambda *_: {})
     monkeypatch.setattr(compiler, "_git_commit", lambda *_: None)
 
@@ -275,7 +285,7 @@ def test_exhausted_unit_is_deferred_not_compiled(
     build_store = BuildStore(config.manifest_db_path)
 
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
-    monkeypatch.setattr(compiler, "find_new_sources", lambda *_: ["a.md", "b.md"])
+    _stage(monkeypatch, config, ["a.md", "b.md"])
     monkeypatch.setattr(compiler, "rebuild_structure", lambda *_: {})
     monkeypatch.setattr(compiler, "_git_commit", lambda *_: None)
 
@@ -288,11 +298,11 @@ def test_exhausted_unit_is_deferred_not_compiled(
 
     stats = compiler.run_compilation(config)
 
-    assert build_store.get_deferred_sources() == {
-        "a.md": "failed to compile within 20 agent turns"
-    }
-    assert build_store.get_unretryable_sources() == set()
-    assert build_store.get_compiled_raw_paths() == {"b.md"}
+    deferred_sources = build_store.get_deferred()
+    assert set(deferred_sources) == {"a.md"}
+    assert deferred_sources["a.md"].reason == "failed to compile within 20 agent turns"
+    assert deferred_sources["a.md"].retryable
+    assert set(build_store.get_compiled()) == {"b.md"}
     assert stats["sources_compiled"] == 1
     assert stats["outcome"] is StageOutcome.PARTIAL
     assert stats["reason"] == "1 source was set aside."
@@ -307,7 +317,7 @@ def test_cost_capped_unit_stays_staged_not_deferred(
     build_store = BuildStore(config.manifest_db_path)
 
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
-    monkeypatch.setattr(compiler, "find_new_sources", lambda *_: ["a.md", "b.md"])
+    _stage(monkeypatch, config, ["a.md", "b.md"])
     monkeypatch.setattr(compiler, "rebuild_structure", lambda *_: {})
     monkeypatch.setattr(compiler, "_git_commit", lambda *_: None)
 
@@ -327,8 +337,8 @@ def test_cost_capped_unit_stays_staged_not_deferred(
     assert stats["outcome"] is StageOutcome.CAPPED
     assert stats["reason"] == "Reached the spend cap per build with 2 sources left."
     assert stats["counts"] == {"completed": 0, "deferred": 0, "left": 2}
-    assert build_store.get_compiled_raw_paths() == set()
-    assert build_store.get_deferred_sources() == {}
+    assert build_store.get_compiled() == {}
+    assert build_store.get_deferred() == {}
 
 
 def test_find_new_sources_excludes_deferred(tmp_path: Path) -> None:
@@ -337,7 +347,9 @@ def test_find_new_sources_excludes_deferred(tmp_path: Path) -> None:
     (config.raw_dir / "a.md").write_text("alpha", encoding="utf-8")
     (config.raw_dir / "b.md").write_text("beta", encoding="utf-8")
 
-    build_store.defer_sources(["b.md"], "The model didn't finish.", retryable=True)
+    build_store.defer_sources(
+        {"b.md": hash_file(config.raw_dir / "b.md")}, "The model didn't finish.", retryable=True
+    )
 
     assert compiler.find_new_sources(config) == ["a.md"]
 
@@ -360,7 +372,7 @@ def test_over_window_unit_defers_preflight_without_api_call(
         lambda *a, **k: dataclasses.replace(profile, context_window_tokens=1000),
     )
     (config.raw_dir / "huge.md").write_text("x" * 10_000, encoding="utf-8")
-    monkeypatch.setattr(compiler, "find_new_sources", lambda *_: ["huge.md"])
+    _stage(monkeypatch, config, ["huge.md"])
 
     def fail_run_agent(*_a, **_k):
         raise AssertionError("agent must not run for an over-window unit")
@@ -370,10 +382,10 @@ def test_over_window_unit_defers_preflight_without_api_call(
     stats = compiler.run_compilation(config)
 
     assert stats["sources_compiled"] == 0
-    deferred_sources = build_store.get_deferred_sources()
+    deferred_sources = build_store.get_deferred()
     assert set(deferred_sources) == {"huge.md"}
-    assert "Split it into smaller files" in deferred_sources["huge.md"]
-    assert build_store.get_unretryable_sources() == {"huge.md"}
+    assert "Split it into smaller files" in deferred_sources["huge.md"].reason
+    assert not deferred_sources["huge.md"].retryable
 
 
 def test_unexpected_failure_stops_build_and_keeps_units_staged(
@@ -384,7 +396,7 @@ def test_unexpected_failure_stops_build_and_keeps_units_staged(
     build_store = BuildStore(config.manifest_db_path)
 
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
-    monkeypatch.setattr(compiler, "find_new_sources", lambda *_: ["a.md", "b.md"])
+    _stage(monkeypatch, config, ["a.md", "b.md"])
     monkeypatch.setattr(compiler, "rebuild_structure", lambda *_: {})
     monkeypatch.setattr(compiler, "_git_commit", lambda *_: None)
     monkeypatch.setattr(compiler, "_git_restore", lambda *_: None)
@@ -405,8 +417,8 @@ def test_unexpected_failure_stops_build_and_keeps_units_staged(
     assert stats["outcome"] is StageOutcome.FAILED
     assert stats["reason"] == CRASH_REASON
     assert stats["counts"] == {"completed": 0, "deferred": 0, "left": 2}
-    assert build_store.get_deferred_sources() == {}
-    assert build_store.get_compiled_raw_paths() == set()
+    assert build_store.get_deferred() == {}
+    assert build_store.get_compiled() == {}
 
 
 def test_prompt_too_long_rejection_defers_not_retries(
@@ -417,7 +429,7 @@ def test_prompt_too_long_rejection_defers_not_retries(
     build_store = BuildStore(config.manifest_db_path)
 
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
-    monkeypatch.setattr(compiler, "find_new_sources", lambda *_: ["a.md"])
+    _stage(monkeypatch, config, ["a.md"])
     monkeypatch.setattr(compiler, "rebuild_structure", lambda *_: {})
     monkeypatch.setattr(compiler, "_git_commit", lambda *_: None)
     (config.raw_dir / "a.md").write_text("body", encoding="utf-8")
@@ -433,7 +445,7 @@ def test_prompt_too_long_rejection_defers_not_retries(
 
     assert client.messages.calls == 1
     assert stats["sources_compiled"] == 0
-    assert set(build_store.get_deferred_sources()) == {"a.md"}
+    assert set(build_store.get_deferred()) == {"a.md"}
 
 
 def test_provider_failure_stops_build_and_keeps_curation(
@@ -451,7 +463,7 @@ def test_provider_failure_stops_build_and_keeps_curation(
     (config.data_dir / ".clusters.json").write_text("{not json", encoding="utf-8")
 
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
-    monkeypatch.setattr(compiler, "find_new_sources", lambda *_: ["a.md", "b.md"])
+    _stage(monkeypatch, config, ["a.md", "b.md"])
     monkeypatch.setattr(compiler, "rebuild_structure", lambda *_: {})
     monkeypatch.setattr(compiler, "_git_commit", lambda *_: None)
     monkeypatch.setattr(compiler, "_git_restore", lambda *_: None)
@@ -465,8 +477,8 @@ def test_provider_failure_stops_build_and_keeps_curation(
     stats = compiler.run_compilation(config)
 
     assert client.messages.calls == 1
-    assert build_store.get_compiled_raw_paths() == set()
-    assert build_store.get_deferred_sources() == {}
+    assert build_store.get_compiled() == {}
+    assert build_store.get_deferred() == {}
     assert (config.raw_dir / ".skipped" / "chatgpt" / "junk.md").is_file()
     assert (config.data_dir / ".clusters.json").is_file()
     assert stats["outcome"] is StageOutcome.FAILED
@@ -481,7 +493,7 @@ def test_stop_before_first_unit_is_stopped(
     config = _build_config(tmp_path)
 
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
-    monkeypatch.setattr(compiler, "find_new_sources", lambda *_: ["a.md", "b.md"])
+    _stage(monkeypatch, config, ["a.md", "b.md"])
     monkeypatch.setattr(compiler, "rebuild_structure", lambda *_: {})
     monkeypatch.setattr(compiler, "_git_commit", lambda *_: None)
     monkeypatch.setattr("second_brain.status.stop_requested", lambda _data_dir: True)
@@ -509,7 +521,7 @@ def test_full_build_purges_skipped_holding(
     (skipped / "junk.md").write_text("y", encoding="utf-8")
 
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
-    monkeypatch.setattr(compiler, "find_new_sources", lambda *_: ["a.md"])
+    _stage(monkeypatch, config, ["a.md"])
     monkeypatch.setattr(compiler, "rebuild_structure", lambda *_: {})
     monkeypatch.setattr(compiler, "_git_commit", lambda *_: None)
     monkeypatch.setattr(
@@ -534,7 +546,7 @@ def test_incomplete_build_keeps_skipped_holding(
     (skipped / "junk.md").write_text("y", encoding="utf-8")
 
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
-    monkeypatch.setattr(compiler, "find_new_sources", lambda *_: ["a.md"])
+    _stage(monkeypatch, config, ["a.md"])
     monkeypatch.setattr(compiler, "rebuild_structure", lambda *_: {})
     monkeypatch.setattr(compiler, "_git_commit", lambda *_: None)
     monkeypatch.setattr(compiler, "_git_restore", lambda *_: None)

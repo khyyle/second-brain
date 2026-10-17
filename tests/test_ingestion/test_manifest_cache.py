@@ -41,21 +41,6 @@ def test_mark_duplicate_records_terminal_state(manifest: Manifest, tmp_path: Pat
     assert manifest.needs_processing(copy) is True
 
 
-def test_reingesting_a_source_releases_its_deferral(
-    manifest: Manifest, build_store: BuildStore, tmp_path: Path
-) -> None:
-    # The content that failed to compile is no longer the content on disk,
-    # so an updated drop gets a fresh attempt instead of staying parked.
-    source = tmp_path / "notes.md"
-    source.write_text("v2 of the notes", encoding="utf-8")
-    manifest.mark_processing(source, "documents")
-    build_store.defer_sources(["documents/notes.md"], "did not finish", retryable=True)
-
-    manifest.mark_complete(source, raw_output="documents/notes.md")
-
-    assert build_store.get_deferred_sources() == {}
-
-
 def test_page_cache_round_trip(manifest: Manifest) -> None:
     """A put_cached_page entry should be returned verbatim by get_cached_page."""
     manifest.put_cached_page(
@@ -188,25 +173,13 @@ def test_remove_entries_empty_is_noop(manifest: Manifest) -> None:
     assert manifest.remove_entries([]) == 0
 
 
-def test_reingest_invalidates_compiled(
-    manifest: Manifest, build_store: BuildStore, sample_file: Path
-) -> None:
-    """Re-ingesting a source clears its compiled marker so it recompiles."""
-    build_store.mark_compiled(["documents/sample.md"])
-
-    manifest.mark_processing(sample_file, "documents")
-    manifest.mark_complete(sample_file, parse_lane="docling", raw_output="documents/sample.md")
-
-    assert "documents/sample.md" not in build_store.get_compiled_raw_paths()
-
-
 def test_ingesting_a_source_does_not_mark_it_compiled(
     manifest: Manifest, build_store: BuildStore, sample_file: Path
 ) -> None:
     manifest.mark_processing(sample_file, "documents")
     manifest.mark_complete(sample_file, parse_lane="docling", raw_output="documents/sample.md")
 
-    assert build_store.get_compiled_raw_paths() == set()
+    assert build_store.get_compiled() == {}
 
 
 def test_failure_reason_is_kept_until_the_file_is_retried(

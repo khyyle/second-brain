@@ -8,6 +8,7 @@ from pathlib import Path
 from second_brain.clustering.preview import CLUSTERS_FILENAME
 from second_brain.compilation.store import BuildStore
 from second_brain.config import Config
+from second_brain.hashing import hash_file
 from second_brain.ingestion.manifest import Manifest
 from second_brain.state import compute_state
 from second_brain.triage.store import TriageStore
@@ -95,8 +96,17 @@ def test_set_aside_sources_say_whether_a_retry_can_help(
     config: Config, build_store: BuildStore
 ) -> None:
     _seed(config, "long.md", "huge.md")
-    build_store.defer_sources(["documents/long.md"], "The model didn't finish.", retryable=True)
-    build_store.defer_sources(["documents/huge.md"], "Too large to build.", retryable=False)
+    raw_dir = config.raw_dir
+    build_store.defer_sources(
+        {"documents/long.md": hash_file(raw_dir / "documents/long.md")},
+        "The model didn't finish.",
+        retryable=True,
+    )
+    build_store.defer_sources(
+        {"documents/huge.md": hash_file(raw_dir / "documents/huge.md")},
+        "Too large to build.",
+        retryable=False,
+    )
 
     state = compute_state(config)
 

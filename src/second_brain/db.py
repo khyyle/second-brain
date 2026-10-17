@@ -149,6 +149,12 @@ def _create_tables(conn: sqlite3.Connection) -> None:
     """)
 
 
+def _add_build_content_hashes(conn: sqlite3.Connection) -> None:
+    """Record which version of a raw source each build or set-aside applies to."""
+    conn.execute("ALTER TABLE compiled ADD COLUMN content_hash TEXT")
+    conn.execute("ALTER TABLE deferred_sources ADD COLUMN content_hash TEXT")
+
+
 # Append only: a migration's position is the version recorded in existing
 # databases, so reordering or removing one skips or repeats work on them.
-_MIGRATIONS: tuple[Migration, ...] = (_create_tables,)
+_MIGRATIONS: tuple[Migration, ...] = (_create_tables, _add_build_content_hashes)

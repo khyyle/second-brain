@@ -17,12 +17,12 @@ def test_forgetting_a_source_clears_every_stage(
     manifest.mark_processing(drop, "documents")
     manifest.mark_complete(drop, parse_lane="passthrough", raw_output="documents/notes.md")
     triage_store.record("documents/notes.md", "worthwhile", confidence=1.0)
-    build_store.mark_compiled(["documents/notes.md"])
-    build_store.defer_sources(["documents/notes.md"], "did not finish", retryable=True)
+    build_store.mark_compiled({"documents/notes.md": "hash"})
+    build_store.defer_sources({"documents/notes.md": "hash"}, "did not finish", retryable=True)
 
     forget_source(config, "documents/notes.md")
 
     assert manifest.get_entry(drop) is None
     assert triage_store.get_decisions() == {}
-    assert build_store.get_compiled_raw_paths() == set()
-    assert build_store.get_deferred_sources() == {}
+    assert build_store.get_compiled() == {}
+    assert build_store.get_deferred() == {}
