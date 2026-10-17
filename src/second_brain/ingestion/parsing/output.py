@@ -6,7 +6,7 @@ import json
 import logging
 from pathlib import Path
 
-from second_brain.parsing.provider import ParseResult
+from second_brain.ingestion.parsing.provider import ParseResult
 
 logger = logging.getLogger(__name__)
 

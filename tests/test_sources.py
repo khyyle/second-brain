@@ -5,8 +5,8 @@ from __future__ import annotations
 from second_brain.compilation.store import BuildStore
 from second_brain.config import Config
 from second_brain.ingestion.manifest import Manifest
+from second_brain.ingestion.triage.store import TriageStore
 from second_brain.sources import forget_source
-from second_brain.triage.store import TriageStore
 
 
 def test_forgetting_a_source_clears_every_stage(

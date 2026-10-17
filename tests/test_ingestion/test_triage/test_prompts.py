@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from second_brain.config import _TRIAGE_PROFILES
-from second_brain.triage.prompts import (
+from second_brain.ingestion.triage.prompts import (
     DEFAULT_PROFILE,
     TRIAGE_PROFILE_NAMES,
     TRIAGE_PROMPTS,

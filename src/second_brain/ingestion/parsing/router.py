@@ -23,7 +23,7 @@ from pathlib import Path
 import fitz
 
 from second_brain.errors import SecondBrainError
-from second_brain.parsing.provider import ParseLane
+from second_brain.ingestion.parsing.provider import ParseLane
 
 logger = logging.getLogger(__name__)
 

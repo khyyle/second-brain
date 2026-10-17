@@ -56,14 +56,14 @@ ollama pull gemma4:12b
 ollama pull nomic-embed-text
 
 echo "[5/7] Downloading Docling's layout, table, and formula (CodeFormulaV2) models..."
-uv run python -c "from second_brain.parsing.docling_parser import DoclingParser; DoclingParser().load_models()" \
+uv run python -c "from second_brain.ingestion.parsing.docling_parser import DoclingParser; DoclingParser().load_models()" \
     || echo "  Skipped — models will download on the first typed PDF."
 
 echo "[6/7] Preparing local OCR model (Chandra 2, 4-bit MLX)..."
 # Converts Chandra 2 weights to a ~2.9 GB 4-bit MLX model. First run on a
 # fresh machine downloads the source weights; otherwise it reuses the cache.
 # Falls back to converting lazily on the first handwritten ingest.
-uv run python -c "from second_brain.parsing.chandra_parser import ensure_mlx_model; ensure_mlx_model('4bit')" \
+uv run python -c "from second_brain.ingestion.parsing.chandra_parser import ensure_mlx_model; ensure_mlx_model('4bit')" \
     || echo "  Skipped — will convert on the first handwritten ingest."
 
 echo "[7/7] Building and installing the menu bar app..."

@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from second_brain.parsing.provider import (
+from second_brain.ingestion.parsing.provider import (
     DocumentParser,
     ParseBlock,
     ParseLane,

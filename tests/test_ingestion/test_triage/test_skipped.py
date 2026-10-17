@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from second_brain.config import Config
-from second_brain.triage.skipped import move_skips_to_holding, purge_skipped
+from second_brain.ingestion.triage.skipped import move_skips_to_holding, purge_skipped
 
 
 def test_purge_skipped_removes_folder(config: Config) -> None:

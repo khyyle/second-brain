@@ -8,8 +8,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from second_brain.errors import SecondBrainError
-from second_brain.parsing.output import write_parse_output
-from second_brain.parsing.provider import ParseBlock, ParseLane, ParseResult
+from second_brain.ingestion.parsing.output import write_parse_output
+from second_brain.ingestion.parsing.provider import ParseBlock, ParseLane, ParseResult
 from second_brain.wiki.slugs import slugify
 
 logger = logging.getLogger(__name__)

@@ -14,8 +14,8 @@ from second_brain.api.status import STATUS_FILENAME
 from second_brain.clustering.preview import CLUSTERS_FILENAME
 from second_brain.config import Config, ConfigError
 from second_brain.ingestion.pdf_handler import ParserNotAvailableError
+from second_brain.ingestion.triage.pipeline import TriageInterruptedError
 from second_brain.ollama.client import OllamaStatus, OllamaUnavailableError
-from second_brain.triage.pipeline import TriageInterruptedError
 from second_brain.wiki.repo import WikiRepoError
 
 
@@ -128,7 +128,7 @@ def test_ingest_triage_interrupted_exits_1_and_records(
     def _triage(*_args: object, **_kwargs: object) -> dict[str, int]:
         raise TriageInterruptedError(untriaged_count=untriaged_count)
 
-    monkeypatch.setattr("second_brain.triage.pipeline.triage_pending", _triage)
+    monkeypatch.setattr("second_brain.ingestion.triage.pipeline.triage_pending", _triage)
 
     result = CliRunner().invoke(cli.main, ["ingest"])
     record = json.loads((config.data_dir / RUN_RECORD_FILENAME).read_text(encoding="utf-8"))

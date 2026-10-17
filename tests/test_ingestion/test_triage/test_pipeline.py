@@ -9,10 +9,10 @@ import pytest
 
 from second_brain.api.status import STATUS_FILENAME
 from second_brain.config import Config
+from second_brain.ingestion.triage import pipeline as pipeline_mod
+from second_brain.ingestion.triage.gemma import TriageDecision, TriageResult
+from second_brain.ingestion.triage.store import TriageStore
 from second_brain.ollama.client import OllamaUnavailableError
-from second_brain.triage import pipeline as pipeline_mod
-from second_brain.triage.gemma import TriageDecision, TriageResult
-from second_brain.triage.store import TriageStore
 
 
 def _write(raw_dir: Path, rel: str, text: str) -> None:

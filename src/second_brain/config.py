@@ -221,7 +221,7 @@ class SearchConfig(BaseModel):
     semantic_enabled: bool = True
 
 
-# Kept in sync with TRIAGE_PROMPTS in second_brain/triage/prompts.py
+# Kept in sync with TRIAGE_PROMPTS in second_brain/ingestion/triage/prompts.py
 # (asserted by a test). Hardcoded here to avoid an import cycle, since
 # the triage package imports this module.
 _TRIAGE_PROFILES = ("balanced", "technical", "skip_heavy", "project_heavy", "lenient")
@@ -244,7 +244,7 @@ class TriageConfig(BaseModel):
     worthwhile_threshold: float, default=0.6
         Confidence below which a "worthwhile" verdict is demoted to "review".
     profile: str, default="balanced"
-        Triage personality; one of the names in second_brain/triage/prompts.py.
+        Triage personality; one of the names in second_brain/ingestion/triage/prompts.py.
     sources: tuple[str, ...], default=("chatgpt",)
         Which source folders are model-triaged. Others pass through as
         worthwhile (dropping them is the curation).

@@ -7,7 +7,7 @@ from pathlib import Path
 from second_brain.config import Config
 from second_brain.ingestion.dispatch import ingest_file
 from second_brain.ingestion.manifest import Manifest
-from second_brain.parsing.router import UNREADABLE_PDF_REASON
+from second_brain.ingestion.parsing.router import UNREADABLE_PDF_REASON
 
 
 def test_a_file_that_isnt_an_export_is_marked_failed_without_raising(

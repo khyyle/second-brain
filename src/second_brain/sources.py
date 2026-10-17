@@ -6,7 +6,7 @@ from second_brain.compilation.store import forget_build
 from second_brain.config import Config
 from second_brain.db import connect, migrate
 from second_brain.ingestion.manifest import forget_ingested
-from second_brain.triage.store import forget_verdict
+from second_brain.ingestion.triage.store import forget_verdict
 
 
 def forget_source(config: Config, raw_path: str) -> None:

@@ -14,10 +14,10 @@ from pathlib import Path
 
 from second_brain.api.status import clear_status, now_iso, write_status
 from second_brain.config import Config
+from second_brain.ingestion.triage.gemma import TriageDecision, triage_file
+from second_brain.ingestion.triage.skipped import move_skips_to_holding
+from second_brain.ingestion.triage.store import TriageStore
 from second_brain.ollama.client import OllamaUnavailableError
-from second_brain.triage.gemma import TriageDecision, triage_file
-from second_brain.triage.skipped import move_skips_to_holding
-from second_brain.triage.store import TriageStore
 
 logger = logging.getLogger(__name__)
 

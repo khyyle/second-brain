@@ -9,15 +9,15 @@ import httpx
 import pytest
 
 from second_brain.config import TriageConfig
-from second_brain.ollama import client as ollama_client
-from second_brain.ollama.client import OllamaUnavailableError
-from second_brain.triage import gemma
-from second_brain.triage.gemma import (
+from second_brain.ingestion.triage import gemma
+from second_brain.ingestion.triage.gemma import (
     TriageDecision,
     heuristic_skip,
     triage_content,
     triage_file,
 )
+from second_brain.ollama import client as ollama_client
+from second_brain.ollama.client import OllamaUnavailableError
 
 
 class FakeResponse:

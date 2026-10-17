@@ -15,9 +15,9 @@ import pytest
 from second_brain.config import Config
 from second_brain.ingestion import pdf_handler
 from second_brain.ingestion.manifest import Manifest
+from second_brain.ingestion.parsing.chandra_parser import RenderedPage
+from second_brain.ingestion.parsing.provider import ParseLane
 from second_brain.ingestion.pdf_handler import process_pdf_sync
-from second_brain.parsing.chandra_parser import RenderedPage
-from second_brain.parsing.provider import ParseLane
 
 
 class FakeChandraParser:

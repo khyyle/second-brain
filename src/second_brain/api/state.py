@@ -24,9 +24,9 @@ from second_brain.compilation.compiler import find_new_sources, find_set_aside_s
 from second_brain.compilation.store import DeferredSource
 from second_brain.config import Config
 from second_brain.ingestion.manifest import Manifest
-from second_brain.triage.pipeline import worthwhile_sources
-from second_brain.triage.skipped import SKIPPED_DIRNAME
-from second_brain.triage.store import TriageStore
+from second_brain.ingestion.triage.pipeline import worthwhile_sources
+from second_brain.ingestion.triage.skipped import SKIPPED_DIRNAME
+from second_brain.ingestion.triage.store import TriageStore
 from second_brain.wiki.structure import CONTENT_DIRS
 
 logger = logging.getLogger(__name__)

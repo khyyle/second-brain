@@ -11,7 +11,7 @@ from second_brain.compilation.store import BuildStore
 from second_brain.config import Config
 from second_brain.hashing import hash_file
 from second_brain.ingestion.manifest import Manifest
-from second_brain.triage.store import TriageStore
+from second_brain.ingestion.triage.store import TriageStore
 
 
 def _seed(config: Config, *names: str) -> None:

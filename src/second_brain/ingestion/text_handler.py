@@ -5,8 +5,8 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from second_brain.parsing.output import write_parse_output
-from second_brain.parsing.provider import ParseBlock, ParseLane, ParseResult
+from second_brain.ingestion.parsing.output import write_parse_output
+from second_brain.ingestion.parsing.provider import ParseBlock, ParseLane, ParseResult
 from second_brain.wiki.structure import _FRONTMATTER_RE
 
 logger = logging.getLogger(__name__)

@@ -237,7 +237,7 @@ def ingest(
     from second_brain.api.state import emit_state
     from second_brain.ingestion.dispatch import ingest_file
     from second_brain.ingestion.manifest import Manifest
-    from second_brain.triage.pipeline import TriageInterruptedError
+    from second_brain.ingestion.triage.pipeline import TriageInterruptedError
 
     config: Config = ctx.obj["config"]
     started_at = now_iso()
@@ -305,7 +305,7 @@ def ingest(
 
             # Triage runs here (local Gemma, free) rather than at the paid compile
             # step, so every ingested source has a decision before the user build_store.
-            from second_brain.triage.pipeline import triage_pending
+            from second_brain.ingestion.triage.pipeline import triage_pending
 
             triaged = triage_pending(config)
             if sum(triaged.values()):
@@ -603,7 +603,7 @@ def triage() -> None:
 def triage_set(ctx: click.Context, raw_path: str, decision: str) -> None:
     """Override the triage DECISION for RAW_PATH (a manual Keep/Skip)."""
     config: Config = ctx.obj["config"]
-    from second_brain.triage.store import TriageStore
+    from second_brain.ingestion.triage.store import TriageStore
 
     TriageStore(config.manifest_db_path).record(
         raw_path, decision, confidence=1.0, reason="manual override"

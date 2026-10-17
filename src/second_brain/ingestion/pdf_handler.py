@@ -27,14 +27,14 @@ from pathlib import Path
 from second_brain.config import Config
 from second_brain.errors import SecondBrainError
 from second_brain.ingestion.manifest import Manifest
-from second_brain.parsing.chandra_parser import (
+from second_brain.ingestion.parsing.chandra_parser import (
     PAGE_SEPARATOR,
     RenderedPage,
     assemble_chandra_result,
 )
-from second_brain.parsing.output import write_parse_output
-from second_brain.parsing.provider import ParseBlock, ParseLane, ParseResult
-from second_brain.parsing.router import classify_pdf_pages
+from second_brain.ingestion.parsing.output import write_parse_output
+from second_brain.ingestion.parsing.provider import ParseBlock, ParseLane, ParseResult
+from second_brain.ingestion.parsing.router import classify_pdf_pages
 
 logger = logging.getLogger(__name__)
 
@@ -106,7 +106,7 @@ def _get_docling():  # type: ignore[no-untyped-def]
     """Lazy-load the Docling parser singleton."""
     global _docling_parser
     if _docling_parser is None:
-        from second_brain.parsing.docling_parser import DoclingParser
+        from second_brain.ingestion.parsing.docling_parser import DoclingParser
 
         _docling_parser = DoclingParser()
     return _docling_parser
@@ -116,7 +116,7 @@ def _get_chandra(config: Config):  # type: ignore[no-untyped-def]
     """Lazy-load the (MLX) Chandra parser singleton at the configured precision."""
     global _chandra_parser
     if _chandra_parser is None:
-        from second_brain.parsing.chandra_parser import ChandraParser
+        from second_brain.ingestion.parsing.chandra_parser import ChandraParser
 
         _chandra_parser = ChandraParser(precision=config.parsing.chandra_precision)
     return _chandra_parser
@@ -124,7 +124,7 @@ def _get_chandra(config: Config):  # type: ignore[no-untyped-def]
 
 def _render_pdf_pages(file_path: Path) -> list[RenderedPage]:
     """Rasterize PDF pages (parser-agnostic; uses PyMuPDF, loads no model)."""
-    from second_brain.parsing.chandra_parser import ChandraParser
+    from second_brain.ingestion.parsing.chandra_parser import ChandraParser
 
     return ChandraParser.render_pdf_pages(file_path)
 

@@ -23,6 +23,7 @@ from second_brain.compilation.agent import (
 from second_brain.compilation.store import BuildStore, DeferredSource
 from second_brain.config import Config
 from second_brain.hashing import hash_file
+from second_brain.ingestion.triage.skipped import purge_skipped
 from second_brain.llm import (
     ModelError,
     ModelErrorKind,
@@ -32,7 +33,6 @@ from second_brain.llm import (
     resolve_profile,
 )
 from second_brain.ollama.client import OllamaUnavailableError
-from second_brain.triage.skipped import purge_skipped
 from second_brain.wiki.structure import rebuild_structure
 
 logger = logging.getLogger(__name__)
@@ -344,7 +344,7 @@ def run_compilation(
     # still undecided, then drop review, skip, and chats that never got a
     # decision so an interrupted sort cannot reach the paid build.
     if config.triage.enabled:
-        from second_brain.triage.pipeline import triage_pending, worthwhile_sources
+        from second_brain.ingestion.triage.pipeline import triage_pending, worthwhile_sources
 
         # Catch anything ingested before triage existed.
         triage_pending(config)

@@ -7,7 +7,7 @@ import pytest
 from second_brain.compilation.store import BuildStore
 from second_brain.config import Config, SearchConfig
 from second_brain.ingestion.manifest import Manifest
-from second_brain.triage.store import TriageStore
+from second_brain.ingestion.triage.store import TriageStore
 
 
 @pytest.fixture

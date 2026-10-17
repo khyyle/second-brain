@@ -117,7 +117,7 @@ def _staged_sources(config: Config) -> list[str]:
         Sorted relative raw paths staged for compilation.
     """
     from second_brain.compilation.compiler import find_new_sources
-    from second_brain.triage.pipeline import worthwhile_sources
+    from second_brain.ingestion.triage.pipeline import worthwhile_sources
 
     new_sources = find_new_sources(config)
     if config.triage.enabled:

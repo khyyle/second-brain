@@ -20,7 +20,7 @@ from pathlib import Path
 
 import fitz
 
-from second_brain.parsing.provider import (
+from second_brain.ingestion.parsing.provider import (
     DocumentParser,
     PageParseError,
     ParseBlock,
@@ -190,7 +190,7 @@ class ChandraParser(DocumentParser):
         list[RenderedPage]
             One entry per page in document order.
         """
-        from second_brain.parsing import RENDER_DPI
+        from second_brain.ingestion.parsing import RENDER_DPI
 
         doc = fitz.open(str(file_path))
         pages: list[RenderedPage] = []
