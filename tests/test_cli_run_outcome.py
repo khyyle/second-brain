@@ -9,12 +9,12 @@ import pytest
 from click.testing import CliRunner, Result
 
 from second_brain import cli
+from second_brain.api.run_record import CRASH_REASON, RUN_RECORD_FILENAME, StageOutcome
+from second_brain.api.status import STATUS_FILENAME
 from second_brain.clustering.preview import CLUSTERS_FILENAME
 from second_brain.config import Config, ConfigError
 from second_brain.ingestion.pdf_handler import ParserNotAvailableError
 from second_brain.ollama.client import OllamaStatus, OllamaUnavailableError
-from second_brain.run_record import CRASH_REASON, RUN_RECORD_FILENAME, StageOutcome
-from second_brain.status import STATUS_FILENAME
 from second_brain.triage.pipeline import TriageInterruptedError
 from second_brain.wiki.repo import WikiRepoError
 
@@ -39,7 +39,7 @@ def _invoke_compile(
     config = Config(data_dir=tmp_path / "vault")
     monkeypatch.setattr(cli, "_load_config", lambda _path: config)
     monkeypatch.setattr(cli, "_require_ollama", lambda _config: None)
-    monkeypatch.setattr("second_brain.state.emit_state", lambda _config: None)
+    monkeypatch.setattr("second_brain.api.state.emit_state", lambda _config: None)
     monkeypatch.setattr(
         "second_brain.compilation.compiler.run_compilation",
         lambda *_args, **_kwargs: stats,
@@ -80,7 +80,7 @@ def test_ingest_document_does_not_require_ollama(
     document.write_text("# Notes\n\nA document.\n", encoding="utf-8")
     monkeypatch.setattr(cli, "_load_config", lambda _path: config)
     monkeypatch.setattr(cli, "_preflight_check", lambda: None)
-    monkeypatch.setattr("second_brain.state.emit_state", lambda _config: None)
+    monkeypatch.setattr("second_brain.api.state.emit_state", lambda _config: None)
     monkeypatch.setattr(
         "second_brain.ollama.client.check_ollama",
         lambda _config: OllamaStatus(
@@ -122,7 +122,7 @@ def test_ingest_triage_interrupted_exits_1_and_records(
     emitted: list[Config] = []
     monkeypatch.setattr(cli, "_load_config", lambda _path: config)
     monkeypatch.setattr(cli, "_preflight_check", lambda: None)
-    monkeypatch.setattr("second_brain.state.emit_state", emitted.append)
+    monkeypatch.setattr("second_brain.api.state.emit_state", emitted.append)
     monkeypatch.setattr("second_brain.ingestion.watcher.batch_scan", lambda *_args, **_kwargs: 0)
 
     def _triage(*_args: object, **_kwargs: object) -> dict[str, int]:
@@ -148,7 +148,7 @@ def test_compile_ollama_unavailable_exits_1_and_records(
     reason = "Ollama stopped responding. Start Ollama and build again."
     monkeypatch.setattr(cli, "_load_config", lambda _path: config)
     monkeypatch.setattr(cli, "_require_ollama", lambda _config: None)
-    monkeypatch.setattr("second_brain.state.emit_state", lambda _config: None)
+    monkeypatch.setattr("second_brain.api.state.emit_state", lambda _config: None)
 
     def _compile(*_args: object, **_kwargs: object) -> dict[str, object]:
         raise OllamaUnavailableError("down")

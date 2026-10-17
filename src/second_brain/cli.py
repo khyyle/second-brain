@@ -8,11 +8,11 @@ from pathlib import Path
 
 import click
 
+from second_brain.api.run_record import CRASH_REASON, StageOutcome, exit_code_for, record_run
+from second_brain.api.status import now_iso
 from second_brain.config import DEFAULT_DATA_DIR, Config, ConfigError, load_config
 from second_brain.errors import SecondBrainError
 from second_brain.ollama.client import OllamaUnavailableError
-from second_brain.run_record import CRASH_REASON, StageOutcome, exit_code_for, record_run
-from second_brain.status import now_iso
 
 logger = logging.getLogger(__name__)
 
@@ -234,9 +234,9 @@ def ingest(
     drops_only: bool,
 ) -> None:
     """Process pending files from watched directories."""
+    from second_brain.api.state import emit_state
     from second_brain.ingestion.dispatch import ingest_file
     from second_brain.ingestion.manifest import Manifest
-    from second_brain.state import emit_state
     from second_brain.triage.pipeline import TriageInterruptedError
 
     config: Config = ctx.obj["config"]
@@ -345,8 +345,8 @@ def ingest(
 @click.pass_context
 def compile(ctx: click.Context, full: bool, dry_run: bool) -> None:
     """Compile new/changed sources into the wiki."""
+    from second_brain.api.state import emit_state
     from second_brain.compilation.compiler import OLLAMA_BUILD_STOPPED_REASON, run_compilation
-    from second_brain.state import emit_state
 
     config: Config = ctx.obj["config"]
     started_at = now_iso()
@@ -428,7 +428,7 @@ def recompile(ctx: click.Context, raw_paths: tuple[str, ...]) -> None:
     released = build_store.clear_deferred(list(raw_paths))
     uncompiled = build_store.unmark_compiled(list(raw_paths))
 
-    from second_brain.state import emit_state
+    from second_brain.api.state import emit_state
 
     emit_state(config)
     click.echo(
@@ -446,8 +446,8 @@ def preview_clusters(ctx: click.Context) -> None:
     config: Config = ctx.obj["config"]
     config.ensure_directories()
 
+    from second_brain.api.status import clear_status, now_iso, touch_status, write_status
     from second_brain.clustering.preview import write_preview
-    from second_brain.status import clear_status, now_iso, touch_status, write_status
 
     # Embedding the staged set can take minutes; report per-source progress
     # (with a keepalive between, for the occasional slow multi-chunk source)
@@ -484,7 +484,7 @@ def preview_clusters(ctx: click.Context) -> None:
         f"(~${artifact['estimated_cost_usd']:.2f})"
     )
 
-    from second_brain.state import emit_state
+    from second_brain.api.state import emit_state
 
     emit_state(config)
 
@@ -560,7 +560,7 @@ def forget(ctx: click.Context, raw_path: str) -> None:
 
     forget_source(config, raw_path)
     click.echo(f"Forgot {raw_path}")
-    from second_brain.state import emit_state
+    from second_brain.api.state import emit_state
 
     emit_state(config)
 
@@ -575,7 +575,7 @@ def forget_drop(ctx: click.Context, path: str) -> None:
 
     removed = Manifest(config.manifest_db_path).remove_entries([Path(path)])
     click.echo(f"Removed {removed} manifest row(s)")
-    from second_brain.state import emit_state
+    from second_brain.api.state import emit_state
 
     emit_state(config)
 
@@ -585,7 +585,7 @@ def forget_drop(ctx: click.Context, path: str) -> None:
 def state(ctx: click.Context) -> None:
     """Recompute the derived state file the menu bar app reads."""
     config: Config = ctx.obj["config"]
-    from second_brain.state import emit_state
+    from second_brain.api.state import emit_state
 
     emit_state(config)
 
@@ -609,7 +609,7 @@ def triage_set(ctx: click.Context, raw_path: str, decision: str) -> None:
         raw_path, decision, confidence=1.0, reason="manual override"
     )
     click.echo(f"Set {raw_path} -> {decision}")
-    from second_brain.state import emit_state
+    from second_brain.api.state import emit_state
 
     emit_state(config)
 
@@ -737,7 +737,7 @@ def wiki_rollback(ctx: click.Context, count: int, yes: bool) -> None:
 
     rebuild_structure(config.wiki_dir)
     _sync_search_index(config)
-    from second_brain.state import emit_state
+    from second_brain.api.state import emit_state
 
     emit_state(config)
     click.echo(f"Rolled back {count} commit(s); {requeued} source(s) requeued for the next build")
@@ -789,7 +789,7 @@ def wiki_merge(ctx: click.Context, dest: str, sources: tuple[str, ...]) -> None:
     repairs = merge_pages(config.wiki_dir, dest, list(sources))
 
     _sync_search_index(config)
-    from second_brain.state import emit_state
+    from second_brain.api.state import emit_state
 
     emit_state(config)
     total = sum(repair.links_repointed for repair in repairs)

@@ -14,7 +14,7 @@ import logging
 from enum import Enum
 from pathlib import Path
 
-from second_brain.status import now_iso
+from second_brain.api.status import now_iso
 
 logger = logging.getLogger(__name__)
 

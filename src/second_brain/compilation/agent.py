@@ -598,7 +598,7 @@ class WikiToolExecutor:
         """Record a page change and append it to the build log immediately."""
         self._changes.append({"action": action, "path": rel_path})
         if self._data_dir is not None and not self._dry_run:
-            from second_brain.build_log import append_build_actions
+            from second_brain.api.build_log import append_build_actions
 
             append_build_actions(self._data_dir, [{"action": action, "path": rel_path}])
 

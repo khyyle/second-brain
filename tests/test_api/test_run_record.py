@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from second_brain.run_record import (
+from second_brain.api.run_record import (
     RUN_RECORD_FILENAME,
     StageOutcome,
     exit_code_for,

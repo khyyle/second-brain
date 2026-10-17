@@ -9,6 +9,7 @@ import anthropic
 import httpx
 import pytest
 
+from second_brain.api.run_record import CRASH_REASON, StageOutcome
 from second_brain.compilation import compiler
 from second_brain.compilation.compiler import RunOutcome, RunResult
 from second_brain.compilation.store import BuildStore
@@ -17,7 +18,6 @@ from second_brain.hashing import hash_file
 from second_brain.llm import resolve_profile
 from second_brain.mcp_server.tools import WikiTools
 from second_brain.ollama.client import OllamaUnavailableError
-from second_brain.run_record import CRASH_REASON, StageOutcome
 
 
 class FakeUsage:
@@ -496,7 +496,7 @@ def test_stop_before_first_unit_is_stopped(
     _stage(monkeypatch, config, ["a.md", "b.md"])
     monkeypatch.setattr(compiler, "rebuild_structure", lambda *_: {})
     monkeypatch.setattr(compiler, "_git_commit", lambda *_: None)
-    monkeypatch.setattr("second_brain.status.stop_requested", lambda _data_dir: True)
+    monkeypatch.setattr("second_brain.api.status.stop_requested", lambda _data_dir: True)
 
     def fail_if_called(*_args, **_kwargs):
         raise AssertionError("agent must not run after a stop")

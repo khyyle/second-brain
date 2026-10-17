@@ -5,12 +5,12 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from second_brain.api.state import compute_state
 from second_brain.clustering.preview import CLUSTERS_FILENAME
 from second_brain.compilation.store import BuildStore
 from second_brain.config import Config
 from second_brain.hashing import hash_file
 from second_brain.ingestion.manifest import Manifest
-from second_brain.state import compute_state
 from second_brain.triage.store import TriageStore
 
 

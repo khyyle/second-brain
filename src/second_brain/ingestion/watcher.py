@@ -266,7 +266,7 @@ def batch_scan(
     int
         Total number of files successfully processed.
     """
-    from second_brain.status import clear_status, now_iso, write_status
+    from second_brain.api.status import clear_status, now_iso, write_status
 
     # Gather the work list up front so the heartbeat can report an
     # accurate "i of n" as files are processed.

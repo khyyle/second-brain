@@ -9,6 +9,7 @@ from enum import Enum
 from pathlib import Path
 from typing import NamedTuple
 
+from second_brain.api.run_record import CRASH_REASON, StageOutcome
 from second_brain.compilation.agent import (
     COMPILATION_SYSTEM_PROMPT,
     EXPLORE_TOOLS_GUIDANCE,
@@ -31,7 +32,6 @@ from second_brain.llm import (
     resolve_profile,
 )
 from second_brain.ollama.client import OllamaUnavailableError
-from second_brain.run_record import CRASH_REASON, StageOutcome
 from second_brain.triage.skipped import purge_skipped
 from second_brain.wiki.structure import rebuild_structure
 
@@ -367,7 +367,7 @@ def run_compilation(
         # Fail fast on a missing key, before any heartbeat or git work.
         require_api_key(profile)
 
-        from second_brain.status import (
+        from second_brain.api.status import (
             clear_status,
             clear_stop,
             now_iso,
@@ -585,7 +585,7 @@ def _run_agent(
         when the run did not complete. Provider failures come back as
         outcomes rather than exceptions.
     """
-    from second_brain.status import stop_requested, write_status
+    from second_brain.api.status import stop_requested, write_status
 
     profile = resolve_profile(config.compilation.provider, config.compilation.model)
     client = create_client(profile)
