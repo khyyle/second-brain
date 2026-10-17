@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from second_brain.clustering.threshold import ThresholdClusterer
+from second_brain.compilation.clustering.threshold import ThresholdClusterer
 
 
 def _flat(groups: list[list[int]]) -> list[int]:

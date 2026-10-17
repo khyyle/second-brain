@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 from sklearn.cluster import HDBSCAN
 
-from second_brain.clustering.base import Clusterer
+from second_brain.compilation.clustering.base import Clusterer
 
 DEFAULT_MIN_CLUSTER_SIZE = 2
 NOISE_LABEL = -1

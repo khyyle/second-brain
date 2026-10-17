@@ -13,7 +13,7 @@ import logging
 from datetime import UTC, datetime
 from pathlib import Path
 
-from second_brain.clustering.preview import (
+from second_brain.compilation.clustering.preview import (
     group_cost_usd,
     load_preview,
     model_prices,

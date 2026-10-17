@@ -447,7 +447,7 @@ def preview_clusters(ctx: click.Context) -> None:
     config.ensure_directories()
 
     from second_brain.api.status import clear_status, now_iso, touch_status, write_status
-    from second_brain.clustering.preview import write_preview
+    from second_brain.compilation.clustering.preview import write_preview
 
     # Embedding the staged set can take minutes; report per-source progress
     # (with a keepalive between, for the occasional slow multi-chunk source)

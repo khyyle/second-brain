@@ -8,8 +8,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from second_brain.clustering import preview as preview_mod
-from second_brain.clustering.preview import (
+from second_brain.compilation.clustering import preview as preview_mod
+from second_brain.compilation.clustering.preview import (
     CLUSTERS_FILENAME,
     OVERRIDES_FILENAME,
     apply_overrides,

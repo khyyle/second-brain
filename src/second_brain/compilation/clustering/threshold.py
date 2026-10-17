@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from second_brain.clustering.base import Clusterer
+from second_brain.compilation.clustering.base import Clusterer
 
 # Balances under-merging (related topics left separate) against the
 # single-linkage chaining that lower thresholds cause.

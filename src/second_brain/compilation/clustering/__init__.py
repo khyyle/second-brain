@@ -7,13 +7,13 @@ algorithm is selected by configuration.
 
 from __future__ import annotations
 
-from second_brain.clustering.base import Clusterer
-from second_brain.clustering.sources import (
+from second_brain.compilation.clustering.base import Clusterer
+from second_brain.compilation.clustering.sources import (
     cluster_scoped_sources,
     cluster_sources,
     embed_sources,
 )
-from second_brain.clustering.threshold import ThresholdClusterer
+from second_brain.compilation.clustering.threshold import ThresholdClusterer
 from second_brain.config import ClusteringConfig
 
 __all__ = [
@@ -48,7 +48,7 @@ def get_clusterer(config: ClusteringConfig) -> Clusterer:
     if config.algorithm == "threshold":
         return ThresholdClusterer(threshold=config.threshold)
     if config.algorithm == "hdbscan":
-        from second_brain.clustering.hdbscan import HdbscanClusterer
+        from second_brain.compilation.clustering.hdbscan import HdbscanClusterer
 
         return HdbscanClusterer(min_cluster_size=config.hdbscan_min_cluster_size)
     raise ValueError(f"unknown clustering algorithm: {config.algorithm}")

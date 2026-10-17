@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from second_brain.clustering.hdbscan import HdbscanClusterer
+from second_brain.compilation.clustering.hdbscan import HdbscanClusterer
 
 
 def _flat(groups: list[list[int]]) -> list[int]:

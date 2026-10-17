@@ -16,8 +16,8 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
-from second_brain.clustering import get_clusterer
-from second_brain.clustering.sources import cluster_scoped_sources
+from second_brain.compilation.clustering import get_clusterer
+from second_brain.compilation.clustering.sources import cluster_scoped_sources
 from second_brain.config import Config
 from second_brain.llm import SUPPORTED_MODELS, resolve_profile
 

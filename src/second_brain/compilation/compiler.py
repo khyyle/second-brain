@@ -119,8 +119,8 @@ def _build_work_units(config: Config, raw_dir: Path, new_sources: list[str]) -> 
     list[list[str]]
         Source groups, one per agent run.
     """
-    from second_brain.clustering import cluster_scoped_sources, get_clusterer
-    from second_brain.clustering.preview import reconcile_work_units
+    from second_brain.compilation.clustering import cluster_scoped_sources, get_clusterer
+    from second_brain.compilation.clustering.preview import reconcile_work_units
 
     reconciled = reconcile_work_units(config.data_dir, new_sources)
     if reconciled is not None:
@@ -519,7 +519,7 @@ def run_compilation(
         # curation; anything less leaves decisions open for the next attempt.
         if compiled_count == staged_count:
             purge_skipped(raw_dir)
-            from second_brain.clustering.preview import clear_preview
+            from second_brain.compilation.clustering.preview import clear_preview
 
             clear_preview(config.data_dir)
     else:

@@ -6,13 +6,13 @@ from pathlib import Path
 
 import pytest
 
-from second_brain.clustering import (
+from second_brain.compilation.clustering import (
     ThresholdClusterer,
     cluster_scoped_sources,
     cluster_sources,
     get_clusterer,
 )
-from second_brain.clustering import sources as sources_mod
+from second_brain.compilation.clustering import sources as sources_mod
 from second_brain.config import ClusteringConfig, SearchConfig
 from second_brain.ollama.client import OllamaUnavailableError
 from second_brain.ollama.embeddings import EmbeddingRole
@@ -30,7 +30,7 @@ def test_factory_returns_threshold_clusterer() -> None:
 
 
 def test_factory_returns_hdbscan_clusterer() -> None:
-    from second_brain.clustering.hdbscan import HdbscanClusterer
+    from second_brain.compilation.clustering.hdbscan import HdbscanClusterer
 
     clusterer = get_clusterer(ClusteringConfig(algorithm="hdbscan"))
     assert isinstance(clusterer, HdbscanClusterer)

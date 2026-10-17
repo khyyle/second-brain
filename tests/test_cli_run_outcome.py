@@ -11,7 +11,7 @@ from click.testing import CliRunner, Result
 from second_brain import cli
 from second_brain.api.run_record import CRASH_REASON, RUN_RECORD_FILENAME, StageOutcome
 from second_brain.api.status import STATUS_FILENAME
-from second_brain.clustering.preview import CLUSTERS_FILENAME
+from second_brain.compilation.clustering.preview import CLUSTERS_FILENAME
 from second_brain.config import Config, ConfigError
 from second_brain.ingestion.pdf_handler import ParserNotAvailableError
 from second_brain.ingestion.triage.pipeline import TriageInterruptedError
@@ -177,7 +177,7 @@ def test_preview_clusters_ollama_unavailable_leaves_preview(
     def _preview(*_args: object, **_kwargs: object) -> dict[str, object]:
         raise OllamaUnavailableError("down")
 
-    monkeypatch.setattr("second_brain.clustering.preview.write_preview", _preview)
+    monkeypatch.setattr("second_brain.compilation.clustering.preview.write_preview", _preview)
 
     result = CliRunner().invoke(cli.main, ["preview-clusters"])
 
