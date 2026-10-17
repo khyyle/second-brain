@@ -10,7 +10,7 @@ import click
 
 from second_brain.config import DEFAULT_DATA_DIR, Config, ConfigError, load_config
 from second_brain.errors import SecondBrainError
-from second_brain.ollama import OllamaUnavailableError
+from second_brain.ollama.client import OllamaUnavailableError
 from second_brain.run_record import CRASH_REASON, StageOutcome, exit_code_for, record_run
 from second_brain.status import now_iso
 
@@ -91,7 +91,7 @@ def _require_ollama(config: Config) -> None:
     This guards a build, not every command. A server that is down before
     the build starts is an actionable setup error.
     """
-    from second_brain.ollama import check_ollama
+    from second_brain.ollama.client import check_ollama
 
     status = check_ollama(config)
     if not status.healthy:
@@ -892,7 +892,7 @@ def doctor(ctx: click.Context, as_json: bool) -> None:
     gate on it.
     """
     config: Config = ctx.obj["config"]
-    from second_brain.ollama import check_ollama
+    from second_brain.ollama.client import check_ollama
 
     status = check_ollama(config)
 

@@ -30,7 +30,7 @@ from second_brain.llm import (
     require_api_key,
     resolve_profile,
 )
-from second_brain.ollama import OllamaUnavailableError
+from second_brain.ollama.client import OllamaUnavailableError
 from second_brain.run_record import CRASH_REASON, StageOutcome
 from second_brain.triage.skipped import purge_skipped
 from second_brain.wiki.structure import rebuild_structure

@@ -16,7 +16,7 @@ from second_brain.config import CompilationConfig, Config, TriageConfig
 from second_brain.hashing import hash_file
 from second_brain.llm import resolve_profile
 from second_brain.mcp_server.tools import WikiTools
-from second_brain.ollama import OllamaUnavailableError
+from second_brain.ollama.client import OllamaUnavailableError
 from second_brain.run_record import CRASH_REASON, StageOutcome
 
 

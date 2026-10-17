@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from second_brain.config import Config
-from second_brain.ollama import OllamaUnavailableError
+from second_brain.ollama.client import OllamaUnavailableError
 from second_brain.status import STATUS_FILENAME
 from second_brain.triage import pipeline as pipeline_mod
 from second_brain.triage.gemma import TriageDecision, TriageResult

@@ -8,7 +8,7 @@ from pathlib import Path
 
 from second_brain.clustering.base import Clusterer
 from second_brain.config import SearchConfig
-from second_brain.embeddings import embed_text
+from second_brain.ollama.embeddings import embed_text
 
 logger = logging.getLogger(__name__)
 

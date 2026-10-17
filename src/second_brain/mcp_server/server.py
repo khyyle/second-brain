@@ -21,7 +21,7 @@ from second_brain.mcp_server.tools import (
     INDEX_PAGES_PER_DOMAIN,
     WikiTools,
 )
-from second_brain.ollama import OllamaUnavailableError
+from second_brain.ollama.client import OllamaUnavailableError
 
 logger = logging.getLogger(__name__)
 

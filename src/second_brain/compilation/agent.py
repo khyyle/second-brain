@@ -11,7 +11,7 @@ import re
 from pathlib import Path
 
 from second_brain.mcp_server.tools import WikiTools
-from second_brain.ollama import OllamaUnavailableError
+from second_brain.ollama.client import OllamaUnavailableError
 from second_brain.wiki.slugs import normalize_link_list, normalize_wikilinks, slugify
 from second_brain.wiki.structure import (
     _FRONTMATTER_RE,

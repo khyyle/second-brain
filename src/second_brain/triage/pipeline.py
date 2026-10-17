@@ -13,7 +13,7 @@ import shutil
 from pathlib import Path
 
 from second_brain.config import Config
-from second_brain.ollama import OllamaUnavailableError
+from second_brain.ollama.client import OllamaUnavailableError
 from second_brain.status import clear_status, now_iso, write_status
 from second_brain.triage.gemma import TriageDecision, triage_file
 from second_brain.triage.skipped import move_skips_to_holding

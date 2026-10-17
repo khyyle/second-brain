@@ -8,12 +8,12 @@ from pathlib import Path
 
 import pytest
 
-from second_brain import embeddings as embeddings_mod
 from second_brain.config import SearchConfig
-from second_brain.embeddings import EmbeddingRole
 from second_brain.mcp_server.search import SearchIndex
 from second_brain.mcp_server.tools import WikiTools
-from second_brain.ollama import OllamaUnavailableError
+from second_brain.ollama import embeddings as embeddings_mod
+from second_brain.ollama.client import OllamaUnavailableError
+from second_brain.ollama.embeddings import EmbeddingRole
 
 # Each fresh sync sets file mtimes explicitly so change detection is
 # deterministic regardless of filesystem timestamp resolution.

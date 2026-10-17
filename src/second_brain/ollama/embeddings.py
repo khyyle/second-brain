@@ -8,7 +8,7 @@ from typing import Literal
 import httpx
 
 from second_brain.config import SearchConfig
-from second_brain.ollama import post_to_ollama
+from second_brain.ollama.client import post_to_ollama
 
 logger = logging.getLogger(__name__)
 

@@ -12,7 +12,7 @@ from second_brain import cli
 from second_brain.clustering.preview import CLUSTERS_FILENAME
 from second_brain.config import Config, ConfigError
 from second_brain.ingestion.pdf_handler import ParserNotAvailableError
-from second_brain.ollama import OllamaStatus, OllamaUnavailableError
+from second_brain.ollama.client import OllamaStatus, OllamaUnavailableError
 from second_brain.run_record import CRASH_REASON, RUN_RECORD_FILENAME, StageOutcome
 from second_brain.status import STATUS_FILENAME
 from second_brain.triage.pipeline import TriageInterruptedError
@@ -82,7 +82,7 @@ def test_ingest_document_does_not_require_ollama(
     monkeypatch.setattr(cli, "_preflight_check", lambda: None)
     monkeypatch.setattr("second_brain.state.emit_state", lambda _config: None)
     monkeypatch.setattr(
-        "second_brain.ollama.check_ollama",
+        "second_brain.ollama.client.check_ollama",
         lambda _config: OllamaStatus(
             host="http://localhost:11434",
             reachable=False,
