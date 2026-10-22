@@ -50,5 +50,8 @@ def get_clusterer(config: ClusteringConfig) -> Clusterer:
     if config.algorithm == "hdbscan":
         from second_brain.compilation.clustering.hdbscan import HdbscanClusterer
 
-        return HdbscanClusterer(min_cluster_size=config.hdbscan_min_cluster_size)
+        return HdbscanClusterer(
+            min_cluster_size=config.hdbscan_min_cluster_size,
+            small_batch_clusterer=ThresholdClusterer(threshold=config.threshold),
+        )
     raise ValueError(f"unknown clustering algorithm: {config.algorithm}")

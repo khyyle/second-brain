@@ -4,7 +4,11 @@ from __future__ import annotations
 
 import numpy as np
 
-from second_brain.compilation.clustering.hdbscan import HdbscanClusterer
+from second_brain.compilation.clustering.hdbscan import (
+    MIN_SOURCES_FOR_DENSITY,
+    HdbscanClusterer,
+)
+from second_brain.compilation.clustering.threshold import ThresholdClusterer
 
 
 def _flat(groups: list[list[int]]) -> list[int]:
@@ -35,3 +39,26 @@ def test_dense_blobs_cluster_and_outlier_is_isolated() -> None:
     assert set(range(8, 16)) <= set(blob_b_group)
     assert set(blob_a_group).isdisjoint(blob_b_group)  # two distinct clusters
     assert [16] in groups  # the outlier is its own singleton
+
+
+def test_a_small_batch_uses_the_fallback_clusterer() -> None:
+    # Two near-identical chats and one unrelated: HDBSCAN alone returns three singletons.
+    vectors = [[1.0, 0.0, 0.0], [0.99, 0.1, 0.0], [0.0, 0.0, 1.0]]
+    clusterer = HdbscanClusterer(small_batch_clusterer=ThresholdClusterer(threshold=0.82))
+
+    groups = clusterer.cluster(vectors)
+
+    assert sorted(map(sorted, groups)) == [[0, 1], [2]]
+
+
+def test_a_large_batch_uses_hdbscan_even_with_a_fallback() -> None:
+    rng = np.random.default_rng(1)
+    vectors = rng.normal(0.0, 1.0, (MIN_SOURCES_FOR_DENSITY, 3)).tolist()
+
+    class Untouched(ThresholdClusterer):
+        def cluster(self, vectors: list[list[float]]) -> list[list[int]]:
+            raise AssertionError("the fallback should not run for a large batch")
+
+    groups = HdbscanClusterer(small_batch_clusterer=Untouched(threshold=0.82)).cluster(vectors)
+
+    assert _flat(groups) == list(range(MIN_SOURCES_FOR_DENSITY))

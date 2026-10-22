@@ -28,7 +28,7 @@ compilation:
 clustering:
   enabled: false
   algorithm: hdbscan           # threshold | hdbscan
-  threshold: 0.82              # cosine >= this joins a cluster (threshold algorithm)
+  threshold: 0.82              # cosine >= this joins a cluster (threshold, and hdbscan's small batches)
   hdbscan_min_cluster_size: 2  # smallest grouping hdbscan treats as a cluster
   max_sources_per_run: 5       # split larger clusters into batches
   signature_chars: 8000        # opening chars embedded as the topical fingerprint

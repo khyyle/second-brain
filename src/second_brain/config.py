@@ -163,7 +163,6 @@ class ClusteringConfig(BaseModel):
         Clusterer implementation; one of ``threshold`` or ``hdbscan``.
     threshold: float, default=0.82
         Cosine similarity at/above which two sources join a cluster
-        (used by the threshold clusterer).
     hdbscan_min_cluster_size: int, default=2
         Smallest grouping the hdbscan clusterer treats as a cluster.
     max_sources_per_run: int, default=5
