@@ -5,20 +5,25 @@ from __future__ import annotations
 import logging
 import subprocess
 import threading
+from collections.abc import Callable
 from enum import Enum
 from pathlib import Path
 from typing import NamedTuple
 
+from second_brain.api.build_log import record_built_pages
 from second_brain.api.run_record import CRASH_REASON, StageOutcome
 from second_brain.compilation.agent import (
-    COMPILATION_SYSTEM_PROMPT,
-    EXPLORE_TOOLS_GUIDANCE,
-    WIKI_TOOLS,
     WikiToolExecutor,
     build_compilation_prompt,
     build_source_block,
     compact_history,
+    describe_tool_call,
     explore_tool_schemas,
+)
+from second_brain.compilation.prompt import (
+    COMPILATION_SYSTEM_PROMPT,
+    EXPLORE_TOOLS_GUIDANCE,
+    WIKI_TOOLS,
 )
 from second_brain.compilation.store import BuildStore, DeferredSource
 from second_brain.config import Config
@@ -51,6 +56,9 @@ _MODEL_CONTEXT_WINDOW_EXCEEDED = "model_context_window_exceeded"
 
 OLLAMA_BUILD_STOPPED_REASON = "Ollama stopped responding. Start Ollama and build again."
 
+# The first model turn receives the source text before making any tool calls.
+READING_SOURCES_ACTIVITY = "Reading the sources"
+
 
 class RunOutcome(Enum):
     COMPLETED = "completed"
@@ -66,6 +74,7 @@ class RunResult(NamedTuple):
     cost: float
     outcome: RunOutcome
     reason: str = ""
+    changes: tuple[dict, ...] = ()
 
 
 def _split_oversized(clusters: list[list[str]], max_size: int) -> list[list[str]]:
@@ -296,6 +305,7 @@ def run_compilation(
     config: Config,
     force_full: bool = False,
     dry_run: bool = False,
+    on_unit_finished: Callable[[], None] | None = None,
 ) -> dict:
     """
     Run the full compilation pipeline.
@@ -312,6 +322,9 @@ def run_compilation(
         what is already built.
     dry_run: bool
         If ``True``, skip agent execution and git commit.
+    on_unit_finished: Callable[[], None] | None
+        Called after each group is committed or set aside, so a reader of
+        the staged set sees finished sources leave it during the build.
 
     Returns
     -------
@@ -435,7 +448,10 @@ def run_compilation(
                         window // 1000,
                     )
                     deferred_count += len(unit)
+                    if on_unit_finished is not None:
+                        on_unit_finished()
                     continue
+                unit_started = now_iso()
                 write_status(
                     config.data_dir,
                     phase="compile",
@@ -443,6 +459,9 @@ def run_compilation(
                     total=total,
                     started_at=started,
                     cost_usd=cumulative_cost,
+                    current_sources=tuple(unit),
+                    current_started_at=unit_started,
+                    current_activity=READING_SOURCES_ACTIVITY,
                 )
 
                 try:
@@ -454,6 +473,7 @@ def run_compilation(
                         started_at=started,
                         base_cost=cumulative_cost,
                         progress=(index, total),
+                        unit_started_at=unit_started,
                     )
                 except Exception:
                     # Caught rather than raised so the group in progress is rolled
@@ -467,7 +487,10 @@ def run_compilation(
                 if result.outcome is RunOutcome.COMPLETED:
                     build_store.mark_compiled(unit_hashes)
                     _git_commit(wiki_dir)
+                    record_built_pages(config.data_dir, list(result.changes), unit)
                     compiled_count += len(unit)
+                    if on_unit_finished is not None:
+                        on_unit_finished()
                     continue
 
                 # discard partial, uncommitted pages
@@ -503,6 +526,8 @@ def run_compilation(
                     )
                     logger.warning("Deferred %s: %s", ", ".join(unit), result.reason)
                     deferred_count += len(unit)
+                    if on_unit_finished is not None:
+                        on_unit_finished()
         finally:
             stop_heartbeat.set()
             heartbeat.join(timeout=2.0)
@@ -550,6 +575,7 @@ def _run_agent(
     started_at: str,
     base_cost: float = 0.0,
     progress: tuple[int, int] | None = None,
+    unit_started_at: str = "",
 ) -> RunResult:
     """
     Invoke the compilation agent via the Anthropic API.
@@ -577,6 +603,8 @@ def _run_agent(
     progress: tuple[int, int] | None
         ``(index, total)`` of this file within the Build, for the i/n
         readout.
+    unit_started_at: str
+        ISO timestamp when this group was started, for its elapsed readout.
 
     Returns
     -------
@@ -604,9 +632,7 @@ def _run_agent(
         read_tools = WikiTools(wiki_dir, raw_dir, search_index)
         explore_schemas = explore_tool_schemas()
 
-    executor = WikiToolExecutor(
-        wiki_dir, raw_dir, data_dir=config.data_dir, read_tools=read_tools, sources=sources
-    )
+    executor = WikiToolExecutor(wiki_dir, raw_dir, read_tools=read_tools, sources=sources)
 
     # Present the source content inline so it can be cached as a stable prefix;
     # the agent then synthesizes rather than spending turns re-reading it.
@@ -652,6 +678,23 @@ def _run_agent(
     total_cache_read_tokens = 0
     total_cache_write_tokens = 0
     cur, tot = progress if progress else (0, 0)
+    cost = 0.0
+
+    def report(activity: str) -> None:
+        write_status(
+            config.data_dir,
+            phase="compile",
+            current=cur,
+            total=tot,
+            started_at=started_at,
+            cost_usd=base_cost + cost,
+            current_sources=tuple(sources),
+            current_started_at=unit_started_at,
+            current_cost_usd=cost,
+            current_activity=activity,
+        )
+
+    activity = READING_SOURCES_ACTIVITY
     outcome = RunOutcome.EXHAUSTED
     outcome_reason = f"The model didn't finish within the {max_iterations}-step limit."
 
@@ -695,14 +738,7 @@ def _run_agent(
             cache_read_tokens=total_cache_read_tokens,
             cache_write_tokens=total_cache_write_tokens,
         )
-        write_status(
-            config.data_dir,
-            phase="compile",
-            current=cur,
-            total=tot,
-            started_at=started_at,
-            cost_usd=base_cost + cost,
-        )
+        report(activity)
         logger.debug(
             "Iteration %d: +%d in (+%d cached), +%d out (~$%.2f)",
             iteration + 1,
@@ -742,6 +778,8 @@ def _run_agent(
         tool_results = []
         for block in response.content:
             if block.type == "tool_use":
+                activity = describe_tool_call(block.name, block.input)
+                report(activity)
                 try:
                     result = executor.execute(block.name, block.input)
                 except OllamaUnavailableError:
@@ -793,7 +831,7 @@ def _run_agent(
         total_cache_read_tokens,
         cost,
     )
-    return RunResult(cost, outcome, outcome_reason)
+    return RunResult(cost, outcome, outcome_reason, tuple(executor.changes))
 
 
 def _git_restore(wiki_dir: Path) -> None:

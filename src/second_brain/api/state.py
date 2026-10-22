@@ -24,7 +24,7 @@ from second_brain.compilation.compiler import find_new_sources, find_set_aside_s
 from second_brain.compilation.store import DeferredSource
 from second_brain.config import Config
 from second_brain.ingestion.manifest import Manifest
-from second_brain.ingestion.triage.pipeline import worthwhile_sources
+from second_brain.ingestion.triage.pipeline import find_untriaged_sources, worthwhile_sources
 from second_brain.ingestion.triage.skipped import SKIPPED_DIRNAME
 from second_brain.ingestion.triage.store import TriageStore
 from second_brain.wiki.structure import CONTENT_DIRS
@@ -34,27 +34,48 @@ logger = logging.getLogger(__name__)
 STATE_FILENAME = ".state.json"
 
 
-def _staged_with_sizes(raw_dir: Path, rels: list[str]) -> list[dict]:
-    """Pair each staged source with its byte size for the cost estimate."""
-    sized: list[dict] = []
+def _source_costs(size_bytes: int, prices: dict[str, tuple[float, float]]) -> dict[str, float]:
+    """Per-model USD estimate for building one source on its own."""
+    return {
+        model: round(group_cost_usd(size_bytes, input_price, output_price), 4)
+        for model, (input_price, output_price) in prices.items()
+    }
+
+
+def _staged_entries(
+    raw_dir: Path, rels: list[str], prices: dict[str, tuple[float, float]]
+) -> list[dict]:
+    """Staged-list entries, each with its byte size and per-model cost estimate."""
+    entries: list[dict] = []
     for rel in rels:
         path = raw_dir / rel
-        sized.append({"rel": rel, "bytes": path.stat().st_size if path.exists() else 0})
-    return sized
+        size_bytes = path.stat().st_size if path.exists() else 0
+        entries.append(
+            {"rel": rel, "bytes": size_bytes, "costs": _source_costs(size_bytes, prices)}
+        )
+    return entries
 
 
-def _deferred_entries(raw_dir: Path, deferred_sources: dict[str, DeferredSource]) -> list[dict]:
-    """Staged-list entries for set-aside sources, each with its reason and whether
-    a retry could succeed."""
-    return [
-        {
-            "rel": rel,
-            "bytes": (raw_dir / rel).stat().st_size,
-            "defer_reason": deferred.reason,
-            "retryable": deferred.retryable,
-        }
-        for rel, deferred in sorted(deferred_sources.items())
-    ]
+def _deferred_entries(
+    raw_dir: Path,
+    deferred_sources: dict[str, DeferredSource],
+    prices: dict[str, tuple[float, float]],
+) -> list[dict]:
+    """Staged-list entries for set-aside sources, each with its reason, whether
+    a retry could succeed, and what building it again would cost."""
+    entries: list[dict] = []
+    for rel, deferred in sorted(deferred_sources.items()):
+        size_bytes = (raw_dir / rel).stat().st_size
+        entries.append(
+            {
+                "rel": rel,
+                "bytes": size_bytes,
+                "costs": _source_costs(size_bytes, prices),
+                "defer_reason": deferred.reason,
+                "retryable": deferred.retryable,
+            }
+        )
+    return entries
 
 
 def _build_costs(raw_dir: Path, work_units: list[list[str]]) -> dict[str, float]:
@@ -104,20 +125,22 @@ def compute_state(config: Config) -> dict:
     Returns
     -------
     dict
-        The staged sources with sizes, the count of built pages, per-model
-        build cost, needs-review and skipped counts, whether a reviewed
-        grouping has drifted from staging, and why each failed file failed.
+        The staged sources with sizes and cost estimates, the count of built
+        pages, per-model build cost, needs-review and skipped counts, whether a
+        reviewed grouping misses a staged source, and why each failed file failed.
     """
     queue = worthwhile_sources(config, find_new_sources(config))
     work_units = reconcile_work_units(config.data_dir, queue) or [[rel] for rel in queue]
     preview = load_preview(config.data_dir)
-    stale = preview is not None and preview_members(preview) != set(queue)
-    staged = _staged_with_sizes(config.raw_dir, queue) + _deferred_entries(
-        config.raw_dir, find_set_aside_sources(config)
+    # Sources built or removed since the grouping leave it valid for the rest;
+    # only a staged source it never covered makes it stale.
+    stale = preview is not None and not set(queue) <= preview_members(preview)
+    prices = model_prices()
+    staged = _staged_entries(config.raw_dir, queue, prices) + _deferred_entries(
+        config.raw_dir, find_set_aside_sources(config), prices
     )
-    needs_review, skipped = _triage_counts(
-        config.raw_dir, TriageStore(config.manifest_db_path).get_decisions()
-    )
+    triage_store = TriageStore(config.manifest_db_path)
+    needs_review, skipped = _triage_counts(config.raw_dir, triage_store.get_decisions())
     return {
         "generated_at": datetime.now(UTC).isoformat(),
         "staged": staged,
@@ -127,6 +150,7 @@ def compute_state(config: Config) -> dict:
         "needs_review": needs_review,
         "skipped": skipped,
         "ingest_failures": Manifest(config.manifest_db_path).get_ingest_failures(),
+        "pending_triage": find_untriaged_sources(config, triage_store),
     }
 
 

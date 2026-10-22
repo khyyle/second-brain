@@ -299,6 +299,7 @@ def ingest(
                     completed += 1
                 else:
                     failed += 1
+                emit_state(config)
 
             count = batch_scan(config, manifest, _process, drops_only=drops_only)
             click.echo(f"Processed {count} files")
@@ -307,7 +308,7 @@ def ingest(
             # step, so every ingested source has a decision before the user build_store.
             from second_brain.ingestion.triage.pipeline import triage_pending
 
-            triaged = triage_pending(config)
+            triaged = triage_pending(config, on_decided=lambda: emit_state(config))
             if sum(triaged.values()):
                 click.echo(
                     f"Triaged: {triaged['worthwhile']} worthwhile, "
@@ -365,7 +366,12 @@ def compile(ctx: click.Context, full: bool, dry_run: bool) -> None:
         config.ensure_directories()
         _require_ollama(config)
 
-        stats = run_compilation(config, force_full=full, dry_run=dry_run)
+        stats = run_compilation(
+            config,
+            force_full=full,
+            dry_run=dry_run,
+            on_unit_finished=lambda: emit_state(config),
+        )
         click.echo(f"Sources compiled: {stats['sources_compiled']}")
         click.echo(f"Wiki pages: {stats['total_pages']}")
         click.echo(f"Total links: {stats['total_links']}")

@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 import dataclasses
+import json
 from pathlib import Path
 
 import anthropic
 import httpx
 import pytest
 
+from second_brain.api.build_log import BUILD_LOG_FILENAME
 from second_brain.api.run_record import CRASH_REASON, StageOutcome
+from second_brain.api.status import STATUS_FILENAME
 from second_brain.compilation import compiler
 from second_brain.compilation.compiler import RunOutcome, RunResult
 from second_brain.compilation.store import BuildStore
@@ -275,6 +278,92 @@ def test_build_stops_when_cost_cap_reached(
     assert stats["outcome"] is StageOutcome.CAPPED
     assert stats["reason"] == "Reached the spend cap per build with 1 source left."
     assert stats["counts"] == {"completed": 2, "deferred": 0, "left": 1}
+
+
+def test_the_heartbeat_names_the_group_being_built(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _build_config(tmp_path)
+    status_file = config.data_dir / STATUS_FILENAME
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    _stage(monkeypatch, config, ["a.md", "b.md"])
+    monkeypatch.setattr(compiler, "rebuild_structure", lambda *_: {})
+    monkeypatch.setattr(compiler, "_git_commit", lambda *_: None)
+
+    heartbeat_sources: list[list[str]] = []
+
+    def fake_run_agent(_config, _wiki, _raw, unit, **_kwargs) -> RunResult:
+        heartbeat = json.loads(status_file.read_text(encoding="utf-8"))
+        heartbeat_sources.append(heartbeat["current_sources"])
+        return RunResult(0.0, RunOutcome.COMPLETED)
+
+    monkeypatch.setattr(compiler, "_run_agent", fake_run_agent)
+
+    compiler.run_compilation(config)
+
+    assert heartbeat_sources == [["a.md"], ["b.md"]]
+    assert json.loads(status_file.read_text(encoding="utf-8"))["current_sources"] == []
+
+
+def test_each_finished_group_is_reported_as_it_finishes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _build_config(tmp_path)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    _stage(monkeypatch, config, ["a.md", "b.md"])
+    monkeypatch.setattr(compiler, "rebuild_structure", lambda *_: {})
+    monkeypatch.setattr(compiler, "_git_commit", lambda *_: None)
+    monkeypatch.setattr(compiler, "_git_restore", lambda *_: None)
+
+    outcomes = {"a.md": RunOutcome.COMPLETED, "b.md": RunOutcome.EXHAUSTED}
+
+    def fake_run_agent(_config, _wiki, _raw, unit, **_kwargs) -> RunResult:
+        return RunResult(0.0, outcomes[unit[0]], "didn't finish")
+
+    monkeypatch.setattr(compiler, "_run_agent", fake_run_agent)
+    finished_after: list[set[str]] = []
+    build_store = BuildStore(config.manifest_db_path)
+
+    compiler.run_compilation(
+        config,
+        on_unit_finished=lambda: finished_after.append(
+            set(build_store.get_compiled()) | set(build_store.get_deferred())
+        ),
+    )
+
+    assert finished_after == [{"a.md"}, {"a.md", "b.md"}]
+
+
+def test_only_committed_groups_reach_the_build_log(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _build_config(tmp_path)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    _stage(monkeypatch, config, ["a.md", "b.md"])
+    monkeypatch.setattr(compiler, "rebuild_structure", lambda *_: {})
+    monkeypatch.setattr(compiler, "_git_commit", lambda *_: None)
+    monkeypatch.setattr(compiler, "_git_restore", lambda *_: None)
+
+    def fake_run_agent(_config, _wiki, _raw, unit, **_kwargs) -> RunResult:
+        if unit == ["a.md"]:
+            changes = (
+                {"action": "created", "path": "concepts/alpha.md"},
+                {"action": "updated", "path": "concepts/alpha.md"},
+            )
+            return RunResult(0.0, RunOutcome.COMPLETED, "", changes)
+        changes = ({"action": "created", "path": "concepts/beta.md"},)
+        return RunResult(0.0, RunOutcome.FAILED, "Your API account is out of credits.", changes)
+
+    monkeypatch.setattr(compiler, "_run_agent", fake_run_agent)
+
+    compiler.run_compilation(config)
+
+    log_lines = (config.data_dir / BUILD_LOG_FILENAME).read_text(encoding="utf-8").splitlines()
+    entries = [json.loads(line) for line in log_lines]
+    assert [(e["action"], e["path"], e["sources"]) for e in entries] == [
+        ("created", "concepts/alpha.md", ["a.md"])
+    ]
 
 
 def test_exhausted_unit_is_deferred_not_compiled(

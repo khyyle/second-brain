@@ -1,7 +1,7 @@
 """Append-only log of wiki build actions.
 
-Each compile run appends one line per page created or updated, giving a
-readable "created X / updated Y" history without parsing git.
+Each committed group of sources appends one line per page it created or
+updated, giving a readable "created X / updated Y" history without parsing git.
 """
 
 from __future__ import annotations
@@ -45,3 +45,31 @@ def append_build_actions(data_dir: Path, actions: list[dict]) -> None:
         path.write_text("\n".join(combined) + "\n", encoding="utf-8")
     except OSError as exc:
         logger.debug("Could not write build log: %s", exc)
+
+
+def record_built_pages(data_dir: Path, changes: list[dict], sources: list[str]) -> None:
+    """
+    Log the pages one committed group of sources produced, one line per page.
+
+    A page created and then edited in the same run is logged once, as created.
+
+    Parameters
+    ----------
+    data_dir: Path
+        Vault root containing the log file.
+    changes: list[dict]
+        The group's page changes in the order they were made, each with
+        ``action`` and ``path``.
+    sources: list[str]
+        Raw paths of the group's sources, recorded on every line.
+    """
+    first_action_by_path: dict[str, str] = {}
+    for change in changes:
+        first_action_by_path.setdefault(change["path"], change["action"])
+    append_build_actions(
+        data_dir,
+        [
+            {"action": action, "path": path, "sources": list(sources)}
+            for path, action in first_action_by_path.items()
+        ],
+    )

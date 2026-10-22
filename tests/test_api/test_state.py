@@ -28,6 +28,8 @@ def test_compute_state_lists_staged_sources(config: Config) -> None:
 
     assert sorted(s["rel"] for s in state["staged"]) == ["documents/a.md", "documents/b.md"]
     assert all(s["bytes"] > 0 for s in state["staged"])
+    # Each row's estimate is priced per model so the app can switch models.
+    assert all(s["costs"].keys() == state["costs"].keys() for s in state["staged"])
     assert state["built_count"] == 0
     assert state["stale"] is False
     assert state["costs"] and all(cost >= 0 for cost in state["costs"].values())
@@ -44,6 +46,29 @@ def test_compute_state_excludes_undecided_chat(config: Config) -> None:
     rels = [entry["rel"] for entry in state["staged"]]
     assert "chatgpt/chat.md" not in rels
     assert "documents/doc.md" in rels
+    assert state["pending_triage"] == ["chatgpt/chat.md"]
+
+
+def test_pending_chats_leave_the_queue_only_after_a_decision(
+    config: Config, triage_store: TriageStore
+) -> None:
+    chat = config.raw_dir / "chatgpt" / "chat.md"
+    chat.parent.mkdir(parents=True, exist_ok=True)
+    chat.write_text("chat body " * 100, encoding="utf-8")
+
+    assert compute_state(config)["pending_triage"] == ["chatgpt/chat.md"]
+
+    triage_store.record("chatgpt/chat.md", "worthwhile", confidence=1.0, reason="keep")
+
+    state = compute_state(config)
+    assert state["pending_triage"] == []
+    assert [source["rel"] for source in state["staged"]] == ["chatgpt/chat.md"]
+
+    disabled = config.model_copy(
+        update={"triage": config.triage.model_copy(update={"enabled": False})}
+    )
+    (chat.parent / "undecided.md").write_text("another chat", encoding="utf-8")
+    assert compute_state(disabled)["pending_triage"] == []
 
 
 def test_compute_state_excludes_skipped(config: Config, triage_store: TriageStore) -> None:
@@ -66,6 +91,27 @@ def test_compute_state_flags_drifted_preview(config: Config) -> None:
     state = compute_state(config)
 
     assert state["stale"] is True
+
+
+def test_a_grouping_stays_current_after_some_of_its_sources_are_built(config: Config) -> None:
+    _seed(config, "b.md")
+    artifact = {
+        "groups": [
+            {
+                "id": "g",
+                "title": "a",
+                "members": [
+                    {"rel": "documents/a.md", "bytes": 1},
+                    {"rel": "documents/b.md", "bytes": 1},
+                ],
+            }
+        ]
+    }
+    (config.data_dir / CLUSTERS_FILENAME).write_text(json.dumps(artifact), encoding="utf-8")
+
+    state = compute_state(config)
+
+    assert state["stale"] is False
 
 
 def test_compute_state_counts_needs_review(config: Config, triage_store: TriageStore) -> None:

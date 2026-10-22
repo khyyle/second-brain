@@ -2,12 +2,17 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
+from click.testing import CliRunner
 
+from second_brain import cli
 from second_brain.config import Config, SourceConfig
+from second_brain.ingestion import dispatch
 from second_brain.ingestion.manifest import Manifest
+from second_brain.ingestion.triage.gemma import TriageDecision, TriageResult
 from second_brain.ingestion.watcher import batch_scan
 
 CONTENT = "# Notes\n\nSame bytes in every copy.\n"
@@ -89,3 +94,75 @@ def test_already_ingested_watched_original_is_left_in_place(
 
     assert original not in processed
     assert original.exists()
+
+
+def test_all_exports_are_unpacked_before_documents_regardless_of_source_order(
+    config: Config, manifest: Manifest
+) -> None:
+    sources = {
+        "documents": SourceConfig(path=config.drops_dir / "documents", file_types=("md",)),
+        "chatgpt": SourceConfig(path=config.drops_dir / "chatgpt", file_types=("json",)),
+    }
+    mixed = config.model_copy(update={"sources": sources})
+    document = sources["documents"].path / "a.md"
+    exports = [sources["chatgpt"].path / name for name in ("b.json", "a.json")]
+    for source in (document, *exports):
+        source.parent.mkdir(parents=True, exist_ok=True)
+        source.write_text(source.name, encoding="utf-8")
+    processed: list[Path] = []
+
+    batch_scan(mixed, manifest, lambda path, _source: processed.append(path))
+
+    assert processed == sorted(exports) + [document]
+
+
+def test_unpacked_chats_are_published_before_document_parsing(
+    config: Config, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sources = {
+        "documents": SourceConfig(path=config.drops_dir / "documents", file_types=("md",)),
+        "chatgpt": SourceConfig(path=config.drops_dir / "chatgpt", file_types=("json",)),
+    }
+    mixed = config.model_copy(update={"sources": sources})
+    (sources["documents"].path / "notes.md").write_text(CONTENT, encoding="utf-8")
+    export = sources["chatgpt"].path / "conversations.json"
+    export.write_text(
+        json.dumps(
+            [
+                {
+                    "title": "Batch chat",
+                    "id": "batch123",
+                    "mapping": {
+                        "node": {
+                            "message": {
+                                "author": {"role": "user"},
+                                "content": {"parts": ["A conversation to import"]},
+                            }
+                        }
+                    },
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+    ingest_file = dispatch.ingest_file
+    published: list[str] = []
+
+    def observe_parse(path: Path, config: Config, manifest: Manifest, source_type: str) -> bool:
+        if source_type == "documents":
+            snapshot = json.loads((config.data_dir / ".state.json").read_text())
+            published.extend(snapshot["pending_triage"])
+        return ingest_file(path, config, manifest, source_type=source_type)
+
+    monkeypatch.setattr(cli, "_load_config", lambda _path: mixed)
+    monkeypatch.setattr(cli, "_preflight_check", lambda: None)
+    monkeypatch.setattr(dispatch, "ingest_file", observe_parse)
+    monkeypatch.setattr(
+        "second_brain.ingestion.triage.pipeline.triage_file",
+        lambda *_args: TriageResult(decision=TriageDecision.WORTHWHILE, confidence=1.0),
+    )
+
+    imported = CliRunner().invoke(cli.main, ["ingest", "--drops-only"])
+
+    assert imported.exit_code == 0, imported.output
+    assert published == ["chatgpt/batch-chat-batch123.md"]

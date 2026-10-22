@@ -279,7 +279,8 @@ def batch_scan(
         if drops_only and not _is_drop_lane(source.path, config):
             continue
         allowed = {f".{ft}" for ft in source.file_types}
-        for file_path in source.path.rglob("*"):
+        # Sorted so files are parsed in a predictable order, alphabetically by path.
+        for file_path in sorted(source.path.rglob("*")):
             if file_path.is_dir() or file_path.suffix.lower() not in allowed:
                 continue
             if manifest.needs_processing(file_path, config.raw_dir):
@@ -290,6 +291,8 @@ def batch_scan(
                 manifest.mark_duplicate(file_path, name)
                 remove_drop_copy(file_path, config)
 
+    # Exports must be expanded before slow document parsers delay their chats.
+    work.sort(key=lambda entry: (entry[0].suffix.lower() != ".json", str(entry[0])))
     total = len(work)
     processed = 0
     started = now_iso()

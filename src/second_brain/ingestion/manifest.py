@@ -11,13 +11,17 @@ from pathlib import Path
 
 from second_brain.db import connect, migrate
 from second_brain.hashing import hash_file
+from second_brain.ingestion.triage.skipped import SKIPPED_DIRNAME
 
 logger = logging.getLogger(__name__)
 
 
 def _raw_output_exists(raw_dir: Path, raw_output: str | None) -> bool:
-    """Whether a manifest row's raw output file is still present on disk."""
-    return bool(raw_output) and (raw_dir / raw_output).exists()
+    """Whether a manifest row's raw output is still on disk, counting one held in
+    the skipped folder, which is still there until a build purges it."""
+    if not raw_output:
+        return False
+    return (raw_dir / raw_output).exists() or (raw_dir / SKIPPED_DIRNAME / raw_output).exists()
 
 
 @dataclass(frozen=True)

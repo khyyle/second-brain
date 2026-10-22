@@ -4,10 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from second_brain.compilation.agent import (
-    COMPILATION_SYSTEM_PROMPT,
-    WikiToolExecutor,
-)
+from second_brain.compilation.agent import WikiToolExecutor
+from second_brain.compilation.prompt import COMPILATION_SYSTEM_PROMPT
 from second_brain.wiki.structure import CONTENT_DIRS, _parse_frontmatter
 
 

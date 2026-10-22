@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import threading
 from pathlib import Path
 
 import pytest
@@ -39,6 +40,82 @@ def test_triage_only_touches_scoped_lanes(
     assert "chatgpt/chat.md" in decisions  # in-scope lane is triaged
     assert "documents/doc.md" not in decisions  # out-of-scope lane gets no row
     assert counts["worthwhile"] == 1  # only the chat is counted
+
+
+def test_the_heartbeat_names_the_chat_being_triaged_and_those_waiting(
+    config: Config, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write(config.raw_dir, "chatgpt/a.md", "chat body " * 100)
+    _write(config.raw_dir, "chatgpt/b.md", "chat body " * 100)
+    status_file = config.data_dir / STATUS_FILENAME
+    heartbeats: list[tuple[list[str], list[str]]] = []
+
+    def fake_triage(path: Path, _config: object) -> TriageResult:
+        heartbeat = json.loads(status_file.read_text())
+        heartbeats.append((heartbeat["current_sources"], heartbeat["queued_sources"]))
+        return TriageResult(decision=TriageDecision.WORTHWHILE, confidence=0.9)
+
+    monkeypatch.setattr(pipeline_mod, "triage_file", fake_triage)
+
+    pipeline_mod.triage_pending(config)
+
+    assert heartbeats == [(["chatgpt/a.md"], ["chatgpt/b.md"]), (["chatgpt/b.md"], [])]
+
+
+def test_a_blocking_triage_keeps_its_heartbeat_fresh(
+    config: Config, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write(config.raw_dir, "chatgpt/slow.md", "chat body " * 100)
+    status_file = config.data_dir / STATUS_FILENAME
+    started = threading.Event()
+    refreshed = threading.Event()
+    touch_status = pipeline_mod.touch_status
+
+    def record_refresh(data_dir: Path) -> None:
+        touch_status(data_dir)
+        if started.is_set():
+            refreshed.set()
+
+    def blocking_triage(_path: Path, _config: object) -> TriageResult:
+        before = json.loads(status_file.read_text())
+        started.set()
+        assert refreshed.wait(timeout=1)
+        after = json.loads(status_file.read_text())
+        assert after["updated_at"] > before["updated_at"]
+        assert after["current_started_at"] == before["current_started_at"]
+        assert after["current_sources"] == ["chatgpt/slow.md"]
+        return TriageResult(decision=TriageDecision.WORTHWHILE, confidence=0.9)
+
+    monkeypatch.setattr(pipeline_mod, "_HEARTBEAT_INTERVAL_SECONDS", 0.01)
+    monkeypatch.setattr(pipeline_mod, "touch_status", record_refresh)
+    monkeypatch.setattr(pipeline_mod, "triage_file", blocking_triage)
+
+    pipeline_mod.triage_pending(config)
+
+    assert json.loads(status_file.read_text())["running"] is False
+
+
+def test_each_decision_is_reported_and_a_skip_is_held_at_once(
+    config: Config, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write(config.raw_dir, "chatgpt/keep.md", "chat body " * 100)
+    _write(config.raw_dir, "chatgpt/skip.md", "chat body " * 100)
+    decisions = {"keep.md": TriageDecision.WORTHWHILE, "skip.md": TriageDecision.SKIP}
+    monkeypatch.setattr(
+        pipeline_mod,
+        "triage_file",
+        lambda path, _config: TriageResult(decision=decisions[path.name], confidence=0.9),
+    )
+    held_after_each: list[bool] = []
+
+    pipeline_mod.triage_pending(
+        config,
+        on_decided=lambda: held_after_each.append(
+            (config.raw_dir / ".skipped" / "chatgpt" / "skip.md").exists()
+        ),
+    )
+
+    assert held_after_each == [False, True]
 
 
 def test_triage_skips_a_vanished_source(

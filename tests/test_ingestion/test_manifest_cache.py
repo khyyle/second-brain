@@ -193,3 +193,18 @@ def test_failure_reason_is_kept_until_the_file_is_retried(
     manifest.mark_processing(sample_file, "documents")
 
     assert manifest.get_ingest_failures() == {}
+
+
+def test_an_unchanged_file_whose_output_is_held_as_skipped_is_not_reprocessed(
+    manifest: Manifest, tmp_path: Path
+) -> None:
+    raw_dir = tmp_path / "raw"
+    held = raw_dir / ".skipped" / "chatgpt" / "thanks.md"
+    held.parent.mkdir(parents=True)
+    held.write_text("thanks", encoding="utf-8")
+    export = tmp_path / "conversations.json"
+    export.write_text("[]", encoding="utf-8")
+    manifest.mark_processing(export, "chatgpt")
+    manifest.mark_complete(export, parse_lane="passthrough", raw_output="chatgpt/thanks.md")
+
+    assert manifest.needs_processing(export, raw_dir) is False

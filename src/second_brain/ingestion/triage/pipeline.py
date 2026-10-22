@@ -10,9 +10,11 @@ from __future__ import annotations
 
 import logging
 import shutil
+import threading
+from collections.abc import Callable
 from pathlib import Path
 
-from second_brain.api.status import clear_status, now_iso, write_status
+from second_brain.api.status import clear_status, now_iso, touch_status, write_status
 from second_brain.config import Config
 from second_brain.ingestion.triage.gemma import TriageDecision, triage_file
 from second_brain.ingestion.triage.skipped import move_skips_to_holding
@@ -20,6 +22,7 @@ from second_brain.ingestion.triage.store import TriageStore
 from second_brain.ollama.client import OllamaUnavailableError
 
 logger = logging.getLogger(__name__)
+_HEARTBEAT_INTERVAL_SECONDS = 5.0
 
 
 class TriageInterruptedError(OllamaUnavailableError):
@@ -47,7 +50,7 @@ def _source_of(rel_path: str) -> str:
     return parts[0] if parts else ""
 
 
-def _find_untriaged(config: Config, triage_store: TriageStore) -> list[str]:
+def find_untriaged_sources(config: Config, triage_store: TriageStore) -> list[str]:
     """Return undecided raw .md paths in triage-scoped lanes.
 
     Only lanes listed in ``config.triage.sources`` are triaged. Sources in
@@ -67,7 +70,7 @@ def _find_untriaged(config: Config, triage_store: TriageStore) -> list[str]:
         Sorted relative raw paths awaiting a decision.
     """
     raw_dir = config.raw_dir
-    if not raw_dir.exists():
+    if not config.triage.enabled or not raw_dir.exists():
         return []
     decided = set(triage_store.get_decisions())
     pending: list[str] = []
@@ -83,7 +86,7 @@ def _find_untriaged(config: Config, triage_store: TriageStore) -> list[str]:
     return sorted(pending)
 
 
-def triage_pending(config: Config) -> dict[str, int]:
+def triage_pending(config: Config, on_decided: Callable[[], None] | None = None) -> dict[str, int]:
     """Triage every untriaged source in a scoped lane and record decisions.
 
     Review-tier sources are also copied into the inbox for a manual pass.
@@ -97,6 +100,9 @@ def triage_pending(config: Config) -> dict[str, int]:
     ----------
     config: Config
         Application configuration (triage settings, paths).
+    on_decided: Callable[[], None] | None
+        Called after each chat's decision is recorded, so a reader of the
+        staged and review sets sees each chat land as it is sorted.
 
     Returns
     -------
@@ -112,7 +118,7 @@ def triage_pending(config: Config) -> dict[str, int]:
         return {"worthwhile": 0, "review": 0, "skip": 0}
 
     triage_store = TriageStore(config.manifest_db_path)
-    pending = _find_untriaged(config, triage_store)
+    pending = find_untriaged_sources(config, triage_store)
     counts = {"worthwhile": 0, "review": 0, "skip": 0}
     interruption: TriageInterruptedError | None = None
     interruption_cause: OllamaUnavailableError | None = None
@@ -120,15 +126,29 @@ def triage_pending(config: Config) -> dict[str, int]:
         total = len(pending)
         started = now_iso()
         review_paths: list[str] = []
+        stop_heartbeat = threading.Event()
+        heartbeat_lock = threading.Lock()
+
+        def keepalive() -> None:
+            while not stop_heartbeat.wait(_HEARTBEAT_INTERVAL_SECONDS):
+                with heartbeat_lock:
+                    touch_status(config.data_dir)
+
+        heartbeat = threading.Thread(target=keepalive, daemon=True)
+        heartbeat.start()
         try:
             for idx, rel in enumerate(pending):
-                write_status(
-                    config.data_dir,
-                    phase="triage",
-                    current=idx,
-                    total=total,
-                    started_at=started,
-                )
+                with heartbeat_lock:
+                    write_status(
+                        config.data_dir,
+                        phase="triage",
+                        current=idx,
+                        total=total,
+                        started_at=started,
+                        current_sources=(rel,),
+                        current_started_at=now_iso(),
+                        queued_sources=tuple(pending[idx + 1 :]),
+                    )
                 try:
                     result = triage_file(config.raw_dir / rel, config.triage)
                 except OSError as exc:
@@ -144,9 +164,15 @@ def triage_pending(config: Config) -> dict[str, int]:
                     break
                 triage_store.record(rel, result.decision.value, result.confidence, result.reason)
                 counts[result.decision.value] += 1
+                if result.decision == TriageDecision.SKIP:
+                    move_skips_to_holding(config.raw_dir, {rel: result.decision.value})
+                if on_decided is not None:
+                    on_decided()
                 if result.decision == TriageDecision.REVIEW:
                     review_paths.append(rel)
         finally:
+            stop_heartbeat.set()
+            heartbeat.join()
             clear_status(config.data_dir)
 
         _route_review_to_inbox(config, review_paths)

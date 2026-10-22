@@ -32,6 +32,11 @@ class PipelineStatus:
     updated_at: str
     started_at: str  # run start, for elapsed display
     cost_usd: float  # accumulated API cost this run (0 for free stages)
+    current_sources: tuple[str, ...]
+    queued_sources: tuple[str, ...]
+    current_started_at: str
+    current_cost_usd: float
+    current_activity: str
 
 
 def now_iso() -> str:
@@ -49,7 +54,12 @@ def write_status(
     current: int,
     total: int,
     started_at: str,
+    current_sources: tuple[str, ...] = (),
     cost_usd: float = 0.0,
+    current_started_at: str = "",
+    current_cost_usd: float = 0.0,
+    current_activity: str = "",
+    queued_sources: tuple[str, ...] = (),
 ) -> None:
     """
     Write a running heartbeat snapshot.
@@ -66,8 +76,18 @@ def write_status(
         Total items in this run (0 when not a per-item stage).
     started_at: str
         ISO timestamp when this run began (for elapsed display).
+    current_sources: tuple[str, ...]
+        Raw paths of the sources being compiled; empty outside a build.
     cost_usd: float
         Accumulated API cost so far this run.
+    current_started_at: str
+        ISO timestamp when the sources being compiled were started.
+    current_cost_usd: float
+        API cost so far for the sources being compiled.
+    current_activity: str
+        What the build agent is doing for them, as a short phrase.
+    queued_sources: tuple[str, ...]
+        Raw paths still waiting in this stage after the current ones.
     """
     status = PipelineStatus(
         running=True,
@@ -77,6 +97,11 @@ def write_status(
         updated_at=now_iso(),
         started_at=started_at,
         cost_usd=cost_usd,
+        current_sources=current_sources,
+        queued_sources=queued_sources,
+        current_started_at=current_started_at,
+        current_cost_usd=current_cost_usd,
+        current_activity=current_activity,
     )
     _write(data_dir, status)
 
@@ -116,6 +141,11 @@ def clear_status(data_dir: Path) -> None:
         updated_at=now,
         started_at=now,
         cost_usd=0.0,
+        current_sources=(),
+        queued_sources=(),
+        current_started_at="",
+        current_cost_usd=0.0,
+        current_activity="",
     )
     _write(data_dir, status)
 
