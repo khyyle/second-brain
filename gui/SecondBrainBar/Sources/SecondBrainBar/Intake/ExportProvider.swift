@@ -5,6 +5,7 @@ struct DetectedExport {
     let provider: ExportProvider
     let files: [URL]
     let conversationCount: Int
+    let exportFolders: Set<URL>
 
     /// The file name, or a count when a split export spans several files.
     var sourceName: String {
@@ -64,6 +65,7 @@ enum ExportProvider: String, CaseIterable, Identifiable {
         let fileManager = FileManager.default
         var found: [URL] = []
         var totalConversations = 0
+        var exportFolders: Set<URL> = []
         for url in selection {
             var isDirectory: ObjCBool = false
             guard fileManager.fileExists(atPath: url.path, isDirectory: &isDirectory) else { continue }
@@ -71,6 +73,10 @@ enum ExportProvider: String, CaseIterable, Identifiable {
                 let entries = (try? fileManager.contentsOfDirectory(
                     at: url, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]
                 )) ?? []
+                let names = Set(entries.map { $0.lastPathComponent.lowercased() })
+                if names.contains("chat.html") || names.contains("user.json") {
+                    exportFolders.insert(url)
+                }
                 for entry in entries {
                     guard entry.lastPathComponent.lowercased().hasPrefix("conversations"),
                           let count = conversationCount(in: entry) else { continue }
@@ -83,7 +89,10 @@ enum ExportProvider: String, CaseIterable, Identifiable {
             }
         }
         guard !found.isEmpty else { return nil }
-        return DetectedExport(provider: self, files: found, conversationCount: totalConversations)
+        return DetectedExport(
+            provider: self, files: found, conversationCount: totalConversations,
+            exportFolders: exportFolders
+        )
     }
 
     /// The first provider that recognizes an export in the selection.

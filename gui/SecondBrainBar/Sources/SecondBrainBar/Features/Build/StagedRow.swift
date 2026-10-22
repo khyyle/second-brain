@@ -3,11 +3,12 @@ import SwiftUI
 /// One source waiting to be compiled; hover to un-ingest it.
 struct StagedRow: View {
     let name: String
-    let sizeText: String
+    let costText: String
     var deferReason: String? = nil
     var onRetry: (() -> Void)? = nil
     var isChat: Bool = false
     var onSkip: (() -> Void)? = nil
+    var isBuilding: Bool = false
     let onOpen: () -> Void
     let onRemove: () -> Void
     @State private var hovering = false
@@ -15,15 +16,27 @@ struct StagedRow: View {
 
     var body: some View {
         HStack(spacing: 9) {
-            Image(systemName: "circle.dashed")
-                .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(Theme.Colors.accentAmber)
-                .frame(width: 12)
-            Text(cleanName(name))
-                .font(Theme.Font.body(11.5))
-                .foregroundStyle(Theme.Colors.textPrimary)
-                .lineLimit(1).truncationMode(.middle)
-                .openableTitle(cleanName(name))
+            // spinner and dashed circle share a 12pt slot so filenames dont shift on build
+            Group {
+                if isBuilding {
+                    RowSpinner()
+                } else {
+                    Image(systemName: "circle.dashed")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(Theme.Colors.accentAmber)
+                }
+            }
+            .frame(width: 12)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(cleanName(name))
+                    .font(Theme.Font.body(11.5))
+                    .foregroundStyle(Theme.Colors.textPrimary)
+                    .lineLimit(1).truncationMode(.middle)
+                    .openableTitle(cleanName(name))
+                if isBuilding {
+                    BuildActivityLine()
+                }
+            }
             if isChat {
                 Text("chat")
                     .font(Theme.Font.meta(9.5))
@@ -39,9 +52,13 @@ struct StagedRow: View {
             }
             Spacer(minLength: 6)
             TrailingReserve(hovering: hovering) {
-                Text(sizeText)
-                    .font(Theme.Font.meta(9.5))
-                    .foregroundStyle(Theme.Colors.textTertiary)
+                if isBuilding {
+                    BuildElapsed()
+                } else {
+                    Text(costText)
+                        .font(Theme.Font.meta(9.5))
+                        .foregroundStyle(Theme.Colors.textTertiary)
+                }
             } hover: {
                 HStack(spacing: 4) {
                     if let onRetry {

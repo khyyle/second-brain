@@ -15,6 +15,7 @@ struct ClusterGroupRow: View {
 
     private var isMulti: Bool { group.members.count > 1 }
     private var isSplit: Bool { overrides.isSplit(group.id) }
+    private var isBuilding: Bool { group.containsAny(of: store.buildingSources) }
 
     var body: some View {
         VStack(spacing: 1) {
@@ -38,11 +39,26 @@ struct ClusterGroupRow: View {
 
     private var header: some View {
         HStack(spacing: 9) {
-            Image(systemName: isMulti ? (expanded ? "chevron.down" : "chevron.right") : "circle.dashed")
-                .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(Theme.Colors.textSecondary)
-                .frame(width: 12)
-            title
+            Group {
+                // A multi-source group keeps its expand control instead of being replaced by the spinner during compilation
+                if isBuilding && !isMulti {
+                    RowSpinner()
+                } else {
+                    Image(systemName: isMulti ? (expanded ? "chevron.down" : "chevron.right") : "circle.dashed")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(isMulti ? Theme.Colors.textSecondary : Theme.Colors.accentAmber)
+                }
+            }
+            .frame(width: 12)
+            VStack(alignment: .leading, spacing: 1) {
+                title
+                if isBuilding {
+                    BuildActivityLine()
+                }
+            }
+            if isBuilding && isMulti {
+                RowSpinner().frame(width: 12)
+            }
             if isMulti {
                 Text("\(group.members.count) chats" + (isSplit ? " · split" : ""))
                     .font(Theme.Font.meta(9.5))
@@ -77,7 +93,7 @@ struct ClusterGroupRow: View {
         }
     }
 
-    // A multi-chat group swaps its cost for a Split/Merge pill on hover. The
+    // A multi-chat group swaps its detail for a Split/Merge pill on hover. The
     // pill is taller than the text, so both live in a ZStack that always
     // reserves the pill's height, keeping the row from reflowing on hover. A
     // single-source row instead reveals its remove button on hover.
@@ -85,7 +101,7 @@ struct ClusterGroupRow: View {
     private var trailing: some View {
         if isMulti {
             TrailingReserve(hovering: hovering) {
-                cost
+                detail
             } hover: {
                 Button(isSplit ? "Merge" : "Split") {
                     overrides.toggleSplit(group.id)
@@ -96,7 +112,7 @@ struct ClusterGroupRow: View {
             }
         } else {
             TrailingReserve(hovering: hovering) {
-                cost
+                detail
             } hover: {
                 HoverIcon(systemName: "xmark.circle.fill",
                           help: "Remove from staging (moves the file to Trash)") {
@@ -107,10 +123,17 @@ struct ClusterGroupRow: View {
         }
     }
 
-    private var cost: some View {
-        Text(String(format: "~$%.2f", group.cost(for: model)))
-            .font(Theme.Font.meta(9.5))
-            .foregroundStyle(Theme.Colors.textTertiary)
-            .monospacedDigit()
+    // A queued group shows its estimate; the one being built shows what it
+    // has actually taken so far.
+    @ViewBuilder
+    private var detail: some View {
+        if isBuilding {
+            BuildElapsed()
+        } else {
+            Text(formatEstimate(group.cost(for: model)))
+                .font(Theme.Font.meta(9.5))
+                .foregroundStyle(Theme.Colors.textTertiary)
+                .monospacedDigit()
+        }
     }
 }

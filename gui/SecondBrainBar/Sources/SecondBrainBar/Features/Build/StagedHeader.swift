@@ -23,9 +23,6 @@ struct StagedHeader: View {
         if canPreview {
             text += " 'Group' bundles related conversations to avoid creating duplicate Second Brain entries."
         }
-        if store.skippedCount > 0 {
-            text += " Skipped chats can be restored until the next build."
-        }
         text += " The cost is a rough upper bound."
         return text
     }
@@ -62,7 +59,7 @@ struct StagedHeader: View {
     }
 
     private var costLine: some View {
-        Text("~$\(String(format: "%.2f", cost))")
+        Text(formatEstimate(cost))
             .font(Theme.Font.meta(10))
             .foregroundStyle(Theme.Colors.textTertiary)
             .monospacedDigit()
@@ -80,10 +77,10 @@ struct StagedHeader: View {
         }
     }
 
-    // A stale plan no longer matches the staged set, so its grouping — and the
-    // cost saving that comes with it — is dropped on the next build unless it is
-    // recomputed first. Mark that case amber with a refresh glyph; an absent or
-    // current plan stays neutral.
+    // Grouping the same staged chats again gives the same result, so the button
+    // only offers to run when it can change something: a first grouping, or a
+    // regroup once new chats are staged. A stale plan is marked amber because
+    // its sources outside the grouping would build on their own.
     @ViewBuilder
     private var regroupButton: some View {
         if stale {
@@ -94,8 +91,12 @@ struct StagedHeader: View {
                 }
             }
             .buttonStyle(PillButton(tint: Theme.Colors.accentAmber))
+        } else if hasPlan {
+            Text("Grouped")
+                .font(Theme.Font.meta(10.5))
+                .foregroundStyle(Theme.Colors.textTertiary)
         } else {
-            Button(hasPlan ? "Regroup" : "Group", action: onPreview)
+            Button("Group", action: onPreview)
                 .buttonStyle(PillButton(.neutral))
         }
     }

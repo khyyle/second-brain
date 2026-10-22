@@ -5,21 +5,27 @@ import AppKit
 ///
 /// The relational cascade lives in the Python CLI (one source of truth for
 /// the manifest schema); the GUI does the macOS-native file op (move to
-/// Trash) and shells out to the CLI for the records. The lists refresh on
-/// their poll timers; for file-backed deletes the row disappears as soon as
-/// the file is trashed, regardless of when the DB op lands.
+/// Trash) and shells out to the CLI for the records.
 enum ManifestMutator {
     /// Un-ingest a staged source: trash its raw markdown and clear its
     /// manifest / compiled / triage records.
-    static func removeStagedSource(config: AppConfig, rawRel: String) {
-        trash(config.rawRoot.appending(path: rawRel))
-        run(config, "forget \(quote(rawRel))")
+    static func removeStagedSource(
+        config: AppConfig, rawRel: String
+    ) -> PipelineRunner.ManagedCommandResult {
+        remove(
+            config: config, url: config.rawRoot.appending(path: rawRel),
+            command: "forget \(quote(rawRel))"
+        )
     }
 
     /// Remove a queued or failed dropped file: trash it and drop its row.
-    static func removeSource(config: AppConfig, filePath: String) {
-        trash(URL(fileURLWithPath: filePath))
-        run(config, "forget-drop \(quote(filePath))")
+    static func removeSource(
+        config: AppConfig, filePath: String
+    ) -> PipelineRunner.ManagedCommandResult {
+        remove(
+            config: config, url: URL(fileURLWithPath: filePath),
+            command: "forget-drop \(quote(filePath))"
+        )
     }
 
     /// Keep a source (the Keep action): record the verdict; the file stays
@@ -57,10 +63,23 @@ enum ManifestMutator {
         run(config, "ingest --path \(quote(filePath))")
     }
 
-    private static func trash(_ url: URL) {
-        if FileManager.default.fileExists(atPath: url.path) {
-            try? FileManager.default.trashItem(at: url, resultingItemURL: nil)
+    /// Filesystem and CLI work can both block, so removals run off the main thread.
+    private static func remove(
+        config: AppConfig, url: URL, command: String
+    ) -> PipelineRunner.ManagedCommandResult {
+        guard let repo = config.repoDir else {
+            return PipelineRunner.ManagedCommandResult(
+                succeeded: false, message: "The pipeline location is unavailable."
+            )
         }
+        do {
+            if FileManager.default.fileExists(atPath: url.path) {
+                try FileManager.default.trashItem(at: url, resultingItemURL: nil)
+            }
+        } catch {
+            return PipelineRunner.ManagedCommandResult(succeeded: false, message: error.localizedDescription)
+        }
+        return PipelineRunner.runManagedResult(repoDir: repo, command: command)
     }
 
     /// Move a file, creating the destination's parent and overwriting any

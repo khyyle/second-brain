@@ -1,7 +1,8 @@
 import SwiftUI
 
-/// Sources staged for compilation — grouped into the build plan when a
-/// cluster preview is active — plus a log of pages already built.
+/// Sources staged for compilation, in the order the build takes them — grouped
+/// into the build plan when a cluster preview is active — then sources a build
+/// set aside, and a log of pages already built.
 struct BuildTab: View {
     let config: AppConfig
     let onBuild: () -> Void
@@ -9,17 +10,14 @@ struct BuildTab: View {
     @State private var plan: ClusterPlan?
     @State private var planStamp = ""
     @State private var overrides = ClusterOverrides.empty
-    @State private var showAllClusters = false
-    @State private var showSingletons = false
-    @State private var showSkipped = false
-    @State private var skippedRows: [TriageRow] = []
     @State private var entries: [BuildLogEntry] = []
     @State private var loaded = false
     @State private var compilationModel = "claude-sonnet-4-6"
+    @State private var groupingError: String?
     @EnvironmentObject private var store: PipelineStore
 
-    // The reviewed plan drives the view while it still matches staging; the
-    // pipeline's stale flag (via the store) is the authority on that match.
+    // The reviewed plan drives the view while it still covers staging; the
+    // pipeline's stale flag (via the store) is the authority on that.
     private var activePlan: ClusterPlan? {
         guard let plan, !store.stale else { return nil }
         return plan
@@ -34,90 +32,70 @@ struct BuildTab: View {
         VStack(spacing: 1) {
             StagedHeader(
                 cost: store.cost(for: compilationModel),
-                sourceCount: store.staged.count,
+                sourceCount: store.stagedForBuild.count,
                 stale: store.stale,
                 hasPlan: plan != nil,
                 canPreview: config.repoDir != nil
-                    && store.staged.contains { $0.id.hasPrefix("chatgpt/") },
+                    && store.stagedForBuild.filter { isConversation($0.id) }.count >= 2,
                 onPreview: previewGrouping,
                 onBuild: onBuild,
                 canBuild: canBuild
             )
             stagedSection
-            skippedSection
+            setAsideSection
             SectionHeader(title: "Recent")
             recentSection
         }
         .onAppear(perform: refresh)
         .onPanelShow(refresh)
-        .onReceive(Timer.publish(every: 1, on: .main, in: .common).autoconnect()) { _ in refresh() }
-        .onChange(of: store.stateStamp) { _ in
-            if showSkipped { refreshSkipped() }
+        .onReceive(Ticker.everySecond) { _ in refresh() }
+        .alert(
+            "Grouping didn't finish",
+            isPresented: Binding(
+                get: { groupingError != nil },
+                set: { if !$0 { groupingError = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(groupingError ?? "")
         }
     }
 
+    // Rows stay in build order and leave as each group finishes, so the one
+    // being built is always first.
     @ViewBuilder
     private var stagedSection: some View {
-        if let plan = displayPlan {
-            // Only multi-source clusters carry a grouping decision worth
-            // reviewing; single-source units sit behind a collapsible count
-            // so they don't crowd the clusters but stay reachable.
-            let clusters = plan.groups.filter { $0.members.count > 1 }
-            let singles = plan.groups.filter { $0.members.count == 1 }
-            let shownClusters = showAllClusters ? clusters : Array(clusters.prefix(ListCap.max))
-            LazyVStack(spacing: 1) {
-                ForEach(shownClusters) { group in
-                    ClusterGroupRow(
-                        group: group,
-                        model: compilationModel,
-                        overrides: $overrides,
-                        onCommit: writeOverrides,
-                        onRemove: remove,
-                        onOpen: openRaw
-                    )
-                }
-            }
-            if clusters.count > ListCap.max {
-                InlineToggleRow(
-                    collapsedLabel: "+ \(clusters.count - ListCap.max) more clusters",
-                    isExpanded: showAllClusters
-                ) { showAllClusters.toggle() }
-            }
-            if !singles.isEmpty {
-                InlineToggleRow(
-                    collapsedLabel: "+ \(singles.count) ungrouped",
-                    isExpanded: showSingletons
-                ) { showSingletons.toggle() }
-                if showSingletons {
-                    LazyVStack(spacing: 1) {
-                        ForEach(singles) { group in
-                            ClusterGroupRow(
-                                group: group,
-                                model: compilationModel,
-                                overrides: $overrides,
-                                onCommit: writeOverrides,
-                                onRemove: remove,
-                                onOpen: openRaw
-                            )
-                        }
-                    }
-                }
-            }
-        } else if store.staged.isEmpty {
+        let stagedPaths = Set(store.stagedForBuild.map(\.id))
+        if store.stagedForBuild.isEmpty {
             EmptyListMessage(
                 text: store.hasState
                     ? "Nothing staged. Files you drop appear here once they're ingested."
                     : nil
             )
+        } else if let plan = displayPlan {
+            PaginatedList(
+                items: plan.groups.compactMap { $0.narrowed(to: stagedPaths) },
+                expansionKey: "build.staged"
+            ) { group in
+                ClusterGroupRow(
+                    group: group,
+                    model: compilationModel,
+                    overrides: $overrides,
+                    onCommit: writeOverrides,
+                    onRemove: remove,
+                    onOpen: openRaw
+                )
+            }
         } else {
-            PaginatedList(items: store.staged) { source in
+            let building = store.buildingSources
+            PaginatedList(items: store.stagedForBuild, expansionKey: "build.staged") { source in
                 StagedRow(
                     name: source.displayName,
-                    sizeText: source.sizeText,
-                    deferReason: source.deferReason,
-                    onRetry: source.canRetry ? { retry(source.id) } : nil,
+                    costText: formatEstimate(source.cost(for: compilationModel)),
                     isChat: isConversation(source.id),
                     onSkip: isConversation(source.id) ? { skip(source.id) } : nil,
+                    isBuilding: building.contains(source.id),
                     onOpen: { openRaw(source.id) },
                     onRemove: { remove(source.id) }
                 )
@@ -126,23 +104,23 @@ struct BuildTab: View {
     }
 
     @ViewBuilder
-    private var skippedSection: some View {
-        if store.skippedCount > 0 {
-            InlineToggleRow(
-                collapsedLabel: "+ \(store.skippedCount) skipped",
-                isExpanded: showSkipped
-            ) {
-                showSkipped.toggle()
-                if showSkipped { refreshSkipped() }
-            }
-            if showSkipped {
-                PaginatedList(items: skippedRows) { row in
-                    SkippedRow(
-                        row: row,
-                        onOpen: { openSkipped(row) },
-                        onKeep: { unskip(row) }
-                    )
-                }
+    private var setAsideSection: some View {
+        if !store.setAside.isEmpty {
+            SectionHeader(
+                title: "Set aside",
+                help: "Builds couldn't finish these and skip them until you retry. "
+                    + "Click \"Set aside\" on a row to see why."
+            )
+            PaginatedList(items: store.setAside, expansionKey: "build.setAside") { source in
+                StagedRow(
+                    name: source.displayName,
+                    costText: formatEstimate(source.cost(for: compilationModel)),
+                    deferReason: source.deferReason,
+                    onRetry: source.canRetry ? { retry(source.id) } : nil,
+                    isChat: isConversation(source.id),
+                    onOpen: { openRaw(source.id) },
+                    onRemove: { remove(source.id) }
+                )
             }
         }
     }
@@ -152,7 +130,7 @@ struct BuildTab: View {
         if entries.isEmpty {
             EmptyListMessage(text: loaded ? "Nothing built yet." : nil)
         } else {
-            PaginatedList(items: entries) { entry in
+            PaginatedList(items: entries, expansionKey: "build.recent") { entry in
                 BuildRow(entry: entry, onOpen: { open(entry) })
             }
         }
@@ -165,8 +143,6 @@ struct BuildTab: View {
         if loadedPlan?.generatedAt != planStamp {
             planStamp = loadedPlan?.generatedAt ?? ""
             overrides = ClusterOverrides.load(config.clusterOverridesFile)
-            showAllClusters = false  // a new grouping starts collapsed
-            showSingletons = false
         }
         plan = loadedPlan
         entries = BuildLog.recent(at: config.buildLog)
@@ -175,25 +151,18 @@ struct BuildTab: View {
         loaded = true
     }
 
-    private func refreshSkipped() {
-        let fileManager = FileManager.default
-        skippedRows = ManifestReader(dbPath: config.manifestDB)
-            .triageDecisions()
-            .filter { row in
-                guard row.decision == .skip else { return false }
-                return fileManager.fileExists(
-                    atPath: ManifestMutator.skippedURL(config, row.id).path
-                )
-            }
-    }
-
     private func isConversation(_ rel: String) -> Bool {
         ExportProvider.allCases.contains { rel.hasPrefix($0.lane + "/") }
     }
 
     private func previewGrouping() {
         guard let repo = config.repoDir else { return }
-        PipelineRunner.runManaged(repoDir: repo, command: "preview-clusters")
+        DispatchQueue.global(qos: .userInitiated).async {
+            let result = PipelineRunner.runManagedResult(repoDir: repo, command: "preview-clusters")
+            guard !result.succeeded else { return }
+            let reason = result.failureReason ?? "The grouping stopped before it finished."
+            DispatchQueue.main.async { groupingError = reason }
+        }
     }
 
     private func writeOverrides() {
@@ -201,20 +170,12 @@ struct BuildTab: View {
     }
 
     private func remove(_ rawRel: String) {
-        ManifestMutator.removeStagedSource(config: config, rawRel: rawRel)
-        refresh()
+        withAnimation(.easeOut(duration: 0.3)) { store.removeStagedSource(rawRel) }
     }
 
     private func skip(_ rawRel: String) {
         ManifestMutator.skipSource(config: config, rawRel: rawRel)
         refresh()
-        if showSkipped { refreshSkipped() }
-    }
-
-    private func unskip(_ row: TriageRow) {
-        ManifestMutator.unskipSource(config: config, rawRel: row.id)
-        refresh()
-        if showSkipped { refreshSkipped() }
     }
 
     /// Requeue a set-aside source. Single-quoted because raw paths carry
@@ -230,10 +191,6 @@ struct BuildTab: View {
 
     private func openRaw(_ rawRel: String) {
         openInDefaultApp(config.rawRoot.appending(path: rawRel))
-    }
-
-    private func openSkipped(_ row: TriageRow) {
-        openInDefaultApp(ManifestMutator.skippedURL(config, row.id))
     }
 
     private func open(_ entry: BuildLogEntry) {

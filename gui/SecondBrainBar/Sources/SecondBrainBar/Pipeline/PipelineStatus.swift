@@ -10,6 +10,11 @@ struct PipelineStatus {
     let updatedAt: Date
     let startedAt: Date
     let costUSD: Double
+    let currentSources: [String]
+    let queuedSources: [String]
+    let currentStartedAt: Date?
+    let currentCostUSD: Double
+    let currentActivity: String
 
     /// A heartbeat older than this is treated as stale (process died
     /// without clearing it), so the UI won't show a phantom spinner.
@@ -44,7 +49,12 @@ struct PipelineStatus {
             total: obj["total"] as? Int ?? 0,
             updatedAt: updated,
             startedAt: started,
-            costUSD: obj["cost_usd"] as? Double ?? 0
+            costUSD: obj["cost_usd"] as? Double ?? 0,
+            currentSources: obj["current_sources"] as? [String] ?? [],
+            queuedSources: obj["queued_sources"] as? [String] ?? [],
+            currentStartedAt: (obj["current_started_at"] as? String).flatMap { iso.date(from: $0) },
+            currentCostUSD: obj["current_cost_usd"] as? Double ?? 0,
+            currentActivity: obj["current_activity"] as? String ?? ""
         )
     }
 }

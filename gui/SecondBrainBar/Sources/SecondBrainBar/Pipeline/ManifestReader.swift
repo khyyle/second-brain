@@ -201,6 +201,36 @@ struct ManifestReader {
         return out
     }
 
+    /// Content hashes of files already ingested whose output is still under
+    /// `rawRoot`, including output held in the skipped folder, so adding the
+    /// same bytes again would add nothing.
+    func ingestedContentHashes(rawRoot: URL) -> Set<String> {
+        guard FileManager.default.fileExists(atPath: dbPath.path) else { return [] }
+        var db: OpaquePointer?
+        guard sqlite3_open_v2(dbPath.path, &db, SQLITE_OPEN_READONLY, nil) == SQLITE_OK else {
+            sqlite3_close(db)
+            return []
+        }
+        defer { sqlite3_close(db) }
+        var stmt: OpaquePointer?
+        let sql = """
+            SELECT sha256, raw_output FROM manifest
+            WHERE status = 'complete' AND raw_output IS NOT NULL
+        """
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return [] }
+        defer { sqlite3_finalize(stmt) }
+        var hashes: Set<String> = []
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            guard let hash = sqlString(stmt, 0), let rawOutput = sqlString(stmt, 1) else { continue }
+            let held = rawRoot.appending(path: ".skipped").appending(path: rawOutput)
+            if FileManager.default.fileExists(atPath: rawRoot.appending(path: rawOutput).path)
+                || FileManager.default.fileExists(atPath: held.path) {
+                hashes.insert(hash)
+            }
+        }
+        return hashes
+    }
+
     private func readStrings(_ sql: String) -> Set<String> {
         guard FileManager.default.fileExists(atPath: dbPath.path) else { return [] }
         var db: OpaquePointer?

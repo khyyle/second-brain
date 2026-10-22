@@ -18,7 +18,7 @@ struct FooterStatus: View {
                     }
                 }
             } else {
-                Text("\(store.staged.count) staged · \(store.builtCount) built")
+                Text("\(store.stagedForBuild.count) staged · \(store.builtCount) built")
                     .font(Theme.Font.meta(10.5))
                     .foregroundStyle(Theme.Colors.textTertiary)
                     .monospacedDigit()

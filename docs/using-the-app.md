@@ -22,7 +22,7 @@ Imported ChatGPT conversations get one more pass. Chat history is noisy, so a sm
 
 It is highly recommended that you prune chats for redundancy avoid paying to compile overlapping material, whether through this review, manually, or through an agent of your choice (just tell an agent of your choice to prune `~/second-brain/drops/chatgpt/` to your preferences).
 
-**Build** is where staged sources are compiled into wiki pages using a cloud model. It shows what is ready to build with an estimated cost, along with a log of recently built pages. A kept chat can still be skipped from the staged list, and skipped chats can be restored from the "skipped" row beneath it until the next build. Removing a staged source takes it out of the pipeline entirely (see [deletion](lifecycle.md#deletion)).
+**Build** is where staged sources are compiled into wiki pages using a cloud model. It shows what is ready to build with an estimated cost, along with a log of recently built pages. A kept chat can still be skipped from the staged list, which moves it to the skipped chats on the Ingest tab. Removing a staged source takes it out of the pipeline entirely (see [deletion](lifecycle.md#deletion)).
 
 **Domains** curates the broad subject tags used in page frontmatter. Renaming, merging, or deleting a domain rewrites every affected page's frontmatter so tag vocabulary stays consistent across the wiki.
 

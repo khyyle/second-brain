@@ -13,6 +13,11 @@ let package = Package(
             linkerSettings: [
                 .linkedLibrary("sqlite3")
             ]
+        ),
+        .testTarget(
+            name: "SecondBrainBarTests",
+            dependencies: ["SecondBrainBar"],
+            path: "SecondBrainBarTests"
         )
     ]
 )

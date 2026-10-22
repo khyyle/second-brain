@@ -14,6 +14,7 @@ struct AppState: Decodable {
     /// Absolute path of a dropped file to why its last ingest failed.
     let ingestFailures: [String: String]
     let generatedAt: String
+    let pendingTriage: [String]
 
     private enum CodingKeys: String, CodingKey {
         case staged
@@ -24,11 +25,12 @@ struct AppState: Decodable {
         case skippedCount = "skipped"
         case ingestFailures = "ingest_failures"
         case generatedAt = "generated_at"
+        case pendingTriage = "pending_triage"
     }
 
     private struct RawStaged: Decodable {
         let rel: String
-        let bytes: Int64
+        let costs: [String: Double]?
         let defer_reason: String?
         let retryable: Bool?
     }
@@ -40,7 +42,7 @@ struct AppState: Decodable {
             return StagedSource(
                 id: raw.rel,
                 displayName: stem,
-                bytes: raw.bytes,
+                costs: raw.costs ?? [:],
                 deferReason: raw.defer_reason,
                 canRetry: raw.retryable ?? false
             )
@@ -54,6 +56,7 @@ struct AppState: Decodable {
             [String: String].self, forKey: .ingestFailures
         ) ?? [:]
         generatedAt = try container.decodeIfPresent(String.self, forKey: .generatedAt) ?? ""
+        pendingTriage = try container.decodeIfPresent([String].self, forKey: .pendingTriage) ?? []
     }
 
     static func load(from url: URL) -> AppState? {
@@ -67,13 +70,12 @@ struct AppState: Decodable {
 struct StagedSource: Identifiable, Hashable {
     let id: String          // path relative to raw/
     let displayName: String
-    let bytes: Int64
+    /// Model name to the estimated cost of building this source on its own.
+    let costs: [String: Double]
     var deferReason: String? = nil
     /// Whether a set-aside source could build on a retry. Too-large sources
     /// can't; only splitting the file helps.
     var canRetry = false
 
-    var sizeText: String {
-        ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
-    }
+    func cost(for model: String) -> Double { costs[model] ?? 0 }
 }

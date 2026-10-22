@@ -124,6 +124,15 @@ enum PipelineRunner {
     struct ManagedCommandResult {
         let succeeded: Bool
         let message: String?
+
+        /// The command's one-line reason for failing, without its log lines.
+        var failureReason: String? {
+            let prefix = "Error: "
+            return message?
+                .split(separator: "\n")
+                .last { $0.hasPrefix(prefix) }
+                .map { String($0.dropFirst(prefix.count)) }
+        }
     }
 
     /// Run a management subcommand and retain diagnostics for an interactive caller.

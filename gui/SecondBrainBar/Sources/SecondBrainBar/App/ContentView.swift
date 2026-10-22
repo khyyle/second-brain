@@ -76,6 +76,14 @@ struct ContentView: View {
                 ?? "Building needs Ollama running with its models downloaded. "
                 + "Start Ollama, then try again.")
         }
+        .alert("Couldn't finish removing the file", isPresented: Binding(
+            get: { store.removalError != nil },
+            set: { if !$0 { store.removalError = nil } }
+        )) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(store.removalError ?? "")
+        }
         .onAppear {
             if autoRunner == nil { autoRunner = AutoRunner(config: config) }
             probeOllama()

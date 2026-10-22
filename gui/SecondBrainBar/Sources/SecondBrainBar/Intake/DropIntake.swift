@@ -6,6 +6,7 @@ import UniformTypeIdentifiers
 struct AddedFiles: Equatable, Identifiable {
     let id = UUID()
     let count: Int
+    let files: [QueueItem]
     var exportDescription: String? = nil
 }
 
@@ -48,6 +49,7 @@ final class DropIntake: ObservableObject {
     private static let slowAddingSeconds: TimeInterval = 0.3
 
     private let config: AppConfig
+    private let stagingQueue = DispatchQueue(label: "SecondBrainBar.DropIntake", qos: .userInitiated)
     private var addedDismissal: DispatchWorkItem?
     private var failureDismissal: DispatchWorkItem?
     private var slowAddingTimer: DispatchWorkItem?
@@ -113,23 +115,26 @@ final class DropIntake: ObservableObject {
 
     /// Copy document files into the documents lane. A conversation export found
     /// in the selection waits for confirmation that names it and its conversation
-    /// count, then goes to its provider's lane. A folder holding an export
-    /// contributes only the export; its attachments are not staged as documents.
+    /// count, then goes to its provider's lane. Recognized export packages
+    /// contribute only the export so their attachments aren't added separately.
     func add(_ urls: [URL]) {
         guard !urls.isEmpty else { return }
         submissionCount += 1
         beginAdding()
         let config = config
-        DispatchQueue.global(qos: .userInitiated).async {
+        stagingQueue.async { [weak self] in
             let export = ExportProvider.detect(in: urls)
-            let exportFolderPaths = Set(export?.files.map { $0.deletingLastPathComponent().path } ?? [])
+            let exportFolders = export?.exportFolders ?? []
             let result = DropStaging.stageDocuments(
-                urls.filter { !exportFolderPaths.contains($0.path) }, config: config
+                urls.filter { !exportFolders.contains($0) }, config: config
             )
+            let alreadyProcessed = export.map {
+                DropStaging.isAlreadyIngested($0.files, config: config)
+            } ?? false
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
-                if let export, self.confirmImport(of: export) {
-                    self.copyExport(export, documentsAdded: result.added)
+                if let export, alreadyProcessed || self.confirmImport(of: export) {
+                    self.copyExport(export, documents: result)
                 } else {
                     self.endAdding()
                     self.reportDocuments(result, declinedExport: export != nil)
@@ -138,20 +143,20 @@ final class DropIntake: ObservableObject {
         }
     }
 
-    private func copyExport(_ export: DetectedExport, documentsAdded: Int) {
+    private func copyExport(_ export: DetectedExport, documents: DropStaging.Result) {
         let config = config
-        DispatchQueue.global(qos: .userInitiated).async {
-            let exportCopied = DropStaging.importExport(export.provider, files: export.files, config: config)
+        stagingQueue.async { [weak self] in
+            let exportResult = DropStaging.importExport(export.provider, files: export.files, config: config)
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
                 self.endAdding()
-                if exportCopied > 0 {
+                if exportResult.added > 0 {
                     self.confirm(
-                        count: documentsAdded + exportCopied,
+                        files: documents.files + exportResult.files,
                         exportDescription: "\(export.provider.displayName) export: \(export.sourceName)"
                     )
-                } else if documentsAdded > 0 {
-                    self.confirm(count: documentsAdded)
+                } else if documents.added > 0 {
+                    self.confirm(files: documents.files)
                 } else {
                     self.fail(Failure(title: "Couldn't import the export", detail: "Try again"))
                 }
@@ -161,9 +166,9 @@ final class DropIntake: ObservableObject {
 
     /// A declined export is the person's choice, so it isn't reported as a
     /// failure even when nothing else was added.
-    private func reportDocuments(_ result: (added: Int, failed: Bool), declinedExport: Bool) {
+    private func reportDocuments(_ result: DropStaging.Result, declinedExport: Bool) {
         if result.added > 0 {
-            confirm(count: result.added)
+            confirm(files: result.files)
         } else if declinedExport {
             return
         } else if result.failed {
@@ -203,10 +208,10 @@ final class DropIntake: ObservableObject {
         addingIsSlow = false
     }
 
-    private func confirm(count: Int, exportDescription: String? = nil) {
+    private func confirm(files: [QueueItem], exportDescription: String? = nil) {
         clearFailure()
         addedDismissal?.cancel()
-        added = AddedFiles(count: count, exportDescription: exportDescription)
+        added = AddedFiles(count: files.count, files: files, exportDescription: exportDescription)
         playPing()
         let dismissal = DispatchWorkItem { [weak self] in self?.added = nil }
         addedDismissal = dismissal

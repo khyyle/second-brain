@@ -50,6 +50,17 @@ struct ClusterGroup: Decodable, Identifiable {
     }
 
     func cost(for model: String) -> Double { costs[model] ?? 0 }
+
+    func containsAny(of rawPaths: Set<String>) -> Bool {
+        members.contains { rawPaths.contains($0.rel) }
+    }
+
+    /// The group limited to members still staged, or nil once none are.
+    func narrowed(to rawPaths: Set<String>) -> ClusterGroup? {
+        let staged = members.filter { rawPaths.contains($0.rel) }
+        guard !staged.isEmpty else { return nil }
+        return ClusterGroup(id: id, title: title, members: staged, costs: costs)
+    }
 }
 
 struct ClusterMember: Decodable, Hashable {
