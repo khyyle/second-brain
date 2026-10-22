@@ -29,3 +29,8 @@ func formatElapsed(_ seconds: TimeInterval) -> String {
     if s < 60 { return "\(s)s" }
     return "\(s / 60)m \(s % 60)s"
 }
+
+/// Format a cost estimate: "~$0.02", or "<$0.01" when it rounds to nothing.
+func formatEstimate(_ usd: Double) -> String {
+    usd < 0.005 ? "<$0.01" : String(format: "~$%.2f", usd)
+}

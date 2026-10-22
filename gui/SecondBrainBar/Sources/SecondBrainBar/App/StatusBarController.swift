@@ -172,6 +172,7 @@ final class StatusBarController: NSObject, NSApplicationDelegate, NSMenuItemVali
             rootView: ContentView(config: config)
                 .environmentObject(store)
                 .environmentObject(intake)
+                .environmentObject(ListExpansion())
         )
         hosting.sizingOptions = []
 

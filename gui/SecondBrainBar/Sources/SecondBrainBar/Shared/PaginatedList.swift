@@ -12,8 +12,23 @@ struct PaginatedList<Item: Identifiable, RowContent: View>: View {
     let items: [Item]
     var initial: Int = ListCap.max
     var step: Int = 200
+    /// When set, how far the list is expanded survives switching tabs.
+    var expansionKey: String? = nil
     @ViewBuilder let row: (Item) -> RowContent
-    @State private var expandedTo = 0  // 0 means the initial window
+    @State private var localExpandedTo = 0  // 0 means the initial window
+    @EnvironmentObject private var expansion: ListExpansion
+
+    private var expandedTo: Int {
+        expansionKey.map { expansion.pageLimit(for: $0) } ?? localExpandedTo
+    }
+
+    private func setExpandedTo(_ value: Int) {
+        if let expansionKey {
+            expansion.setPageLimit(value, for: expansionKey)
+        } else {
+            localExpandedTo = value
+        }
+    }
 
     private var limit: Int { min(expandedTo == 0 ? initial : expandedTo, items.count) }
 
@@ -23,11 +38,11 @@ struct PaginatedList<Item: Identifiable, RowContent: View>: View {
         }
         if items.count > limit {
             InlineActionRow(label: "+ \(items.count - limit) more") {
-                expandedTo = min(limit + step, items.count)
+                setExpandedTo(min(limit + step, items.count))
             }
         }
         if limit > initial {
-            InlineActionRow(label: "Show fewer") { expandedTo = 0 }
+            InlineActionRow(label: "Show fewer") { setExpandedTo(0) }
         }
     }
 }
