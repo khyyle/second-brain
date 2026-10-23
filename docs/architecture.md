@@ -2,12 +2,37 @@
 
 Second Brain is a local-first pipeline that turns scattered source material into one interlinked Markdown wiki. It runs as a short pipeline connected through the filesystem rather than a long-running service: each step reads what the previous one wrote under `~/second-brain/`, so any step can run on its own and the menu bar app is just a thin front end over the same files.
 
-Two kinds of source take different paths through it. A document you drop goes straight from ingest to compile. A bulk ChatGPT export picks up two extra steps: triage to weed out the noise and clustering to group related conversations, so a noisy export becomes something worth paying to compile.
+Documents and chat history take different paths:
 
+- **Documents:** capture → ingest → stage → compile → access.
+- **Chats:** capture → ingest → triage → stage kept chats → optionally group → compile → access.
+
+**Ingest** converts files to Markdown. **Triage** sorts chats into keep, review, or skip. **Staged** sources are ready to build; **compile** means turning them into wiki pages. Ingestion happens automatically, and compilation starts when you choose **Build wiki**. Only chats go through triage and optional grouping in the default configuration.
+
+```mermaid
+---
+title: Ingest and compilation pipeline
+---
+flowchart TD
+    capture["Capture: copy added or watched files into the queue"]
+    capture --> ingest["Ingest: convert files to Markdown"]
+    ingest -->|Failure| failed["Failed: show the reason and offer Retry"]
+    ingest -->|Documents| documents["Documents staged for Build"]
+    ingest -->|Chat history| triage["Triage: sort chats with a local model"]
+    triage -->|Keep| chats["Kept chats staged for Build"]
+    triage -->|Review| review["Needs review: you choose keep or skip"]
+    triage -->|Skip| skipped["Skipped: left out of Build"]
+    review -->|Keep| chats
+    review -->|Skip| skipped
+    chats -->|Optional| grouping["Group related chats"]
+    chats -->|Without grouping| build["Build started"]
+    grouping --> build
+    documents --> build
+    build --> compile["Compile: write or update wiki pages"]
+    compile --> access["Access: read the wiki in the app, Obsidian, or connected assistants"]
 ```
-documents   capture -> ingest ----------------------> compile -> access
-chats       capture -> ingest -> triage -> cluster -> compile -> access
-```
+
+Grouping can be previewed before a build or performed when the build starts. Documents compile individually in either case. The [compilation agent loop](#compilation-agent-loop) below shows what happens inside Compile.
 
 ## Stages
 
@@ -41,13 +66,29 @@ Building the wiki is the only stage that calls a hosted model and thus costs mon
 
 Planning is optional and exists to fight redundancy. Years of chats might circle the same topics (e.g. multiple conversations talking about gradient descent); compiling each of these on their own is likely to be wasteful and result in overlapping pages that would hinder the quality of the wiki. Thus, a clustering step groups related chats first so a topic can become one page instead of many. It embeds each staged chat locally and groups them. Like triage, clustering only touches the lanes in `clustering.sources` (ChatGPT by default). You can preview a grouping before spending anything, adjust it in the app, and the build honors the plan you reviewed (see [using the app](using-the-app.md#building-the-wiki)). With `clustering.enabled`, a build can also group sources when no reviewed plan exists.
 
-Synthesis is done by an agent. It works through the plan one group at a time, reading that group's sources with sandboxed file tools and writing or updating wiki pages with YAML front matter, `[[wikilinks]]`, LaTeX math, and source citations. A chat that did not cluster with anything is simply a group of one. Cross-linking across groups still works because the agent reads the growing wiki through those same tools. Spend is bounded by an optional per-build dollar ceiling, checked between groups and as each run progresses; a group too large for a single run is split into smaller batches first. A group that is too large or doesn't finish within the step limit is rolled back and set aside with a visible reason rather than retried unattended. A problem that would fail every group the same way (an account, network, or Ollama failure) stops the build instead, and the app shows why.
+Synthesis is done by a compilation agent: the configured model requests tools, and the compiler runs those tools and returns their results. Each agent conversation handles one document, one chat, or a group of related chats. It writes or updates wiki pages with YAML front matter (page metadata), `[[wikilinks]]`, LaTeX math, and source citations.
 
-Each group's initial task includes its full source text, the existing domain names, and up to 30 of the most-referenced unresolved topic names. The compiler looks up domains itself, including registered names and those already used by wiki pages, so later groups see domains introduced by earlier ones without depending on a model tool call.
+#### Compilation agent loop
 
-After the agent pass, a deterministic step rebuilds the index, gap list, domain views, and recently-updated list from the file graph.
+The compiler supplies the full source text, writing instructions, existing domains (subject tags), and up to 30 of the most-referenced unwritten topics (names linked in the wiki that do not yet have a page). It looks up this context before each conversation, so later conversations see domains introduced by earlier ones. The model can request tools to read or search the wiki, create pages, and edit page bodies or metadata.
 
-The wiki's own git history is updated as the build progresses, so a stopped or failed run keeps everything already completed. See [how the wiki is versioned](lifecycle.md#how-the-wiki-is-versioned).
+```mermaid
+flowchart TD
+    context["Prepare source text, instructions, and wiki context"]
+    context --> model["Call the configured model"]
+    model --> response{"Model response"}
+    response -->|Tool calls| tools["Run the requested wiki tools"]
+    tools --> results["Return tool results or validation errors"]
+    results --> model
+    response -->|"Final reply (end_turn)"| checkpoint["Commit wiki changes and record completion"]
+    checkpoint --> finished(["Finished"])
+    model -->|Stop, failure, or limit| rollback["Discard uncommitted edits for this source or group"]
+    tools -->|Cannot continue| rollback
+```
+
+After the agent conversation for one document, chat, or chat group ends with `stop_reason: "end_turn"`, the compiler records source hashes, saves a Git checkpoint (see [how the wiki is versioned](lifecycle.md#how-the-wiki-is-versioned)), and adds the changed pages to the "recently updated" list. The build repeats this loop for the next group.
+
+At the end of the build attempt, a deterministic step rebuilds the index, gap list, domain views, and recently-updated list from the saved wiki pages. This happens once per build attempt, including a partial or stopped build.
 
 ### Access
 
