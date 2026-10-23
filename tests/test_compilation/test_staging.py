@@ -48,6 +48,20 @@ def test_a_set_aside_source_is_staged_again_once_its_file_changes(
     assert find_set_aside_sources(config) == {}
 
 
+def test_setting_aside_one_source_leaves_other_sources_staged(
+    config: Config, build_store: BuildStore
+) -> None:
+    _write_source(config, "documents/ready.md", "alpha")
+    deferred = _write_source(config, "documents/deferred.md", "beta")
+    build_store.defer_sources(
+        {"documents/deferred.md": hash_file(deferred)},
+        "The model didn't finish.",
+        retryable=True,
+    )
+
+    assert find_new_sources(config) == ["documents/ready.md"]
+
+
 def test_a_build_record_without_a_hash_counts_as_current(config: Config) -> None:
     _write_source(config, "documents/old.md", "built before hashes were kept")
     BuildStore(config.manifest_db_path)

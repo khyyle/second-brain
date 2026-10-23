@@ -1,4 +1,4 @@
-from second_brain.compilation.agent import PAGE_TYPES
+from second_brain.compilation.agent.tools import PAGE_TYPES
 
 # Tool definitions in Anthropic's tool-use schema format.
 # These are passed to the API as the `tools` parameter and define

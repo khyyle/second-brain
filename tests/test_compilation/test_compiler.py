@@ -1,282 +1,35 @@
-"""Tests for compile-run outcomes: completion, loop bound, cost cap, deferral."""
+"""The compiler checkpoints completed conversations and handles unfinished builds."""
 
 from __future__ import annotations
 
 import dataclasses
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
-import anthropic
-import httpx
 import pytest
 
 from second_brain.api.build_log import BUILD_LOG_FILENAME
 from second_brain.api.run_record import CRASH_REASON, StageOutcome
 from second_brain.api.status import STATUS_FILENAME
 from second_brain.compilation import compiler
-from second_brain.compilation.compiler import RunOutcome, RunResult
+from second_brain.compilation.agent.loop import RunOutcome, RunResult
 from second_brain.compilation.store import BuildStore
 from second_brain.config import CompilationConfig, Config, TriageConfig
-from second_brain.hashing import hash_file
-from second_brain.llm import resolve_profile
-from second_brain.mcp_server.tools import WikiTools
-from second_brain.ollama.client import OllamaUnavailableError
-from second_brain.wiki.schema import register_domains, write_default_schema
+from second_brain.wiki.repo import commit_all
 from second_brain.wiki.structure import serialize_page
-
-
-class FakeUsage:
-    def __init__(self, input_tokens: int, output_tokens: int) -> None:
-        self.input_tokens = input_tokens
-        self.output_tokens = output_tokens
-
-
-class FakeBlock:
-    """A tool_use block that triggers a safe read-only glob each turn."""
-
-    type = "tool_use"
-    name = "glob_files"
-    id = "tool-1"
-    input = {"pattern": "*.md"}  # noqa: A003
-
-
-class SemanticSearchBlock:
-    """A tool_use block that asks for a meaning-based search."""
-
-    type = "tool_use"
-    name = "semantic_search"
-    id = "tool-search"
-    input = {"query": "gradient descent"}  # noqa: A003
-
-
-class FakeResponse:
-    def __init__(self, stop_reason: str, usage: FakeUsage, content: list) -> None:
-        self.stop_reason = stop_reason
-        self.usage = usage
-        self.content = content
-
-
-class FakeMessages:
-    """Return ``response`` for the first ``successful_calls``, then raise ``error``."""
-
-    def __init__(
-        self,
-        response: FakeResponse,
-        *,
-        successful_calls: int = 0,
-        error: Exception | None = None,
-    ) -> None:
-        self._response = response
-        self._successful_calls = successful_calls
-        self._error = error
-        self.calls = 0
-
-    def create(self, **_kwargs) -> FakeResponse:
-        self.calls += 1
-        if self._error is not None and self.calls > self._successful_calls:
-            raise self._error
-        return self._response
-
-
-class FakeClient:
-    def __init__(
-        self,
-        response: FakeResponse,
-        *,
-        successful_calls: int = 0,
-        error: Exception | None = None,
-    ) -> None:
-        self.messages = FakeMessages(response, successful_calls=successful_calls, error=error)
-
-
-def _make_config(
-    tmp_path: Path,
-    *,
-    max_iter: int = 20,
-    cost_cap: float = 0.0,
-    explore_tools: bool = False,
-) -> Config:
-    cfg = Config(
-        data_dir=tmp_path / "sb",
-        compilation=CompilationConfig(
-            max_iterations=max_iter,
-            max_cost_per_build_usd=cost_cap,
-            explore_tools=explore_tools,
-        ),
-    )
-    cfg.ensure_directories()
-    return cfg
-
-
-def _status_error(status_code: int, message: str) -> anthropic.APIStatusError:
-    request = httpx.Request("POST", "https://api.invalid/v1/messages")
-    response = httpx.Response(status_code, request=request)
-    return anthropic.APIStatusError(message, response=response, body=None)
-
-
-def _install_fake(
-    monkeypatch: pytest.MonkeyPatch,
-    response: FakeResponse,
-    *,
-    successful_calls: int = 0,
-    error: Exception | None = None,
-) -> FakeClient:
-    client = FakeClient(response, successful_calls=successful_calls, error=error)
-    monkeypatch.setattr(compiler, "create_client", lambda *_args, **_kwargs: client)
-    return client
-
-
-def _run(config: Config) -> RunResult:
-    return compiler._run_agent(
-        config,
-        config.wiki_dir,
-        config.raw_dir,
-        ["a.md"],
-        started_at="2026-01-01T00:00:00+00:00",
-    )
-
-
-def test_end_turn_completes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    config = _make_config(tmp_path)
-    client = _install_fake(monkeypatch, FakeResponse("end_turn", FakeUsage(10, 10), []))
-
-    result = _run(config)
-
-    assert client.messages.calls == 1
-    assert result.outcome is RunOutcome.COMPLETED
-
-
-def test_existing_domains_are_supplied_before_any_tools_and_refreshed_between_groups(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    config = _make_config(tmp_path, explore_tools=False)
-    write_default_schema(config.wiki_dir)
-    register_domains(config.wiki_dir, {"mathematics"})
-    concepts = config.wiki_dir / "concepts"
-    concepts.mkdir(exist_ok=True)
-    (concepts / "energy.md").write_text(
-        serialize_page({"title": "Energy", "domains": ["physics"]}, "Body."), encoding="utf-8"
-    )
-    response = FakeResponse("end_turn", FakeUsage(10, 10), [])
-    client = _install_fake(monkeypatch, response)
-    instructions: list[str] = []
-
-    def capture_request(**kwargs: Any) -> FakeResponse:
-        instructions.append(kwargs["messages"][0]["content"][0]["text"])
-        assert "list_domains" not in [tool["name"] for tool in kwargs["tools"]]
-        return response
-
-    monkeypatch.setattr(client.messages, "create", capture_request)
-
-    _run(config)
-    (concepts / "cells.md").write_text(
-        serialize_page({"title": "Cells", "domains": ["biology"]}, "Body."), encoding="utf-8"
-    )
-    _run(config)
-
-    assert len(instructions) == 2
-    assert "Existing domains:\n- mathematics\n- physics" in instructions[0]
-    assert "biology" not in instructions[0]
-    assert "Existing domains:\n- biology\n- mathematics\n- physics" in instructions[1]
-
-
-def test_iteration_cap_reports_runaway_stop(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    config = _make_config(tmp_path, max_iter=3)
-    # Every turn keeps requesting tools and never ends, so the loop bound trips.
-    client = _install_fake(monkeypatch, FakeResponse("tool_use", FakeUsage(1, 1), [FakeBlock()]))
-
-    result = _run(config)
-
-    assert client.messages.calls == 3
-    assert result.outcome is RunOutcome.EXHAUSTED
-    assert result.reason == "The model didn't finish within the 3-step limit."
-
-
-def test_ollama_outage_during_search_fails_the_unit(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    config = _make_config(tmp_path, explore_tools=True)
-    usage = FakeUsage(1_000, 100)
-    client = _install_fake(
-        monkeypatch,
-        FakeResponse("tool_use", usage, [SemanticSearchBlock()]),
-    )
-
-    def _down(*_args: object, **_kwargs: object) -> str:
-        raise OllamaUnavailableError("down")
-
-    monkeypatch.setattr(WikiTools, "semantic_search", _down)
-
-    result = _run(config)
-
-    profile = resolve_profile(config.compilation.provider, config.compilation.model)
-    assert client.messages.calls == 1
-    assert result.outcome is RunOutcome.FAILED
-    assert result.reason == ("Ollama stopped responding. Start Ollama and build again.")
-    assert result.cost == profile.estimate_cost(usage.input_tokens, usage.output_tokens)
-
-
-def test_provider_failure_keeps_partial_cost(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A credit failure after a billed turn keeps that turn's cost."""
-    config = _make_config(tmp_path)
-    client = _install_fake(
-        monkeypatch,
-        FakeResponse("tool_use", FakeUsage(1_000, 100), [FakeBlock()]),
-        successful_calls=1,
-        error=_status_error(402, "credit balance is too low"),
-    )
-
-    result = _run(config)
-
-    assert client.messages.calls == 2
-    assert result.outcome is RunOutcome.PROVIDER_FAILED
-    assert result.reason == "Your API account is out of credits."
-    assert result.cost > 0
-
-
-def test_context_window_stop_is_too_large(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """A window-exceeded stop is too large, so the same source is not retried."""
-    config = _make_config(tmp_path)
-    client = _install_fake(
-        monkeypatch,
-        FakeResponse("model_context_window_exceeded", FakeUsage(10, 0), []),
-    )
-
-    result = _run(config)
-
-    assert client.messages.calls == 1
-    assert result.outcome is RunOutcome.TOO_LARGE
-    assert result.reason.startswith("Too large to build in one run")
-
-
-def test_cost_cap_stops_midrun(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    config = _make_config(tmp_path, max_iter=50, cost_cap=2.0)
-    # One turn of a million uncached input tokens (~$3 on the default model)
-    # crosses the $2 build cap immediately.
-    client = _install_fake(
-        monkeypatch, FakeResponse("tool_use", FakeUsage(1_000_000, 0), [FakeBlock()])
-    )
-
-    result = _run(config)
-
-    assert client.messages.calls == 1
-    assert result.outcome is RunOutcome.COST_CAPPED
-    assert result.cost > 2.0
+from tests.test_compilation.fakes import FakeResponse, FakeUsage, install_fake, status_error
 
 
 def _build_config(tmp_path: Path) -> Config:
-    cfg = Config(
+    config = Config(
         data_dir=tmp_path / "sb",
         compilation=CompilationConfig(max_cost_per_build_usd=2.0),
         triage=TriageConfig(enabled=False),
     )
-    cfg.ensure_directories()
-    return cfg
+    config.ensure_directories()
+    return config
 
 
 def _stage(monkeypatch: pytest.MonkeyPatch, config: Config, raw_paths: list[str]) -> None:
@@ -286,6 +39,101 @@ def _stage(monkeypatch: pytest.MonkeyPatch, config: Config, raw_paths: list[str]
         if not raw_file.exists():
             raw_file.write_text(f"# {rel}\n", encoding="utf-8")
     monkeypatch.setattr(compiler, "find_new_sources", lambda *_: list(raw_paths))
+
+
+def test_tool_turns_stay_uncommitted_until_the_conversation_finishes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _build_config(tmp_path)
+    config = config.model_copy(
+        update={"compilation": config.compilation.model_copy(update={"explore_tools": False})}
+    )
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    _stage(monkeypatch, config, ["a.md", "b.md"])
+    build_store = BuildStore(config.manifest_db_path)
+    checkpoints: list[set[str]] = []
+    rebuilds: list[Path] = []
+    monkeypatch.setattr(
+        compiler, "_git_commit", lambda _wiki: checkpoints.append(set(build_store.get_compiled()))
+    )
+
+    def rebuild(wiki: Path) -> dict:
+        rebuilds.append(wiki)
+        return {}
+
+    monkeypatch.setattr(compiler, "rebuild_structure", rebuild)
+    finished = FakeResponse("end_turn", FakeUsage(10, 10), [])
+    client = install_fake(monkeypatch, finished)
+
+    def respond(**_kwargs: Any) -> FakeResponse:
+        client.messages.calls += 1
+        title = "Alpha" if client.messages.calls <= 2 else "Beta"
+        if client.messages.calls in (1, 3):
+            write_page = SimpleNamespace(
+                type="tool_use",
+                id=f"write-{title.lower()}",
+                name="write_page",
+                input={
+                    "type": "concept",
+                    "title": title,
+                    "domains": ["testing"],
+                    "body": f"# {title}\n\nSource content.",
+                },
+            )
+            return FakeResponse("tool_use", FakeUsage(10, 10), [write_page])
+        assert (config.wiki_dir / "concepts" / f"{title.lower()}.md").exists()
+        assert set(build_store.get_compiled()) == (set() if title == "Alpha" else {"a.md"})
+        assert checkpoints == ([] if title == "Alpha" else [{"a.md"}])
+        assert rebuilds == []
+        return finished
+
+    monkeypatch.setattr(client.messages, "create", respond)
+
+    stats = compiler.run_compilation(config)
+
+    assert client.messages.calls == 4
+    assert stats["sources_compiled"] == 2
+    assert checkpoints == [{"a.md"}, {"a.md", "b.md"}, {"a.md", "b.md"}]
+    assert rebuilds == [config.wiki_dir]
+
+
+@pytest.mark.parametrize(
+    "outcome",
+    [
+        RunOutcome.EXHAUSTED,
+        RunOutcome.COST_CAPPED,
+        RunOutcome.TOO_LARGE,
+        RunOutcome.FAILED,
+        RunOutcome.STOPPED,
+        RunOutcome.PROVIDER_FAILED,
+    ],
+)
+def test_an_unfinished_conversation_restores_saved_pages_and_removes_new_pages(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, outcome: RunOutcome
+) -> None:
+    config = _build_config(tmp_path)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    _stage(monkeypatch, config, ["a.md"])
+    saved_page = config.wiki_dir / "concepts/saved.md"
+    saved_page.parent.mkdir(exist_ok=True)
+    original = serialize_page({"title": "Saved", "domains": ["testing"]}, "Saved content.")
+    saved_page.write_text(original, encoding="utf-8")
+    assert commit_all(config.wiki_dir, "test: save the existing wiki")
+    new_page = config.wiki_dir / "concepts/unfinished.md"
+
+    def leave_unfinished_edits(_config: Config, _sources: list[str], **_kwargs: Any) -> RunResult:
+        saved_page.write_text("Unfinished rewrite.", encoding="utf-8")
+        new_page.write_text("Unfinished page.", encoding="utf-8")
+        return RunResult(0.1, outcome, "The conversation did not finish.")
+
+    monkeypatch.setattr(compiler, "run_agent", leave_unfinished_edits)
+
+    stats = compiler.run_compilation(config)
+
+    assert stats["sources_compiled"] == 0
+    assert BuildStore(config.manifest_db_path).get_compiled() == {}
+    assert saved_page.read_text(encoding="utf-8") == original
+    assert not new_page.exists()
 
 
 def test_build_stops_when_cost_cap_reached(
@@ -301,11 +149,11 @@ def test_build_stops_when_cost_cap_reached(
 
     runs: list[str] = []
 
-    def fake_run_agent(_config, _wiki, _raw, unit, **_kwargs) -> RunResult:
+    def fake_run_agent(_config, unit, **_kwargs) -> RunResult:
         runs.append(unit[0])
         return RunResult(1.0, RunOutcome.COMPLETED)
 
-    monkeypatch.setattr(compiler, "_run_agent", fake_run_agent)
+    monkeypatch.setattr(compiler, "run_agent", fake_run_agent)
 
     stats = compiler.run_compilation(config)
 
@@ -330,12 +178,12 @@ def test_the_heartbeat_names_the_group_being_built(
 
     heartbeat_sources: list[list[str]] = []
 
-    def fake_run_agent(_config, _wiki, _raw, unit, **_kwargs) -> RunResult:
+    def fake_run_agent(_config, unit, **_kwargs) -> RunResult:
         heartbeat = json.loads(status_file.read_text(encoding="utf-8"))
         heartbeat_sources.append(heartbeat["current_sources"])
         return RunResult(0.0, RunOutcome.COMPLETED)
 
-    monkeypatch.setattr(compiler, "_run_agent", fake_run_agent)
+    monkeypatch.setattr(compiler, "run_agent", fake_run_agent)
 
     compiler.run_compilation(config)
 
@@ -355,10 +203,10 @@ def test_each_finished_group_is_reported_as_it_finishes(
 
     outcomes = {"a.md": RunOutcome.COMPLETED, "b.md": RunOutcome.EXHAUSTED}
 
-    def fake_run_agent(_config, _wiki, _raw, unit, **_kwargs) -> RunResult:
+    def fake_run_agent(_config, unit, **_kwargs) -> RunResult:
         return RunResult(0.0, outcomes[unit[0]], "didn't finish")
 
-    monkeypatch.setattr(compiler, "_run_agent", fake_run_agent)
+    monkeypatch.setattr(compiler, "run_agent", fake_run_agent)
     finished_after: list[set[str]] = []
     build_store = BuildStore(config.manifest_db_path)
 
@@ -382,7 +230,7 @@ def test_only_committed_groups_reach_the_build_log(
     monkeypatch.setattr(compiler, "_git_commit", lambda *_: None)
     monkeypatch.setattr(compiler, "_git_restore", lambda *_: None)
 
-    def fake_run_agent(_config, _wiki, _raw, unit, **_kwargs) -> RunResult:
+    def fake_run_agent(_config, unit, **_kwargs) -> RunResult:
         if unit == ["a.md"]:
             changes = (
                 {"action": "created", "path": "concepts/alpha.md"},
@@ -392,7 +240,7 @@ def test_only_committed_groups_reach_the_build_log(
         changes = ({"action": "created", "path": "concepts/beta.md"},)
         return RunResult(0.0, RunOutcome.FAILED, "Your API account is out of credits.", changes)
 
-    monkeypatch.setattr(compiler, "_run_agent", fake_run_agent)
+    monkeypatch.setattr(compiler, "run_agent", fake_run_agent)
 
     compiler.run_compilation(config)
 
@@ -415,12 +263,12 @@ def test_exhausted_unit_is_deferred_not_compiled(
     monkeypatch.setattr(compiler, "rebuild_structure", lambda *_: {})
     monkeypatch.setattr(compiler, "_git_commit", lambda *_: None)
 
-    def fake_run_agent(_config, _wiki, _raw, unit, **_kwargs) -> RunResult:
+    def fake_run_agent(_config, unit, **_kwargs) -> RunResult:
         if unit == ["a.md"]:
             return RunResult(0.1, RunOutcome.EXHAUSTED, "failed to compile within 20 agent turns")
         return RunResult(0.1, RunOutcome.COMPLETED)
 
-    monkeypatch.setattr(compiler, "_run_agent", fake_run_agent)
+    monkeypatch.setattr(compiler, "run_agent", fake_run_agent)
 
     stats = compiler.run_compilation(config)
 
@@ -449,11 +297,11 @@ def test_cost_capped_unit_stays_staged_not_deferred(
 
     runs: list[str] = []
 
-    def fake_run_agent(_config, _wiki, _raw, unit, **_kwargs) -> RunResult:
+    def fake_run_agent(_config, unit, **_kwargs) -> RunResult:
         runs.append(unit[0])
         return RunResult(2.5, RunOutcome.COST_CAPPED, "build cost cap reached")
 
-    monkeypatch.setattr(compiler, "_run_agent", fake_run_agent)
+    monkeypatch.setattr(compiler, "run_agent", fake_run_agent)
 
     stats = compiler.run_compilation(config)
 
@@ -465,19 +313,6 @@ def test_cost_capped_unit_stays_staged_not_deferred(
     assert stats["counts"] == {"completed": 0, "deferred": 0, "left": 2}
     assert build_store.get_compiled() == {}
     assert build_store.get_deferred() == {}
-
-
-def test_find_new_sources_excludes_deferred(tmp_path: Path) -> None:
-    config = _build_config(tmp_path)
-    build_store = BuildStore(config.manifest_db_path)
-    (config.raw_dir / "a.md").write_text("alpha", encoding="utf-8")
-    (config.raw_dir / "b.md").write_text("beta", encoding="utf-8")
-
-    build_store.defer_sources(
-        {"b.md": hash_file(config.raw_dir / "b.md")}, "The model didn't finish.", retryable=True
-    )
-
-    assert compiler.find_new_sources(config) == ["a.md"]
 
 
 def test_over_window_unit_defers_preflight_without_api_call(
@@ -503,7 +338,7 @@ def test_over_window_unit_defers_preflight_without_api_call(
     def fail_run_agent(*_a, **_k):
         raise AssertionError("agent must not run for an over-window unit")
 
-    monkeypatch.setattr(compiler, "_run_agent", fail_run_agent)
+    monkeypatch.setattr(compiler, "run_agent", fail_run_agent)
 
     stats = compiler.run_compilation(config)
 
@@ -530,11 +365,11 @@ def test_unexpected_failure_stops_build_and_keeps_units_staged(
     (config.raw_dir / "b.md").write_text("body", encoding="utf-8")
     attempts: list[list[str]] = []
 
-    def raise_unexpected(_config, _wiki, _raw, unit, **_kwargs):
+    def raise_unexpected(_config, unit, **_kwargs):
         attempts.append(unit)
         raise ConnectionError("network blip")
 
-    monkeypatch.setattr(compiler, "_run_agent", raise_unexpected)
+    monkeypatch.setattr(compiler, "run_agent", raise_unexpected)
 
     stats = compiler.run_compilation(config)
 
@@ -560,8 +395,8 @@ def test_prompt_too_long_rejection_defers_not_retries(
     monkeypatch.setattr(compiler, "_git_commit", lambda *_: None)
     (config.raw_dir / "a.md").write_text("body", encoding="utf-8")
 
-    error = _status_error(400, "prompt is too long: 210000 tokens > 200000 maximum")
-    client = _install_fake(
+    error = status_error(400, "prompt is too long: 210000 tokens > 200000 maximum")
+    client = install_fake(
         monkeypatch,
         FakeResponse("end_turn", FakeUsage(0, 0), []),
         error=error,
@@ -594,10 +429,10 @@ def test_provider_failure_stops_build_and_keeps_curation(
     monkeypatch.setattr(compiler, "_git_commit", lambda *_: None)
     monkeypatch.setattr(compiler, "_git_restore", lambda *_: None)
 
-    client = _install_fake(
+    client = install_fake(
         monkeypatch,
         FakeResponse("end_turn", FakeUsage(0, 0), []),
-        error=_status_error(402, "credit balance is too low"),
+        error=status_error(402, "credit balance is too low"),
     )
 
     stats = compiler.run_compilation(config)
@@ -627,7 +462,7 @@ def test_stop_before_first_unit_is_stopped(
     def fail_if_called(*_args, **_kwargs):
         raise AssertionError("agent must not run after a stop")
 
-    monkeypatch.setattr(compiler, "_run_agent", fail_if_called)
+    monkeypatch.setattr(compiler, "run_agent", fail_if_called)
 
     stats = compiler.run_compilation(config)
 
@@ -651,7 +486,7 @@ def test_full_build_purges_skipped_holding(
     monkeypatch.setattr(compiler, "rebuild_structure", lambda *_: {})
     monkeypatch.setattr(compiler, "_git_commit", lambda *_: None)
     monkeypatch.setattr(
-        compiler, "_run_agent", lambda *_a, **_k: RunResult(0.1, RunOutcome.COMPLETED)
+        compiler, "run_agent", lambda *_a, **_k: RunResult(0.1, RunOutcome.COMPLETED)
     )
 
     stats = compiler.run_compilation(config)
@@ -676,32 +511,8 @@ def test_incomplete_build_keeps_skipped_holding(
     monkeypatch.setattr(compiler, "rebuild_structure", lambda *_: {})
     monkeypatch.setattr(compiler, "_git_commit", lambda *_: None)
     monkeypatch.setattr(compiler, "_git_restore", lambda *_: None)
-    monkeypatch.setattr(
-        compiler, "_run_agent", lambda *_a, **_k: RunResult(0.0, RunOutcome.FAILED)
-    )
+    monkeypatch.setattr(compiler, "run_agent", lambda *_a, **_k: RunResult(0.0, RunOutcome.FAILED))
 
     compiler.run_compilation(config)
 
     assert (config.raw_dir / ".skipped" / "chatgpt" / "junk.md").is_file()
-
-
-def test_iteration_allowance_scales_with_source_size(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A large inline source raises the turn bound above the configured floor."""
-    config = _make_config(tmp_path, max_iter=2)
-    # ~40k chars ≈ 10k tokens → allowance max(2, 10000 // 4000) = 2 is too low;
-    # use ~64k chars ≈ 16k tokens → max(2, 4) = 4 turns.
-    (config.raw_dir / "big.md").write_text("y" * 64_000, encoding="utf-8")
-    client = _install_fake(monkeypatch, FakeResponse("tool_use", FakeUsage(1, 1), [FakeBlock()]))
-
-    result = compiler._run_agent(
-        config,
-        config.wiki_dir,
-        config.raw_dir,
-        ["big.md"],
-        started_at="2026-01-01T00:00:00+00:00",
-    )
-
-    assert client.messages.calls == 4
-    assert result.outcome is RunOutcome.EXHAUSTED

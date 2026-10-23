@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from second_brain.compilation.agent import describe_tool_call
+from second_brain.compilation.agent.tools import describe_tool_call
 
 
 def test_file_tools_name_the_page_or_source() -> None:

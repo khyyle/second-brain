@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from second_brain.compilation.agent import (
+from second_brain.compilation.agent.tools import (
     _MAX_READ_CHARS,
     _PROTECTED_SOURCE_CHARS,
     WikiToolExecutor,

@@ -364,7 +364,8 @@ def ingest(
 def compile(ctx: click.Context, full: bool, dry_run: bool) -> None:
     """Compile new/changed sources into the wiki."""
     from second_brain.api.state import emit_state
-    from second_brain.compilation.compiler import OLLAMA_BUILD_STOPPED_REASON, run_compilation
+    from second_brain.compilation.agent.loop import OLLAMA_BUILD_STOPPED_REASON
+    from second_brain.compilation.compiler import run_compilation
 
     config: Config = ctx.obj["config"]
     started_at = now_iso()

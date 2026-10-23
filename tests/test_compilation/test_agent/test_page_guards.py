@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from second_brain.compilation.agent import WikiToolExecutor, build_compilation_prompt
+from second_brain.compilation.agent.tools import WikiToolExecutor, build_compilation_prompt
 from second_brain.wiki.structure import (
     _parse_frontmatter,
     build_link_graph,

@@ -1,8 +1,4 @@
-"""
-The compilation agent's interface, including its prompts, tool schemas, the sandboxed
-executor that runs those tools, and the conversation compaction the agent loop
-relies on.
-"""
+"""Wiki tool execution, source context, and conversation-history compaction."""
 
 from __future__ import annotations
 
