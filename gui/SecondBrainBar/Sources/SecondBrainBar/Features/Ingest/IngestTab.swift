@@ -77,7 +77,7 @@ struct IngestTab: View {
                         item: item,
                         failureReason: store.ingestFailureReason(for: item.id),
                         onOpen: { open(item.id) },
-                        onRemove: { remove(item.id) },
+                        onRemove: isDropped(item.id) ? { remove(item.id) } : nil,
                         onRetry: { retry(item.id) }
                     )
                 }
@@ -140,6 +140,11 @@ struct IngestTab: View {
     /// A chat being triaged is keyed by its raw path; a dropped file by its
     /// absolute path in the drop folder.
     private func isChat(_ item: QueueItem) -> Bool { !item.id.hasPrefix("/") }
+
+    private func isDropped(_ path: String) -> Bool {
+        let drops = config.dropsRoot.resolvingSymlinksInPath().path
+        return URL(fileURLWithPath: path).resolvingSymlinksInPath().path.hasPrefix(drops + "/")
+    }
 
     /// Where an item went once it left the in-progress list.
     private func outcome(of item: QueueItem, reader: ManifestReader) -> QueueItem.Outcome? {

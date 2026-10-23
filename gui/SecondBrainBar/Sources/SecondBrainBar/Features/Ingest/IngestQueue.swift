@@ -50,18 +50,21 @@ enum IngestQueue {
         let statuses = ManifestReader(dbPath: config.manifestDB).statusByPath()
         let submittedByPath = Dictionary(submitted.map { ($0.id, $0) }, uniquingKeysWith: { _, last in last })
         let fm = FileManager.default
-        guard let enumerator = fm.enumerator(
+        let enumerator = fm.enumerator(
             at: config.dropsRoot,
             includingPropertiesForKeys: [.contentModificationDateKey],
             options: [.skipsHiddenFiles, .skipsPackageDescendants]
-        ) else { return [] }
+        )
 
         var items: [QueueItem] = []
-        while let url = enumerator.nextObject() as? URL {
+        while let url = enumerator?.nextObject() as? URL {
             guard supported.contains(url.pathExtension.lowercased()) else { continue }
-            let submission = submittedByPath[url.path]
+            // macOS exposes the same file through /var and /private/var.
+            let sourcePath = statuses[url.path] != nil || submittedByPath[url.path] != nil
+                ? url.path : url.resolvingSymlinksInPath().path
+            let submission = submittedByPath[sourcePath]
             if submission?.state.isFinished == true { continue }
-            var info = statuses[url.path]
+            var info = statuses[sourcePath]
             // A re-submitted path can still have the previous copy's verdict.
             if let previous = info, let submission, previous.updatedAt < submission.since {
                 info = nil
@@ -80,8 +83,18 @@ enum IngestQueue {
             // For a processing item, "since" is when it entered processing.
             let since = info?.updatedAt ?? submission?.since ?? mod
             items.append(
-                QueueItem(id: url.path, displayName: url.lastPathComponent, state: state, since: since)
+                QueueItem(id: sourcePath, displayName: url.lastPathComponent, state: state, since: since)
             )
+        }
+        let listedPaths = Set(items.map(\.id))
+        for (path, status) in statuses where status.status == .failed && !listedPaths.contains(path) {
+            if let submission = submittedByPath[path], status.updatedAt < submission.since { continue }
+            items.append(QueueItem(
+                id: path,
+                displayName: (path as NSString).lastPathComponent,
+                state: .failed,
+                since: status.updatedAt
+            ))
         }
         return items.sorted { $0.id < $1.id }
     }
