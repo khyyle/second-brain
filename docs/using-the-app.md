@@ -48,11 +48,10 @@ You must set your compilation provider's API key in Settings before you can buil
 
 ### Running on a schedule
 
-By default the app only acts when you do: dropped files ingest on their own (free and local), and a wiki is built only when you press Build wiki. Turning on "Run automatically" (in Settings, under Automation) instead runs the pipeline on a timer, installing a macOS LaunchAgent (`com.secondbrain.pipeline`, via `launchd`) that ingests and builds at the times you set. It is the same work as dropping files and pressing Build wiki, but unattended.
+New and changed files in watched folders ingest automatically while the app is open. Add folders in Settings under Automation; this works without enabling a schedule. Files are copied into `drops/<folder name>/` before parsing, and originals stay untouched. Already-ingested versions are left alone.
 
-Automation can also watch folders you choose. The app remembers what it has already ingested, so a watched folder is one you can keep adding to. Point it at a folder where you continually drop research papers, and each scheduled run pulls in whatever is new and leaves the rest alone. It only ever reads from a watched folder; your originals are never moved or deleted, only copied and parsed into your vault. These folders are swept on scheduled runs, alongside the `~/second-brain/drops/` folders.
+Files that fail stay visible in Ingest with a reason and Retry. The same failed version waits for Retry; editing the original makes it eligible on the next scan. You can also repair the queued copy and retry it without changing the original.
 
-Two things to know about scheduled runs:
+Turn on "Ingest on a schedule" to also scan while the app is closed. This installs a macOS LaunchAgent (`com.secondbrain.pipeline`, via `launchd`) that ingests at the times you set. It runs while you are logged in, and a run missed during sleep happens on wake.
 
-- They include the build, so they call the cloud model and cost money. Your per-build spend cap still applies, so a run won't exceed it.
-- The agent runs even when the app is closed and survives logout and restart, but only if your computer is open and logged in. A run missed because the Mac was asleep happens on the next wake.
+Automatic runs only ingest and stage sources. Press Build wiki when you are ready to compile them.

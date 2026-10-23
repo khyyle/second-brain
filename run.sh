@@ -28,10 +28,11 @@ fi
 #   drops   — ingest only the drop folders (free, local). The app uses this
 #             after an interactive drop so watched folders aren't swept too.
 #   ingest  — full ingest of every source, drop folders and watched folders.
-#   compile — build the wiki (paid, Claude).
-#   all     — full ingest then compile (default; used by scheduled runs).
-# The app only runs "compile" on an explicit action, so dropping never spends.
-STAGE="${1:-all}"
+#   compile — build the wiki on an explicit action.
+#   all     — explicitly ingest then build.
+# Older installed schedules invoke this script without an argument, so the
+# default must remain ingest-only to keep automatic runs from starting builds.
+STAGE="${1:-ingest}"
 LOG_PREFIX="$(date '+%Y-%m-%d %H:%M:%S')"
 
 # avoid collision if automation and manual runs are going at the same time. 

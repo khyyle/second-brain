@@ -225,15 +225,15 @@ struct SettingsView: View {
         }
 
         SettingsGroup(title: "Automation") {
-            SettingsRow("Run automatically",
-                help: "Runs ingest and build in the background. If your computer "
-                    + "is asleep background tasks will complete "
-                    + "on the next wake.") {
+            watchedFolders
+            SettingsRow("Ingest on a schedule",
+                help: "Ingests new and changed files while the app is closed. "
+                    + "Build the wiki manually when you are ready. "
+                    + "Missed runs happen when your Mac wakes.") {
                 Toggle("", isOn: $scheduleEnabled)
                     .labelsHidden().toggleStyle(.switch).tint(Theme.Colors.accent)
             }
             if scheduleEnabled {
-                watchedFolders
                 subhead("Schedule")
                 ScheduleEditor(hours: $scheduleHours)
             }
@@ -243,8 +243,9 @@ struct SettingsView: View {
     @ViewBuilder
     private var watchedFolders: some View {
         subhead("Watched folders",
-                help: "Folders to be ingested, excluding already-processed "
-                    + "contents, on a scheduled run.")
+                help: "New and changed files are copied in and ingested automatically "
+                    + "while the app is open, or on a scheduled run. Originals stay in place. "
+                    + "Build the wiki manually when you are ready.")
         if watched.isEmpty {
             Text("No watched folders.")
                 .font(Theme.Font.body(11))

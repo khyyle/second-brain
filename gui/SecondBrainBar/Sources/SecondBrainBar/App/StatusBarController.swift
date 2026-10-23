@@ -12,7 +12,7 @@ final class StatusBarController: NSObject, NSApplicationDelegate, NSMenuItemVali
     private var store: PipelineStore?
     private lazy var intake = DropIntake(config: config)
     private let autoRunner = AutoRunner(config: AppConfig.default)
-    private var dropWatcher: DropWatcher?
+    private var folderWatcher: FolderWatcher?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         statusItem = NSStatusBar.system.statusItem(
@@ -28,13 +28,11 @@ final class StatusBarController: NSObject, NSApplicationDelegate, NSMenuItemVali
 
         installMainMenu()
 
-        // Ingest anything that lands in drops/ by any means, not just the
-        // app's own drop zone, for as long as the app is running.
-        let watcher = DropWatcher(directory: config.dropsRoot) { [weak self] in
-            self?.autoRunner.schedule()
-        }
-        watcher.start()
-        dropWatcher = watcher
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(reloadWatchedFolders),
+            name: .watchedFoldersDidChange, object: nil
+        )
+        reloadWatchedFolders()
 
         // Opening the app surfaces the window straight away; the status item
         // is the way back to it after that. Deferred briefly so the status
@@ -42,6 +40,25 @@ final class StatusBarController: NSObject, NSApplicationDelegate, NSMenuItemVali
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
             self?.showPanel()
         }
+    }
+
+    @objc private func reloadWatchedFolders() {
+        folderWatcher?.stop()
+        try? FileManager.default.createDirectory(
+            at: config.dropsRoot, withIntermediateDirectories: true
+        )
+        let watched = SourcesStore.load(config)
+            .filter(\.enabled)
+            .map { URL(fileURLWithPath: $0.path) }
+        let directories = ([config.dropsRoot] + watched).filter {
+            FileManager.default.fileExists(atPath: $0.path)
+        }
+        let watcher = FolderWatcher(directories: directories) { [weak self] in
+            self?.autoRunner.schedule()
+        }
+        watcher.start()
+        folderWatcher = watcher
+        autoRunner.schedule()
     }
 
     /// Closing the panel only hides it; the status item brings it back. Quit

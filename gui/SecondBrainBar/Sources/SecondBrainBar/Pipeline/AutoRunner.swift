@@ -1,6 +1,6 @@
 import Foundation
 
-/// Debounced auto-run of the pipeline after files are dropped.
+/// Debounced ingestion after a source folder changes.
 ///
 /// A bulk drop arrives as many separate copies; debouncing collapses
 /// them into a single pipeline run that fires a few seconds after the
@@ -17,13 +17,13 @@ final class AutoRunner {
         self.config = config
     }
 
-    /// Debounced ingest of the drop folders after files are added, resetting
+    /// Debounced ingest of all source folders after files are added, resetting
     /// the timer if called again within the window. Never compiles.
     func schedule() {
         guard let script = config.runScriptPath else { return }
         work?.cancel()
         let item = DispatchWorkItem {
-            PipelineRunner.runDetached(scriptURL: script, stage: .drops)
+            PipelineRunner.runDetached(scriptURL: script, stage: .ingest)
         }
         work = item
         DispatchQueue.main.asyncAfter(deadline: .now() + debounce, execute: item)

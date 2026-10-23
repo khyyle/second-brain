@@ -17,7 +17,7 @@ enum PipelineRunner {
     }
 
     @discardableResult
-    static func runDetached(scriptURL: URL, stage: Stage = .all) -> Bool {
+    static func runDetached(scriptURL: URL, stage: Stage = .ingest) -> Bool {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/zsh")
         // Quote the script path (it can contain spaces) and pass the stage arg.

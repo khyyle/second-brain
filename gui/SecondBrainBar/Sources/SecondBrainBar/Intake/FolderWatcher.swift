@@ -1,32 +1,25 @@
 import CoreServices
 import Foundation
 
-/// Watches the vault's `drops/` folder and reports changes, so a file that
-/// lands there by any means — a Finder copy, an `mcp` capture, a script — is
-/// ingested while the app is running, not only files added through the app's
-/// own drop zone. Events from this process are ignored (the app already
-/// schedules ingest for its own drops); the scheduled run remains the backstop
-/// for whatever arrives while the app is closed.
-final class DropWatcher {
-    private let directory: URL
+/// Reports changes in the drop queue and watched folders while the app runs.
+/// App-created files are ignored because interactive imports already schedule
+/// ingestion. Scheduled scans cover files that arrive while the app is closed.
+final class FolderWatcher {
+    private let directories: [URL]
     private let onChange: () -> Void
     private var stream: FSEventStreamRef?
 
     /// - Parameters:
-    ///   - directory: folder to watch, recursively.
+    ///   - directories: existing folders to watch recursively.
     ///   - onChange: invoked on the main queue after a change is observed.
-    init(directory: URL, onChange: @escaping () -> Void) {
-        self.directory = directory
+    init(directories: [URL], onChange: @escaping () -> Void) {
+        self.directories = directories
         self.onChange = onChange
     }
 
     /// Begin watching; a no-op if already started.
     func start() {
         guard stream == nil else { return }
-        try? FileManager.default.createDirectory(
-            at: directory, withIntermediateDirectories: true
-        )
-
         var context = FSEventStreamContext(
             version: 0,
             info: Unmanaged.passUnretained(self).toOpaque(),
@@ -37,7 +30,7 @@ final class DropWatcher {
         // No captures, so this assigns cleanly to the C-convention callback type.
         let callback: FSEventStreamCallback = { _, info, _, _, _, _ in
             guard let info else { return }
-            let watcher = Unmanaged<DropWatcher>.fromOpaque(info).takeUnretainedValue()
+            let watcher = Unmanaged<FolderWatcher>.fromOpaque(info).takeUnretainedValue()
             DispatchQueue.main.async { watcher.onChange() }
         }
         let flags = UInt32(
@@ -47,7 +40,7 @@ final class DropWatcher {
             kCFAllocatorDefault,
             callback,
             &context,
-            [directory.path] as CFArray,
+            directories.map(\.path) as CFArray,
             FSEventStreamEventId(kFSEventStreamEventIdSinceNow),
             1.0,  // coalesce a burst of events from one drop into a single callback
             flags

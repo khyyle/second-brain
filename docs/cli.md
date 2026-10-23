@@ -43,7 +43,7 @@ uv run second-brain mcp install --target chatgpt-desktop
 uv run second-brain mcp install --target cursor
 ```
 
-Run the whole pipeline unattended on a schedule (8am, 2pm, and 8pm by default) on watched directories:
+Ingest watched directories on a schedule (8am, 2pm, and 8pm by default). Scheduled runs stage sources; building stays manual:
 
 ```bash
 uv run second-brain schedule install

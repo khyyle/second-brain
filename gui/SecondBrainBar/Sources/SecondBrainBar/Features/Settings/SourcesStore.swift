@@ -1,5 +1,9 @@
 import Foundation
 
+extension Notification.Name {
+    static let watchedFoldersDidChange = Notification.Name("SecondBrainWatchedFoldersDidChange")
+}
+
 /// A watched source directory the pipeline scans during ingest, beyond the
 /// built-in drop folders. Encoded as-is into `sources.json`, which the
 /// Python `load_config` folds into its `sources` map.
@@ -35,7 +39,13 @@ enum SourcesStore {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         guard let data = try? encoder.encode(folders) else { return false }
-        return (try? data.write(to: url(config), options: .atomic)) != nil
+        do {
+            try data.write(to: url(config), options: .atomic)
+            NotificationCenter.default.post(name: .watchedFoldersDidChange, object: nil)
+            return true
+        } catch {
+            return false
+        }
     }
 
     /// A filesystem-safe, unique source name derived from a folder URL,

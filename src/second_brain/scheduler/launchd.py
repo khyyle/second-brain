@@ -57,6 +57,7 @@ def _generate_plist(config: Config, project_dir: Path) -> str:
     <key>ProgramArguments</key>
     <array>
         <string>{run_script}</string>
+        <string>ingest</string>
     </array>
     <key>StartCalendarInterval</key>
     <array>
