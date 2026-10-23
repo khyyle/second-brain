@@ -40,7 +40,10 @@ def test_write_page_path_stays_flat(tmp_path: Path) -> None:
     raw.mkdir()
     executor = WikiToolExecutor(wiki, raw, sources=["s.md"])
 
-    executor.execute("write_page", {"type": "concept", "title": "Sub/Folder Attempt", "body": "b"})
+    executor.execute(
+        "write_page",
+        {"type": "concept", "title": "Sub/Folder Attempt", "domains": ["testing"], "body": "b"},
+    )
 
     assert (wiki / "concepts" / "subfolder-attempt.md").exists()
     assert not (wiki / "concepts" / "sub").exists()
@@ -85,6 +88,7 @@ def test_write_page_canonicalizes_body_wikilinks(tmp_path: Path) -> None:
         {
             "type": "concept",
             "title": "Deep Ensembles",
+            "domains": ["machine-learning"],
             "body": "Compared with [[Bayes Rays]] and `arr[[0]]` in code.",
         },
     )
@@ -202,7 +206,9 @@ def test_finalize_is_idempotent_for_created_pages(tmp_path: Path) -> None:
     raw.mkdir()
     executor = WikiToolExecutor(wiki, raw, sources=["chatgpt/new.md"])
 
-    executor.execute("write_page", {"type": "concept", "title": "Bar", "body": "b"})
+    executor.execute(
+        "write_page", {"type": "concept", "title": "Bar", "domains": ["testing"], "body": "b"}
+    )
     executor.finalize_provenance()
 
     fm = _parse_frontmatter((wiki / "concepts" / "bar.md").read_text(encoding="utf-8"))

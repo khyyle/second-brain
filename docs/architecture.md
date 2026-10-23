@@ -41,6 +41,8 @@ Planning is optional and exists to fight redundancy. Years of chats might circle
 
 Synthesis is done by an agent. It works through the plan one group at a time, reading that group's sources with sandboxed file tools and writing or updating wiki pages with YAML front matter, `[[wikilinks]]`, LaTeX math, and source citations. A chat that did not cluster with anything is simply a group of one. Cross-linking across groups still works because the agent reads the growing wiki through those same tools. Spend is bounded by an optional per-build dollar ceiling, checked between groups and as each run progresses; a group too large for a single run is split into smaller batches first. A group that is too large or doesn't finish within the step limit is rolled back and set aside with a visible reason rather than retried unattended. A problem that would fail every group the same way (an account, network, or Ollama failure) stops the build instead, and the app shows why.
 
+Each group's initial task includes its full source text, the existing domain names, and up to 30 of the most-referenced unresolved topic names. The compiler looks up domains itself, including registered names and those already used by wiki pages, so later groups see domains introduced by earlier ones without depending on a model tool call.
+
 After the agent pass, a deterministic step rebuilds the index, gap list, domain views, and recently-updated list from the file graph.
 
 The wiki's own git history is updated as the build progresses, so a stopped or failed run keeps everything already completed. See [how the wiki is versioned](lifecycle.md#how-the-wiki-is-versioned).

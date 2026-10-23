@@ -5,6 +5,7 @@ from __future__ import annotations
 import dataclasses
 import json
 from pathlib import Path
+from typing import Any
 
 import anthropic
 import httpx
@@ -21,6 +22,8 @@ from second_brain.hashing import hash_file
 from second_brain.llm import resolve_profile
 from second_brain.mcp_server.tools import WikiTools
 from second_brain.ollama.client import OllamaUnavailableError
+from second_brain.wiki.schema import register_domains, write_default_schema
+from second_brain.wiki.structure import serialize_page
 
 
 class FakeUsage:
@@ -142,6 +145,40 @@ def test_end_turn_completes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> 
 
     assert client.messages.calls == 1
     assert result.outcome is RunOutcome.COMPLETED
+
+
+def test_existing_domains_are_supplied_before_any_tools_and_refreshed_between_groups(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _make_config(tmp_path, explore_tools=False)
+    write_default_schema(config.wiki_dir)
+    register_domains(config.wiki_dir, {"mathematics"})
+    concepts = config.wiki_dir / "concepts"
+    concepts.mkdir(exist_ok=True)
+    (concepts / "energy.md").write_text(
+        serialize_page({"title": "Energy", "domains": ["physics"]}, "Body."), encoding="utf-8"
+    )
+    response = FakeResponse("end_turn", FakeUsage(10, 10), [])
+    client = _install_fake(monkeypatch, response)
+    instructions: list[str] = []
+
+    def capture_request(**kwargs: Any) -> FakeResponse:
+        instructions.append(kwargs["messages"][0]["content"][0]["text"])
+        assert "list_domains" not in [tool["name"] for tool in kwargs["tools"]]
+        return response
+
+    monkeypatch.setattr(client.messages, "create", capture_request)
+
+    _run(config)
+    (concepts / "cells.md").write_text(
+        serialize_page({"title": "Cells", "domains": ["biology"]}, "Body."), encoding="utf-8"
+    )
+    _run(config)
+
+    assert len(instructions) == 2
+    assert "Existing domains:\n- mathematics\n- physics" in instructions[0]
+    assert "biology" not in instructions[0]
+    assert "Existing domains:\n- biology\n- mathematics\n- physics" in instructions[1]
 
 
 def test_iteration_cap_reports_runaway_stop(

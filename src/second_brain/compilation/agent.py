@@ -18,14 +18,18 @@ from second_brain.wiki.structure import (
     CONTENT_DIRS,
     FRONTMATTER_EDGE_FIELDS,
     _parse_frontmatter,
+    has_valid_domains,
     serialize_page,
     update_frontmatter,
 )
 
 PAGE_TYPES = ("concept", "problem", "project", "paper", "insight")
+_MAX_PROMPT_GAPS = 30
 
 
-def build_compilation_prompt(new_sources: list[str]) -> str:
+def build_compilation_prompt(
+    new_sources: list[str], gaps: list[tuple[str, int]], domains: list[str]
+) -> str:
     """
     Build the per-run task message, detailing sources and start sequence.
 
@@ -33,6 +37,10 @@ def build_compilation_prompt(new_sources: list[str]) -> str:
     -----------
     new_sources: list[str]
         Relative paths of raw source documents to compile.
+    gaps: list[tuple[str, int]]
+        Unwritten topic stems and reference counts, most referenced first.
+    domains: list[str]
+        Existing domain names, including registered names and those in use.
 
     Returns:
     --------
@@ -41,11 +49,30 @@ def build_compilation_prompt(new_sources: list[str]) -> str:
     """
     # sources are presented separately, see :func:`build_source_block`
     source_list = "\n".join(f"- raw/{s}" for s in new_sources)
+    domain_guidance = (
+        "Existing domains:\n"
+        + "\n".join(f"- {domain}" for domain in domains)
+        + "\nReuse these names when they fit. Add a domain only for a distinct broad subject area."
+        if domains
+        else "No domains exist yet. Choose broad subject areas from the source content."
+    )
+    gap_guidance = ""
+    if gaps:
+        gap_list = "\n".join(
+            f"- [[{stem}]] ({references} referencing pages)"
+            for stem, references in gaps[:_MAX_PROMPT_GAPS]
+        )
+        gap_guidance = (
+            "\n\nThese topics are already referenced but not written. When a source "
+            "covers one, reuse its exact name so those links resolve:\n" + gap_list
+        )
 
     return f"""\
 Compile these source documents into the wiki (paths under raw/, full text provided below):
 
 {source_list}
+
+{domain_guidance}
 
 To start:
 1. Read _meta/topic_schema.yaml
@@ -53,7 +80,7 @@ To start:
 3. Create or update pages from the sources
 
 Re-read a source with read_file/grep_files (raw/ paths) only to relocate a
-passage; their full text is already provided."""
+passage; their full text is already provided.{gap_guidance}"""
 
 
 def build_source_block(sources: list[str], raw_dir: Path) -> str:
@@ -379,8 +406,8 @@ class WikiToolExecutor:
         Parameters
         ----------
         args: dict
-            Tool arguments: ``type``, ``title``, ``body``, and the optional
-            judgment fields (``domains``, ``tags``, ``prerequisites``, ...).
+            Tool arguments: type, title, domains, body, and optional fields
+            such as tags and prerequisites.
 
         Returns
         -------
@@ -411,6 +438,10 @@ class WikiToolExecutor:
                 f"Error: the name '{slug}' is taken by {taken}. Pick a distinct "
                 "title — for a paper, add the author or year."
             )
+
+        domains = args.get("domains")
+        if not domains or not has_valid_domains(domains):
+            return "Error: domains must be a non-empty list of non-empty strings"
 
         frontmatter: dict = {"title": title, "type": page_type}
         for key in (
@@ -471,6 +502,8 @@ class WikiToolExecutor:
         rel_path = self._content_page_path(slug)
         if rel_path is None:
             return f"Error: no page found with slug '{slug}'"
+        if "domains" in args and not has_valid_domains(args["domains"]):
+            return "Error: domains must be a list of non-empty strings"
 
         managed = {"slug", "sources", "type", "title"}
         changes: dict = {}
@@ -529,7 +562,7 @@ class WikiToolExecutor:
 
     def _edit(self, rel_path: str, old: str, new: str) -> str:
         """
-        Replace a unique substring in a file.
+        Replace a unique substring, preserving a content page's frontmatter.
 
         Parameters
         ----------
@@ -555,6 +588,11 @@ class WikiToolExecutor:
             return f"old_string not found in {rel_path}"
         if count > 1:
             return f"old_string appears {count} times in {rel_path} — must be unique"
+
+        if path.relative_to(self._wiki_dir.resolve()).parts[0] in CONTENT_DIRS:
+            frontmatter = _FRONTMATTER_RE.match(content)
+            if frontmatter and content.index(old) < frontmatter.end():
+                return "Error: edit_file cannot change frontmatter. Use set_page_meta instead."
 
         if self._dry_run:
             self._record("updated", rel_path)

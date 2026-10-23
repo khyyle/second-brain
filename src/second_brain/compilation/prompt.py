@@ -34,7 +34,8 @@ WIKI_TOOLS = [
     {
         "name": "edit_file",
         "description": (
-            "Replace a specific string in a file. The old_string must appear exactly once."
+            "Replace a specific string in a file. The old_string must appear exactly once. "
+            "For wiki pages, edit only the body; use set_page_meta for frontmatter."
         ),
         "input_schema": {
             "type": "object",
@@ -74,7 +75,8 @@ WIKI_TOOLS = [
                 "title": {"type": "string", "description": "Human-readable page title."},
                 "domains": {
                     "type": "array",
-                    "items": {"type": "string"},
+                    "minItems": 1,
+                    "items": {"type": "string", "minLength": 1},
                     "description": "Broad subject areas, as bare kebab strings.",
                 },
                 "tags": {
@@ -120,7 +122,7 @@ WIKI_TOOLS = [
                     "description": "Markdown body only (no frontmatter block).",
                 },
             },
-            "required": ["type", "title", "body"],
+            "required": ["type", "title", "domains", "body"],
         },
     },
     {
@@ -140,7 +142,7 @@ WIKI_TOOLS = [
                 },
                 "domains": {
                     "type": "array",
-                    "items": {"type": "string"},
+                    "items": {"type": "string", "minLength": 1},
                     "description": "Broad subject areas (replaces the whole list).",
                 },
                 "tags": {
@@ -285,7 +287,7 @@ accents, and stray dashes, so an imperfect one still resolves.
 write_page assembles the frontmatter from the fields you pass. On every page:
 - title: human-readable string
 - type: concept | problem | project | paper | insight
-- domains: list of broad subject areas
+- domains: non-empty list of broad subject areas
 - tags: list of narrow topics
 
 Plus the fields specific to its type:

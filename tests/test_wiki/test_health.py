@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
+from second_brain.wiki.domain_ops import delete_domain
 from second_brain.wiki.health import run_health_check
 
 
@@ -38,6 +41,29 @@ def test_missing_frontmatter_makes_a_wiki_unhealthy(tmp_path: Path) -> None:
 
     assert report.missing_frontmatter
     assert not report.is_healthy
+
+
+@pytest.mark.parametrize("domains", ["null", "physics", "['']", "[' ']", "[1]"])
+def test_invalid_domains_make_a_wiki_unhealthy(tmp_path: Path, domains: str) -> None:
+    wiki = tmp_path / "wiki"
+    _write(wiki, "concepts", "energy", "Body.", frontmatter=f"domains: {domains}\n")
+
+    report = run_health_check(wiki)
+
+    assert len(report.missing_frontmatter) == 1
+    assert "domains" in report.missing_frontmatter[0]
+    assert not report.is_healthy
+
+
+def test_deleting_the_last_domain_does_not_make_a_page_unhealthy(tmp_path: Path) -> None:
+    wiki = tmp_path / "wiki"
+    _write(wiki, "concepts", "energy", "Body.")
+
+    delete_domain(wiki, "mathematics")
+    report = run_health_check(wiki)
+
+    assert not report.missing_frontmatter
+    assert report.is_healthy
 
 
 def test_gap_links_are_ranked_by_reference_count(tmp_path: Path) -> None:

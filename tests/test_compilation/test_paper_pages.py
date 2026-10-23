@@ -34,6 +34,7 @@ def test_write_page_places_papers_with_authors_and_year(tmp_path: Path) -> None:
         {
             "type": "paper",
             "title": "NICE (Dinh 2015)",
+            "domains": ["machine-learning"],
             "authors": ["Laurent Dinh", "David Krueger", "Yoshua Bengio"],
             "year": 2015,
             "related": ["[[additive-coupling-layer]]"],

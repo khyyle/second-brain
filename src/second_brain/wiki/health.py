@@ -6,9 +6,10 @@ from pathlib import Path
 
 from second_brain.wiki.structure import (
     build_link_graph,
-    detect_gaps,
     detect_orphans,
     discover_all_pages,
+    has_valid_domains,
+    rank_gaps,
 )
 
 logger = logging.getLogger(__name__)
@@ -98,10 +99,7 @@ def run_health_check(
     report.orphan_pages = detect_orphans(pages, graph)
     # Pair each gap with how many pages reference it, most-referenced first, so
     # the list reads as a demand-ranked "write these next" queue.
-    report.gap_links = sorted(
-        ((stem, len(graph.backward.get(stem, ()))) for stem in detect_gaps(pages, graph)),
-        key=lambda gap: (-gap[1], gap[0]),
-    )
+    report.gap_links = rank_gaps(pages, graph)
     report.possible_duplicates = duplicate_pairs or []
 
     for stem, page in pages.items():
@@ -112,6 +110,8 @@ def run_health_check(
 
         fm_keys = set(page.frontmatter.keys())
         missing = REQUIRED_FRONTMATTER - fm_keys
+        if not has_valid_domains(page.frontmatter.get("domains")):
+            missing.add("domains")
         if missing:
             report.missing_frontmatter.append(f"{stem}: missing {missing}")
 

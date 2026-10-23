@@ -30,6 +30,26 @@ LINK_KINDS = (*FRONTMATTER_EDGE_FIELDS.values(), WIKILINK_KIND)
 CONTENT_DIRS = ("concepts", "problems", "projects", "papers", "insights")
 
 
+def has_valid_domains(domains: object) -> bool:
+    """Check that page domains form a list of non-empty names.
+
+    An empty list represents an Uncategorized page.
+
+    Parameters
+    ----------
+    domains: object
+        Domains supplied as tool arguments or parsed from frontmatter.
+
+    Returns
+    -------
+    bool
+        Whether the value satisfies the required domains field.
+    """
+    return isinstance(domains, list) and all(
+        isinstance(domain, str) and bool(domain.strip()) for domain in domains
+    )
+
+
 @dataclass
 class WikiPage:
     """In-memory representation of a wiki page for graph construction."""
@@ -377,6 +397,27 @@ def detect_gaps(pages: dict[str, WikiPage], graph: LinkGraph) -> list[str]:
     for targets in graph.forward.values():
         all_targets.update(targets)
     return sorted(t for t in all_targets if t not in pages)
+
+
+def rank_gaps(pages: dict[str, WikiPage], graph: LinkGraph) -> list[tuple[str, int]]:
+    """Rank unwritten topics by the number of pages referencing them.
+
+    Parameters
+    ----------
+    pages: dict[str, WikiPage]
+        Discovered wiki pages.
+    graph: LinkGraph
+        Link graph built from those pages.
+
+    Returns
+    -------
+    list[tuple[str, int]]
+        Gap stems and reference counts, most referenced first, then by stem.
+    """
+    return sorted(
+        ((stem, len(graph.backward.get(stem, ()))) for stem in detect_gaps(pages, graph)),
+        key=lambda gap: (-gap[1], gap[0]),
+    )
 
 
 def generate_gaps_view(wiki_dir: Path, gaps: list[str]) -> Path:

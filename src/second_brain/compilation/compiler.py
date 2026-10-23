@@ -38,7 +38,13 @@ from second_brain.llm import (
     resolve_profile,
 )
 from second_brain.ollama.client import OllamaUnavailableError
-from second_brain.wiki.structure import rebuild_structure
+from second_brain.wiki.domain_ops import list_domains
+from second_brain.wiki.structure import (
+    build_link_graph,
+    discover_all_pages,
+    rank_gaps,
+    rebuild_structure,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -636,7 +642,12 @@ def _run_agent(
 
     # Present the source content inline so it can be cached as a stable prefix;
     # the agent then synthesizes rather than spending turns re-reading it.
-    instructions = build_compilation_prompt(sources)
+    pages = discover_all_pages(wiki_dir)
+    instructions = build_compilation_prompt(
+        sources,
+        gaps=rank_gaps(pages, build_link_graph(pages)),
+        domains=[domain.name for domain in list_domains(wiki_dir)],
+    )
     if config.compilation.explore_tools:
         instructions = f"{instructions}\n\n{EXPLORE_TOOLS_GUIDANCE}"
     source_block = build_source_block(sources, raw_dir)
