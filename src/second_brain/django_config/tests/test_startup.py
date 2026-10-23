@@ -40,7 +40,9 @@ from django.db import connections
 
 sys.path.insert(0, {str(tmp_path)!r})
 django.setup()
-settings.MIGRATION_MODULES = {{'library': 'startup_migrations'}}
+settings.MIGRATION_MODULES = {{
+    'library': 'startup_migrations', 'ingestion': None, 'compilation': None, 'wiki': None,
+}}
 
 def inspect_before_serving(app, **options):
     # This runs at the exact point the launcher hands control to Uvicorn.
@@ -84,7 +86,7 @@ runpy.run_path({str(start)!r}, run_name='__main__')
             assert server["reload"] is False
 
 
-def test_startup_refuses_to_migrate_the_legacy_database(backend_env: dict[str, str]) -> None:
+def test_startup_refuses_an_unrecognized_legacy_database(backend_env: dict[str, str]) -> None:
     vault = Path(backend_env["SECOND_BRAIN_VAULT"])
     vault.mkdir()
     database = vault / "manifest.db"

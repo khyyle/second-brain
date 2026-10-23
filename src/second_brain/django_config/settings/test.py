@@ -6,4 +6,5 @@ from .base import sqlite_database
 SECRET_KEY = "test-only-second-brain-key"
 ALLOWED_HOSTS = ["testserver", "127.0.0.1", "localhost", "[::1]"]
 API_DOCS_ENABLED = True
+API_TOKEN = "test-only-local-api-token"
 DATABASES = {"default": sqlite_database(":memory:")}

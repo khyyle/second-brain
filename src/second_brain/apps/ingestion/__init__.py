@@ -1,1 +1,1 @@
-"""Feature app for imports, capture, parsing, and ingestion."""
+"""Ingestion: watches sources, parses them to raw Markdown, and triages chats."""

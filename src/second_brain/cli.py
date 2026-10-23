@@ -8,8 +8,13 @@ from pathlib import Path
 
 import click
 
-from second_brain.api.run_record import CRASH_REASON, StageOutcome, exit_code_for, record_run
-from second_brain.api.status import now_iso
+from second_brain.apps.jobs.services.run_record import (
+    CRASH_REASON,
+    StageOutcome,
+    exit_code_for,
+    record_run,
+)
+from second_brain.apps.jobs.services.status import now_iso
 from second_brain.config import DEFAULT_DATA_DIR, Config, ConfigError, load_config
 from second_brain.errors import SecondBrainError
 from second_brain.ollama.client import OllamaUnavailableError
@@ -234,10 +239,10 @@ def ingest(
     drops_only: bool,
 ) -> None:
     """Process pending files from watched directories."""
-    from second_brain.api.state import emit_state
-    from second_brain.ingestion.dispatch import ingest_file
-    from second_brain.ingestion.manifest import Manifest
-    from second_brain.ingestion.triage.pipeline import TriageInterruptedError
+    from second_brain.apps.ingestion.services.dispatch import ingest_file
+    from second_brain.apps.ingestion.services.manifest import Manifest
+    from second_brain.apps.ingestion.services.triage.pipeline import TriageInterruptedError
+    from second_brain.apps.jobs.services.state import emit_state
 
     config: Config = ctx.obj["config"]
     started_at = now_iso()
@@ -259,7 +264,7 @@ def ingest(
         manifest = Manifest(config.manifest_db_path)
 
         if chatgpt_path:
-            from second_brain.ingestion.chatgpt_parser import process_chatgpt_export
+            from second_brain.apps.ingestion.services.chatgpt_parser import process_chatgpt_export
 
             export_path = Path(chatgpt_path).expanduser().resolve()
             output_dir = config.raw_dir / "chatgpt"
@@ -273,7 +278,7 @@ def ingest(
             completed = len(paths)
             emit_state(config)
         elif file_path:
-            from second_brain.ingestion.intake import source_name, stage_watched_file
+            from second_brain.apps.ingestion.services.intake import source_name, stage_watched_file
 
             target = Path(file_path).expanduser().resolve()
             entry = manifest.get_entry(target)
@@ -297,7 +302,7 @@ def ingest(
                 failed = 1
             emit_state(config)
         elif watch:
-            from second_brain.ingestion.watcher import watch_sources
+            from second_brain.apps.ingestion.services.watcher import watch_sources
 
             watched = True
             watch_sources(
@@ -308,7 +313,7 @@ def ingest(
                 ),
             )
         else:
-            from second_brain.ingestion.watcher import batch_scan
+            from second_brain.apps.ingestion.services.watcher import batch_scan
 
             def _process(path: Path, source_type: str) -> None:
                 nonlocal completed, failed
@@ -323,7 +328,7 @@ def ingest(
 
             # Triage runs here (local Gemma, free) rather than at the paid compile
             # step, so every ingested source has a decision before the user build_store.
-            from second_brain.ingestion.triage.pipeline import triage_pending
+            from second_brain.apps.ingestion.services.triage.pipeline import triage_pending
 
             triaged = triage_pending(config, on_decided=lambda: emit_state(config))
             if sum(triaged.values()):
@@ -363,9 +368,9 @@ def ingest(
 @click.pass_context
 def compile(ctx: click.Context, full: bool, dry_run: bool) -> None:
     """Compile new/changed sources into the wiki."""
-    from second_brain.api.state import emit_state
-    from second_brain.compilation.agent.loop import OLLAMA_BUILD_STOPPED_REASON
-    from second_brain.compilation.compiler import run_compilation
+    from second_brain.apps.compilation.services.agent.loop import OLLAMA_BUILD_STOPPED_REASON
+    from second_brain.apps.compilation.services.compiler import run_compilation
+    from second_brain.apps.jobs.services.state import emit_state
 
     config: Config = ctx.obj["config"]
     started_at = now_iso()
@@ -440,7 +445,7 @@ def recompile(ctx: click.Context, raw_paths: tuple[str, ...]) -> None:
     Clears a source's compiled mark and any deferral, so the next build
     redoes it. Paths are relative to the raw directory.
     """
-    from second_brain.compilation.store import BuildStore
+    from second_brain.apps.compilation.services.store import BuildStore
 
     config: Config = ctx.obj["config"]
     build_store = BuildStore(config.manifest_db_path)
@@ -452,7 +457,7 @@ def recompile(ctx: click.Context, raw_paths: tuple[str, ...]) -> None:
     released = build_store.clear_deferred(list(raw_paths))
     uncompiled = build_store.unmark_compiled(list(raw_paths))
 
-    from second_brain.api.state import emit_state
+    from second_brain.apps.jobs.services.state import emit_state
 
     emit_state(config)
     click.echo(
@@ -470,8 +475,13 @@ def preview_clusters(ctx: click.Context) -> None:
     config: Config = ctx.obj["config"]
     config.ensure_directories()
 
-    from second_brain.api.status import clear_status, now_iso, touch_status, write_status
-    from second_brain.compilation.clustering.preview import write_preview
+    from second_brain.apps.compilation.services.clustering.preview import write_preview
+    from second_brain.apps.jobs.services.status import (
+        clear_status,
+        now_iso,
+        touch_status,
+        write_status,
+    )
 
     # Embedding the staged set can take minutes; report per-source progress
     # (with a keepalive between, for the occasional slow multi-chunk source)
@@ -508,7 +518,7 @@ def preview_clusters(ctx: click.Context) -> None:
         f"(~${artifact['estimated_cost_usd']:.2f})"
     )
 
-    from second_brain.api.state import emit_state
+    from second_brain.apps.jobs.services.state import emit_state
 
     emit_state(config)
 
@@ -557,7 +567,7 @@ def status(ctx: click.Context, sources: bool) -> None:
     click.echo(f"  Wiki dir: {config.wiki_dir}")
 
     if config.manifest_db_path.parent.exists():
-        from second_brain.ingestion.manifest import Manifest
+        from second_brain.apps.ingestion.services.manifest import Manifest
 
         manifest = Manifest(config.manifest_db_path)
         counts = manifest.count_by_status()
@@ -580,11 +590,11 @@ def forget(ctx: click.Context, raw_path: str) -> None:
     clears database records only; deleting the raw file on disk is separate.
     """
     config: Config = ctx.obj["config"]
-    from second_brain.sources import forget_source
+    from second_brain.apps.library.services.sources import forget_source
 
     forget_source(config, raw_path)
     click.echo(f"Forgot {raw_path}")
-    from second_brain.api.state import emit_state
+    from second_brain.apps.jobs.services.state import emit_state
 
     emit_state(config)
 
@@ -595,11 +605,11 @@ def forget(ctx: click.Context, raw_path: str) -> None:
 def forget_drop(ctx: click.Context, path: str) -> None:
     """Remove a queued/failed dropped file's manifest row (by absolute PATH)."""
     config: Config = ctx.obj["config"]
-    from second_brain.ingestion.manifest import Manifest
+    from second_brain.apps.ingestion.services.manifest import Manifest
 
     removed = Manifest(config.manifest_db_path).remove_entries([Path(path)])
     click.echo(f"Removed {removed} manifest row(s)")
-    from second_brain.api.state import emit_state
+    from second_brain.apps.jobs.services.state import emit_state
 
     emit_state(config)
 
@@ -609,7 +619,7 @@ def forget_drop(ctx: click.Context, path: str) -> None:
 def state(ctx: click.Context) -> None:
     """Recompute the derived state file the menu bar app reads."""
     config: Config = ctx.obj["config"]
-    from second_brain.api.state import emit_state
+    from second_brain.apps.jobs.services.state import emit_state
 
     emit_state(config)
 
@@ -627,13 +637,13 @@ def triage() -> None:
 def triage_set(ctx: click.Context, raw_path: str, decision: str) -> None:
     """Override the triage DECISION for RAW_PATH (a manual Keep/Skip)."""
     config: Config = ctx.obj["config"]
-    from second_brain.ingestion.triage.store import TriageStore
+    from second_brain.apps.ingestion.services.triage.store import TriageStore
 
     TriageStore(config.manifest_db_path).record(
         raw_path, decision, confidence=1.0, reason="manual override"
     )
     click.echo(f"Set {raw_path} -> {decision}")
-    from second_brain.api.state import emit_state
+    from second_brain.apps.jobs.services.state import emit_state
 
     emit_state(config)
 
@@ -650,7 +660,7 @@ def domain() -> None:
 def domain_list(ctx: click.Context, as_json: bool) -> None:
     """List domains with their page counts."""
     config: Config = ctx.obj["config"]
-    from second_brain.wiki.domain_ops import list_domains
+    from second_brain.apps.wiki.services.domain_ops import list_domains
 
     domains = list_domains(config.wiki_dir)
     if as_json:
@@ -673,7 +683,7 @@ def domain_list(ctx: click.Context, as_json: bool) -> None:
 def domain_rename(ctx: click.Context, old: str, new: str) -> None:
     """Rename domain OLD to NEW across every page and the schema."""
     config: Config = ctx.obj["config"]
-    from second_brain.wiki.domain_ops import rename_domain
+    from second_brain.apps.wiki.services.domain_ops import rename_domain
 
     changed = rename_domain(config.wiki_dir, old, new)
     _sync_search_index(config)
@@ -687,7 +697,7 @@ def domain_rename(ctx: click.Context, old: str, new: str) -> None:
 def domain_merge(ctx: click.Context, dest: str, sources: tuple[str, ...]) -> None:
     """Merge one or more SOURCES domains into DEST."""
     config: Config = ctx.obj["config"]
-    from second_brain.wiki.domain_ops import merge_domains
+    from second_brain.apps.wiki.services.domain_ops import merge_domains
 
     changed = merge_domains(config.wiki_dir, list(sources), dest)
     _sync_search_index(config)
@@ -700,7 +710,7 @@ def domain_merge(ctx: click.Context, dest: str, sources: tuple[str, ...]) -> Non
 def domain_delete(ctx: click.Context, name: str) -> None:
     """Remove domain NAME from every page and the schema."""
     config: Config = ctx.obj["config"]
-    from second_brain.wiki.domain_ops import delete_domain
+    from second_brain.apps.wiki.services.domain_ops import delete_domain
 
     changed = delete_domain(config.wiki_dir, name)
     _sync_search_index(config)
@@ -719,7 +729,7 @@ def wiki() -> None:
 def wiki_log(ctx: click.Context, limit: int) -> None:
     """List the wiki's most recent build commits."""
     config: Config = ctx.obj["config"]
-    from second_brain.wiki.repo import count_commits, list_commits
+    from second_brain.apps.wiki.services.repo import count_commits, list_commits
 
     commits = list_commits(config.wiki_dir, limit)
     total = count_commits(config.wiki_dir)
@@ -742,8 +752,8 @@ def wiki_log(ctx: click.Context, limit: int) -> None:
 def wiki_rollback(ctx: click.Context, count: int, yes: bool) -> None:
     """Undo the last COUNT wiki build commits and requeue their sources."""
     config: Config = ctx.obj["config"]
-    from second_brain.wiki.repo import rollback
-    from second_brain.wiki.structure import rebuild_structure
+    from second_brain.apps.wiki.services.repo import rollback
+    from second_brain.apps.wiki.services.structure import rebuild_structure
 
     if not yes:
         click.confirm(
@@ -753,7 +763,7 @@ def wiki_rollback(ctx: click.Context, count: int, yes: bool) -> None:
         )
     sources = rollback(config.wiki_dir, count)
 
-    from second_brain.compilation.store import BuildStore
+    from second_brain.apps.compilation.services.store import BuildStore
 
     # the wiki records sources as raw/<path>; build records key on <path>
     build_store = BuildStore(config.manifest_db_path)
@@ -761,7 +771,7 @@ def wiki_rollback(ctx: click.Context, count: int, yes: bool) -> None:
 
     rebuild_structure(config.wiki_dir)
     _sync_search_index(config)
-    from second_brain.api.state import emit_state
+    from second_brain.apps.jobs.services.state import emit_state
 
     emit_state(config)
     click.echo(f"Rolled back {count} commit(s); {requeued} source(s) requeued for the next build")
@@ -773,8 +783,8 @@ def wiki_rollback(ctx: click.Context, count: int, yes: bool) -> None:
 def wiki_repair_links(ctx: click.Context, dry_run: bool) -> None:
     """Repoint links to pages that were renamed outside the pipeline."""
     config: Config = ctx.obj["config"]
-    from second_brain.wiki.repo import detect_renames, repair_links
-    from second_brain.wiki.structure import rebuild_structure
+    from second_brain.apps.wiki.services.repo import detect_renames, repair_links
+    from second_brain.apps.wiki.services.structure import rebuild_structure
 
     mapping = detect_renames(config.wiki_dir)
     repairs = repair_links(config.wiki_dir, mapping, dry_run=dry_run)
@@ -808,12 +818,12 @@ def wiki_merge(ctx: click.Context, dest: str, sources: tuple[str, ...]) -> None:
     retired pages' provenance and relationships, not their body text.
     """
     config: Config = ctx.obj["config"]
-    from second_brain.wiki.repo import merge_pages
+    from second_brain.apps.wiki.services.repo import merge_pages
 
     repairs = merge_pages(config.wiki_dir, dest, list(sources))
 
     _sync_search_index(config)
-    from second_brain.api.state import emit_state
+    from second_brain.apps.jobs.services.state import emit_state
 
     emit_state(config)
     total = sum(repair.links_repointed for repair in repairs)
@@ -830,8 +840,8 @@ def wiki_merge(ctx: click.Context, dest: str, sources: tuple[str, ...]) -> None:
 def wiki_dismiss(ctx: click.Context, page_a: str, page_b: str) -> None:
     """Mark PAGE_A and PAGE_B as not duplicates, hiding the suggestion."""
     config: Config = ctx.obj["config"]
-    from second_brain.wiki.slugs import normalize_link_target
-    from second_brain.wiki.store import DuplicateStore
+    from second_brain.apps.wiki.services.slugs import normalize_link_target
+    from second_brain.apps.wiki.services.store import DuplicateStore
 
     stem_a = normalize_link_target(page_a)
     stem_b = normalize_link_target(page_b)
@@ -948,9 +958,13 @@ def health(ctx: click.Context, as_json: bool) -> None:
     """Run health checks on the wiki."""
     config: Config = ctx.obj["config"]
 
+    from second_brain.apps.wiki.services.health import (
+        MERGE_THRESHOLD,
+        SPLIT_THRESHOLD,
+        run_health_check,
+    )
+    from second_brain.apps.wiki.services.store import DuplicateStore
     from second_brain.mcp_server.search import SearchIndex
-    from second_brain.wiki.health import MERGE_THRESHOLD, SPLIT_THRESHOLD, run_health_check
-    from second_brain.wiki.store import DuplicateStore
 
     search = SearchIndex(config.search_db_path, config.search)
     dismissed = DuplicateStore(config.manifest_db_path).get_dismissed()

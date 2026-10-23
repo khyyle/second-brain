@@ -4,6 +4,7 @@ import argparse
 import os
 import sqlite3
 from contextlib import closing
+from datetime import UTC, datetime
 from pathlib import Path
 
 import django
@@ -11,6 +12,8 @@ import uvicorn
 from django.conf import settings
 from django.core.management import CommandError, call_command
 from django.db import connections
+
+from second_brain.django_config.identity import private_token
 
 
 def main() -> None:
@@ -30,6 +33,7 @@ def main() -> None:
     # imports or AppConfig.ready(). A reloaded ASGI child doesn't repeat startup.
     settings.VAULT_DIR.mkdir(parents=True, exist_ok=True)
     print(f"Using vault: {settings.VAULT_DIR}", flush=True)
+    private_token(settings.VAULT_DIR, "api-token")
     _check_database(Path(settings.DATABASES["default"]["NAME"]))
     try:
         call_command("migrate", interactive=False)
@@ -50,18 +54,40 @@ def main() -> None:
 
 
 def _check_database(database: Path) -> None:
-    """Prevent the scaffold from applying Django migrations to the legacy pipeline DB."""
+    """Back up a supported legacy database before the first Django adoption."""
     if not database.exists():
         return
     with closing(sqlite3.connect(f"{database.as_uri()}?mode=ro", uri=True)) as connection:
         legacy = connection.execute(
             "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'manifest'"
         ).fetchone()
-    if legacy:
-        raise CommandError(
-            "This vault contains the legacy pipeline database. Use a new development vault; "
-            "adopting existing vaults into Django is not implemented yet."
-        )
+        if not legacy:
+            return
+        version = connection.execute("PRAGMA user_version").fetchone()[0]
+        if version not in (1, 2, 3):
+            raise CommandError(
+                f"Unrecognized legacy pipeline database version {version}; refusing adoption."
+            )
+        migration_table = connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE name = 'django_migrations'"
+        ).fetchone()
+        if (
+            migration_table
+            and connection.execute(
+                "SELECT 1 FROM django_migrations WHERE app = 'library' AND name = '0001_initial'"
+            ).fetchone()
+        ):
+            return
+        backups = database.parent / ".backend" / "backups"
+        backups.mkdir(parents=True, exist_ok=True, mode=0o700)
+        stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
+        backup = backups / f"manifest-before-django-{stamp}.db"
+        # SQLite's backup API includes committed WAL data; copying the main file alone may not.
+        descriptor = os.open(backup, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        os.close(descriptor)
+        with closing(sqlite3.connect(backup)) as destination:
+            connection.backup(destination)
+        print(f"Saved database backup: {backup}", flush=True)
 
 
 if __name__ == "__main__":

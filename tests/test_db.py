@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from second_brain.apps.ingestion.services.manifest import Manifest
 from second_brain.db import _add_build_content_hashes, _create_tables, connect, migrate
-from second_brain.ingestion.manifest import Manifest
 
 
 def _version(db_path: Path) -> int:

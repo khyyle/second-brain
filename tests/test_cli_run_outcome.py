@@ -9,14 +9,18 @@ import pytest
 from click.testing import CliRunner, Result
 
 from second_brain import cli
-from second_brain.api.run_record import CRASH_REASON, RUN_RECORD_FILENAME, StageOutcome
-from second_brain.api.status import STATUS_FILENAME
-from second_brain.compilation.clustering.preview import CLUSTERS_FILENAME
+from second_brain.apps.compilation.services.clustering.preview import CLUSTERS_FILENAME
+from second_brain.apps.ingestion.services.pdf_handler import ParserNotAvailableError
+from second_brain.apps.ingestion.services.triage.pipeline import TriageInterruptedError
+from second_brain.apps.jobs.services.run_record import (
+    CRASH_REASON,
+    RUN_RECORD_FILENAME,
+    StageOutcome,
+)
+from second_brain.apps.jobs.services.status import STATUS_FILENAME
+from second_brain.apps.wiki.services.repo import WikiRepoError
 from second_brain.config import Config, ConfigError
-from second_brain.ingestion.pdf_handler import ParserNotAvailableError
-from second_brain.ingestion.triage.pipeline import TriageInterruptedError
 from second_brain.ollama.client import OllamaStatus, OllamaUnavailableError
-from second_brain.wiki.repo import WikiRepoError
 
 
 def _compile_stats(outcome: StageOutcome, reason: str) -> dict[str, object]:
@@ -39,9 +43,9 @@ def _invoke_compile(
     config = Config(data_dir=tmp_path / "vault")
     monkeypatch.setattr(cli, "_load_config", lambda _path: config)
     monkeypatch.setattr(cli, "_require_ollama", lambda _config: None)
-    monkeypatch.setattr("second_brain.api.state.emit_state", lambda _config: None)
+    monkeypatch.setattr("second_brain.apps.jobs.services.state.emit_state", lambda _config: None)
     monkeypatch.setattr(
-        "second_brain.compilation.compiler.run_compilation",
+        "second_brain.apps.compilation.services.compiler.run_compilation",
         lambda *_args, **_kwargs: stats,
     )
     result = CliRunner().invoke(cli.main, ["compile"])
@@ -80,7 +84,7 @@ def test_ingest_document_does_not_require_ollama(
     document.write_text("# Notes\n\nA document.\n", encoding="utf-8")
     monkeypatch.setattr(cli, "_load_config", lambda _path: config)
     monkeypatch.setattr(cli, "_preflight_check", lambda: None)
-    monkeypatch.setattr("second_brain.api.state.emit_state", lambda _config: None)
+    monkeypatch.setattr("second_brain.apps.jobs.services.state.emit_state", lambda _config: None)
     monkeypatch.setattr(
         "second_brain.ollama.client.check_ollama",
         lambda _config: OllamaStatus(
@@ -122,13 +126,17 @@ def test_ingest_triage_interrupted_exits_1_and_records(
     emitted: list[Config] = []
     monkeypatch.setattr(cli, "_load_config", lambda _path: config)
     monkeypatch.setattr(cli, "_preflight_check", lambda: None)
-    monkeypatch.setattr("second_brain.api.state.emit_state", emitted.append)
-    monkeypatch.setattr("second_brain.ingestion.watcher.batch_scan", lambda *_args, **_kwargs: 0)
+    monkeypatch.setattr("second_brain.apps.jobs.services.state.emit_state", emitted.append)
+    monkeypatch.setattr(
+        "second_brain.apps.ingestion.services.watcher.batch_scan", lambda *_args, **_kwargs: 0
+    )
 
     def _triage(*_args: object, **_kwargs: object) -> dict[str, int]:
         raise TriageInterruptedError(untriaged_count=untriaged_count)
 
-    monkeypatch.setattr("second_brain.ingestion.triage.pipeline.triage_pending", _triage)
+    monkeypatch.setattr(
+        "second_brain.apps.ingestion.services.triage.pipeline.triage_pending", _triage
+    )
 
     result = CliRunner().invoke(cli.main, ["ingest"])
     record = json.loads((config.data_dir / RUN_RECORD_FILENAME).read_text(encoding="utf-8"))
@@ -148,12 +156,14 @@ def test_compile_ollama_unavailable_exits_1_and_records(
     reason = "Ollama stopped responding. Start Ollama and build again."
     monkeypatch.setattr(cli, "_load_config", lambda _path: config)
     monkeypatch.setattr(cli, "_require_ollama", lambda _config: None)
-    monkeypatch.setattr("second_brain.api.state.emit_state", lambda _config: None)
+    monkeypatch.setattr("second_brain.apps.jobs.services.state.emit_state", lambda _config: None)
 
     def _compile(*_args: object, **_kwargs: object) -> dict[str, object]:
         raise OllamaUnavailableError("down")
 
-    monkeypatch.setattr("second_brain.compilation.compiler.run_compilation", _compile)
+    monkeypatch.setattr(
+        "second_brain.apps.compilation.services.compiler.run_compilation", _compile
+    )
 
     result = CliRunner().invoke(cli.main, ["compile"])
     record = json.loads((config.data_dir / RUN_RECORD_FILENAME).read_text(encoding="utf-8"))
@@ -177,7 +187,9 @@ def test_preview_clusters_ollama_unavailable_leaves_preview(
     def _preview(*_args: object, **_kwargs: object) -> dict[str, object]:
         raise OllamaUnavailableError("down")
 
-    monkeypatch.setattr("second_brain.compilation.clustering.preview.write_preview", _preview)
+    monkeypatch.setattr(
+        "second_brain.apps.compilation.services.clustering.preview.write_preview", _preview
+    )
 
     result = CliRunner().invoke(cli.main, ["preview-clusters"])
 
@@ -226,7 +238,9 @@ def test_compile_records_expected_errors_by_reason_and_bugs_as_crashes(
     def _compile(*_args: object, **_kwargs: object) -> dict[str, object]:
         raise error
 
-    monkeypatch.setattr("second_brain.compilation.compiler.run_compilation", _compile)
+    monkeypatch.setattr(
+        "second_brain.apps.compilation.services.compiler.run_compilation", _compile
+    )
 
     result = CliRunner().invoke(cli.main, ["compile"])
     record = json.loads((config.data_dir / RUN_RECORD_FILENAME).read_text(encoding="utf-8"))
@@ -247,7 +261,7 @@ def test_ingest_records_an_expected_error_by_its_reason(
     def _scan(*_args: object, **_kwargs: object) -> int:
         raise ParserNotAvailableError(reason)
 
-    monkeypatch.setattr("second_brain.ingestion.watcher.batch_scan", _scan)
+    monkeypatch.setattr("second_brain.apps.ingestion.services.watcher.batch_scan", _scan)
 
     result = CliRunner().invoke(cli.main, ["ingest"])
     record = json.loads((config.data_dir / RUN_RECORD_FILENAME).read_text(encoding="utf-8"))

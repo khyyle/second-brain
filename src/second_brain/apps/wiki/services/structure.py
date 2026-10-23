@@ -1,0 +1,614 @@
+"""Deterministic structure rebuild — no LLM, pure filesystem graph analysis."""
+
+from __future__ import annotations
+
+import logging
+import re
+from collections import defaultdict
+from dataclasses import dataclass, field
+from pathlib import Path
+
+import yaml
+
+from second_brain.apps.wiki.services.slugs import iter_wikilink_targets, normalize_link_target
+
+logger = logging.getLogger(__name__)
+
+# DOTALL so .*? spans multi-line YAML blocks between --- fences
+_FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n", re.DOTALL)
+FRONTMATTER_EDGE_FIELDS = {
+    "prerequisites": "prerequisite",
+    "related": "related",
+    "concepts_tested": "tests",
+    "concepts_used": "uses",
+}
+WIKILINK_KIND = "mention"
+
+# Every edge type that can appear in wiki_links
+LINK_KINDS = (*FRONTMATTER_EDGE_FIELDS.values(), WIKILINK_KIND)
+
+CONTENT_DIRS = ("concepts", "problems", "projects", "papers", "insights")
+
+
+def has_valid_domains(domains: object) -> bool:
+    """Check that page domains form a list of non-empty names.
+
+    An empty list represents an Uncategorized page.
+
+    Parameters
+    ----------
+    domains: object
+        Domains supplied as tool arguments or parsed from frontmatter.
+
+    Returns
+    -------
+    bool
+        Whether the value satisfies the required domains field.
+    """
+    return isinstance(domains, list) and all(
+        isinstance(domain, str) and bool(domain.strip()) for domain in domains
+    )
+
+
+@dataclass
+class WikiPage:
+    """In-memory representation of a wiki page for graph construction."""
+
+    path: Path
+    rel_path: str
+    stem: str  # filename without extension, used as the page identifier
+    frontmatter: dict = field(default_factory=dict)
+    outgoing_links: list[str] = field(default_factory=list)
+    word_count: int = 0
+
+
+@dataclass
+class LinkGraph:
+    """Bidirectional adjacency list of wikilink relationships.
+
+    Uses adjacency lists (not a matrix) because knowledge graphs are sparse —
+    most pages link to a small subset of the total, so O(V^2) matrix storage
+    would be wasteful.
+    """
+
+    pages: dict[str, WikiPage] = field(default_factory=dict)
+    forward: dict[str, set[str]] = field(default_factory=lambda: defaultdict(set))
+    backward: dict[str, set[str]] = field(default_factory=lambda: defaultdict(set))
+
+
+def _parse_frontmatter(content: str) -> dict:
+    """Extract YAML frontmatter from markdown content, returning {} on failure."""
+    match = _FRONTMATTER_RE.match(content)
+    if not match:
+        return {}
+    try:
+        return yaml.safe_load(match.group(1)) or {}
+    except yaml.YAMLError:
+        return {}
+
+
+def strip_frontmatter(content: str) -> str:
+    """Return markdown content with a leading YAML frontmatter block removed.
+
+    Parameters
+    ----------
+    content: str
+        Full markdown text, optionally beginning with a ``---`` block.
+
+    Returns
+    -------
+    str
+        The body after the frontmatter, or ``content`` unchanged when it has no
+        leading frontmatter block.
+    """
+    match = _FRONTMATTER_RE.match(content)
+    return content[match.end() :] if match else content
+
+
+def _dump_frontmatter(frontmatter: dict) -> str:
+    """Serialize a frontmatter mapping to a YAML block, preserving key order."""
+    return yaml.safe_dump(
+        frontmatter, default_flow_style=False, sort_keys=False, allow_unicode=True
+    )
+
+
+def serialize_page(frontmatter: dict, body: str) -> str:
+    """
+    Assemble a page file from a frontmatter mapping and a body.
+
+    The frontmatter is emitted as a guaranteed-valid YAML block, then a blank
+    line, then the body, so a page written this way can never carry a malformed
+    ``---`` block.
+
+    Parameters
+    ----------
+    frontmatter: dict
+        Field mapping to serialize, in insertion order.
+    body: str
+        Markdown body; leading newlines are dropped so exactly one blank line
+        separates the frontmatter from the body.
+
+    Returns
+    -------
+    str
+        The complete page text.
+    """
+    return f"---\n{_dump_frontmatter(frontmatter)}---\n\n{body.lstrip(chr(10))}"
+
+
+def update_frontmatter(content: str, changes: dict) -> str | None:
+    """
+    Merge ``changes`` into a page's existing frontmatter, leaving the body
+    byte-identical.
+
+    The block is parsed and re-serialized, so the result is valid YAML
+    regardless of the original formatting. Passed keys overwrite existing ones;
+    list values are replaced wholesale, not merged element-wise.
+
+    Parameters
+    ----------
+    content: str
+        Full page text that already opens with a ``---`` frontmatter block. This
+        updates an existing block. It does not add one to content without it.
+    changes: dict
+        Fields to set or overwrite.
+
+    Returns
+    -------
+    str | None
+        The rewritten page, or ``None`` when ``content`` has no parseable
+        frontmatter block.
+    """
+    match = _FRONTMATTER_RE.match(content)
+    if not match:
+        return None
+    try:
+        frontmatter = yaml.safe_load(match.group(1)) or {}
+    except yaml.YAMLError:
+        return None
+    frontmatter.update(changes)
+    return f"---\n{_dump_frontmatter(frontmatter)}---\n{content[match.end() :]}"
+
+
+def _count_words(content: str) -> int:
+    """Count words in the body only, excluding YAML frontmatter."""
+    return len(strip_frontmatter(content).split())
+
+
+def extract_typed_edges(content: str) -> list[tuple[str, str]]:
+    """Return ``(target_stem, kind)`` edges a page declares.
+
+    Typed edges come from the frontmatter relationship fields; body
+    ``[[wikilinks]]`` become ``mention`` edges. A target may be a gap (no page
+    of that stem exists yet) — resolving target to page is left to the caller.
+
+    Parameters:
+    -----------
+    content: str
+        a full compiled markdown page
+
+    Returns:
+    --------
+    edges: list[tuple[str, str]]
+        An array of edges outgoing from `content`, formatted as (`target`, `type`)
+    """
+    frontmatter = _parse_frontmatter(content)
+    edges: list[tuple[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+
+    for edge_field, kind in FRONTMATTER_EDGE_FIELDS.items():
+        for item in frontmatter.get(edge_field) or []:
+            if not isinstance(item, str):
+                continue
+            target = normalize_link_target(item)
+            if target and (target, kind) not in seen:
+                seen.add((target, kind))
+                edges.append((target, kind))
+
+    body = strip_frontmatter(content)
+    for target in iter_wikilink_targets(body):
+        if (target, WIKILINK_KIND) not in seen:
+            seen.add((target, WIKILINK_KIND))
+            edges.append((target, WIKILINK_KIND))
+    return edges
+
+
+def content_page_path(wiki_dir: Path, stem: str) -> Path | None:
+    """Return the path of the content page with this stem, or None.
+
+    The wiki is flat by design, so a stem appears in at most one content
+    directory.
+
+    Parameters
+    ----------
+    wiki_dir: Path
+        Root directory of the wiki.
+    stem: str
+        Page filename without folder or extension.
+
+    Returns
+    -------
+    Path | None
+        The page's path, or None when no content directory holds it.
+    """
+    for content_dir in CONTENT_DIRS:
+        path = wiki_dir / content_dir / f"{stem}.md"
+        if path.exists():
+            return path
+    return None
+
+
+def discover_all_pages(wiki_dir: Path) -> dict[str, WikiPage]:
+    """
+    Walk wiki content directories and parse each page.
+
+    Parameters
+    ----------
+    wiki_dir: Path
+        Root directory of the wiki.
+
+    Returns
+    -------
+    dict[str, WikiPage]
+        Mapping of page stem to parsed WikiPage.
+    """
+    pages: dict[str, WikiPage] = {}
+    for content_dir in CONTENT_DIRS:
+        dir_path = wiki_dir / content_dir
+        if not dir_path.exists():
+            continue
+        for md_file in dir_path.glob("*.md"):
+            content = md_file.read_text(encoding="utf-8")
+            stem = md_file.stem
+            pages[stem] = WikiPage(
+                path=md_file,
+                rel_path=f"{content_dir}/{md_file.name}",
+                stem=stem,
+                frontmatter=_parse_frontmatter(content),
+                outgoing_links=iter_wikilink_targets(content),
+                word_count=_count_words(content),
+            )
+    return pages
+
+
+def build_link_graph(pages: dict[str, WikiPage]) -> LinkGraph:
+    """
+    Build bidirectional link graph from wiki pages.
+
+    Parameters
+    ----------
+    pages: dict[str, WikiPage]
+        Mapping of page stem to WikiPage, as returned by
+        ``discover_all_pages``.
+
+    Returns
+    -------
+    LinkGraph
+        Graph with forward and backward adjacency lists.
+    """
+    graph = LinkGraph(pages=pages)
+    for stem, page in pages.items():
+        for target in page.outgoing_links:
+            graph.forward[stem].add(target)
+            graph.backward[target].add(stem)
+    return graph
+
+
+def generate_index(wiki_dir: Path, pages: dict[str, WikiPage]) -> Path:
+    """
+    Generate ``index.md`` grouped by domain.
+
+    Parameters
+    ----------
+    wiki_dir: Path
+        Root directory of the wiki.
+    pages: dict[str, WikiPage]
+        Mapping of page stem to WikiPage.
+
+    Returns
+    -------
+    Path
+        Path to the written index file.
+    """
+    by_domain: dict[str, list[WikiPage]] = defaultdict(list)
+    uncategorized: list[WikiPage] = []
+
+    for page in pages.values():
+        domains = page.frontmatter.get("domains", [])
+        if not domains:
+            uncategorized.append(page)
+            continue
+        for domain in domains:
+            by_domain[domain].append(page)
+
+    lines = [
+        "---",
+        "title: Wiki Index",
+        "type: index",
+        "---",
+        "",
+        "# Knowledge Base Index",
+        "",
+    ]
+
+    for domain in sorted(by_domain.keys()):
+        domain_pages = sorted(by_domain[domain], key=lambda p: p.stem)
+        lines.append(f"## {domain.replace('-', ' ').title()}")
+        lines.append("")
+        for page in domain_pages:
+            title = page.frontmatter.get("title", page.stem)
+            ptype = page.frontmatter.get("type", "")
+            tag = f" _({ptype})_" if ptype else ""
+            lines.append(f"- [[{page.stem}|{title}]]{tag}")
+        lines.append("")
+
+    if uncategorized:
+        lines.append("## Uncategorized")
+        lines.append("")
+        for page in sorted(uncategorized, key=lambda p: p.stem):
+            title = page.frontmatter.get("title", page.stem)
+            lines.append(f"- [[{page.stem}|{title}]]")
+        lines.append("")
+
+    index_path = wiki_dir / "_views" / "index.md"
+    index_path.parent.mkdir(parents=True, exist_ok=True)
+    index_path.write_text("\n".join(lines), encoding="utf-8")
+    return index_path
+
+
+def detect_orphans(pages: dict[str, WikiPage], graph: LinkGraph) -> list[str]:
+    """
+    Detect pages with zero incoming links.
+
+    Parameters
+    ----------
+    pages: dict[str, WikiPage]
+        Mapping of page stem to WikiPage.
+    graph: LinkGraph
+        Bidirectional link graph.
+
+    Returns
+    -------
+    list[str]
+        Sorted stems of orphan pages (potential entry points
+        or stale content).
+    """
+    return sorted(stem for stem in pages if not graph.backward.get(stem))
+
+
+def detect_gaps(pages: dict[str, WikiPage], graph: LinkGraph) -> list[str]:
+    """
+    Detect wikilink targets with no corresponding page.
+
+    Parameters
+    ----------
+    pages: dict[str, WikiPage]
+        Mapping of page stem to WikiPage.
+    graph: LinkGraph
+        Bidirectional link graph.
+
+    Returns
+    -------
+    list[str]
+        Sorted stems referenced by wikilinks but missing a
+        page file (broken links).
+    """
+    all_targets = set()
+    for targets in graph.forward.values():
+        all_targets.update(targets)
+    return sorted(t for t in all_targets if t not in pages)
+
+
+def rank_gaps(pages: dict[str, WikiPage], graph: LinkGraph) -> list[tuple[str, int]]:
+    """Rank unwritten topics by the number of pages referencing them.
+
+    Parameters
+    ----------
+    pages: dict[str, WikiPage]
+        Discovered wiki pages.
+    graph: LinkGraph
+        Link graph built from those pages.
+
+    Returns
+    -------
+    list[tuple[str, int]]
+        Gap stems and reference counts, most referenced first, then by stem.
+    """
+    return sorted(
+        ((stem, len(graph.backward.get(stem, ()))) for stem in detect_gaps(pages, graph)),
+        key=lambda gap: (-gap[1], gap[0]),
+    )
+
+
+def generate_gaps_view(wiki_dir: Path, gaps: list[str]) -> Path:
+    """
+    Write ``gaps.md`` listing broken wikilinks.
+
+    Parameters
+    ----------
+    wiki_dir: Path
+        Root directory of the wiki.
+    gaps: list[str]
+        Stems that are linked to but have no page file.
+
+    Returns
+    -------
+    Path
+        Path to the written gaps view file.
+    """
+    lines = [
+        "---",
+        "title: Gap Analysis",
+        "type: view",
+        "---",
+        "",
+        "# Missing Pages (Gaps)",
+        "",
+        "These [[wikilinks]] reference pages that don't exist yet:",
+        "",
+    ]
+    for gap in gaps:
+        lines.append(f"- [[{gap}]]")
+
+    path = wiki_dir / "_views" / "gaps.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(lines), encoding="utf-8")
+    return path
+
+
+def generate_domain_views(
+    wiki_dir: Path,
+    pages: dict[str, WikiPage],
+) -> list[Path]:
+    """
+    Generate per-domain view files in ``_views/domains/``.
+
+    Parameters
+    ----------
+    wiki_dir: Path
+        Root directory of the wiki.
+    pages: dict[str, WikiPage]
+        Mapping of page stem to WikiPage.
+
+    Returns
+    -------
+    list[Path]
+        Paths to all written domain view files.
+    """
+    by_domain: dict[str, list[WikiPage]] = defaultdict(list)
+    for page in pages.values():
+        for domain in page.frontmatter.get("domains", []):
+            by_domain[domain].append(page)
+
+    views_dir = wiki_dir / "_views" / "domains"
+    views_dir.mkdir(parents=True, exist_ok=True)
+    paths: list[Path] = []
+
+    for domain, domain_pages in sorted(by_domain.items()):
+        domain_pages.sort(key=lambda p: p.stem)
+        nice_name = domain.replace("-", " ").title()
+
+        by_type: dict[str, list[WikiPage]] = defaultdict(list)
+        for p in domain_pages:
+            by_type[p.frontmatter.get("type", "other")].append(p)
+
+        lines = [
+            "---",
+            f"title: {nice_name}",
+            "type: domain-view",
+            "---",
+            "",
+            f"# {nice_name}",
+            "",
+        ]
+
+        for ctype in ("concept", "problem", "project", "insight", "other"):
+            type_pages = by_type.get(ctype, [])
+            if not type_pages:
+                continue
+            lines.append(f"## {ctype.title()}s")
+            lines.append("")
+            for p in type_pages:
+                title = p.frontmatter.get("title", p.stem)
+                lines.append(f"- [[{p.stem}|{title}]]")
+            lines.append("")
+
+        path = views_dir / f"{domain}.md"
+        path.write_text("\n".join(lines), encoding="utf-8")
+        paths.append(path)
+
+    return paths
+
+
+def generate_recently_updated(
+    wiki_dir: Path,
+    pages: dict[str, WikiPage],
+    limit: int = 30,
+) -> Path:
+    """
+    Generate ``recently-updated.md`` sorted by file mtime.
+
+    Parameters
+    ----------
+    wiki_dir: Path
+        Root directory of the wiki.
+    pages: dict[str, WikiPage]
+        Mapping of page stem to WikiPage.
+    limit: int
+        Maximum number of pages to include.
+
+    Returns
+    -------
+    Path
+        Path to the written recently-updated view file.
+    """
+    page_list = sorted(
+        pages.values(),
+        key=lambda p: p.path.stat().st_mtime,
+        reverse=True,
+    )[:limit]
+
+    lines = [
+        "---",
+        "title: Recently Updated",
+        "type: view",
+        "---",
+        "",
+        "# Recently Updated Pages",
+        "",
+    ]
+    for page in page_list:
+        title = page.frontmatter.get("title", page.stem)
+        lines.append(f"- [[{page.stem}|{title}]]")
+
+    path = wiki_dir / "_views" / "recently-updated.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(lines), encoding="utf-8")
+    return path
+
+
+def rebuild_structure(wiki_dir: Path) -> dict:
+    """
+    Run a full deterministic structure rebuild.
+
+    Parameters
+    ----------
+    wiki_dir: Path
+        Root directory of the wiki.
+
+    Returns
+    -------
+    dict
+        Summary statistics with keys ``total_pages``,
+        ``total_links``, ``orphans``, and ``gaps``.
+    """
+    pages = discover_all_pages(wiki_dir)
+    graph = build_link_graph(pages)
+
+    generate_index(wiki_dir, pages)
+    orphans = detect_orphans(pages, graph)
+    gaps = detect_gaps(pages, graph)
+    generate_gaps_view(wiki_dir, gaps)
+    generate_domain_views(wiki_dir, pages)
+    generate_recently_updated(wiki_dir, pages)
+
+    domain_counts: dict[str, int] = defaultdict(int)
+    for page in pages.values():
+        for domain in page.frontmatter.get("domains", []) or []:
+            domain_counts[domain] += 1
+
+    stats = {
+        "total_pages": len(pages),
+        "total_links": sum(len(v) for v in graph.forward.values()),
+        "orphans": len(orphans),
+        "gaps": len(gaps),
+        "domains": dict(domain_counts),
+    }
+    logger.info(
+        "Structure rebuild: %d pages, %d links, %d orphans, %d gaps",
+        stats["total_pages"],
+        stats["total_links"],
+        stats["orphans"],
+        stats["gaps"],
+    )
+    return stats

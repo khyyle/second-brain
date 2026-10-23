@@ -32,8 +32,8 @@ print(json.dumps({
     'schema': schema.status_code,
     'database_open': connection.connection is not None,
     'pipeline_loaded': any(name in sys.modules for name in (
-        'second_brain.compilation.compiler',
-        'second_brain.ingestion.watcher',
+        'second_brain.apps.compilation.services.compiler',
+        'second_brain.apps.ingestion.services.watcher',
     )),
 }))
 """

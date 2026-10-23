@@ -13,9 +13,13 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
+from second_brain.apps.wiki.services.slugs import normalize_link_target, slugify
+from second_brain.apps.wiki.services.structure import (
+    CONTENT_DIRS,
+    _parse_frontmatter,
+    strip_frontmatter,
+)
 from second_brain.mcp_server.search import SearchIndex
-from second_brain.wiki.slugs import normalize_link_target, slugify
-from second_brain.wiki.structure import CONTENT_DIRS, _parse_frontmatter, strip_frontmatter
 
 logger = logging.getLogger(__name__)
 

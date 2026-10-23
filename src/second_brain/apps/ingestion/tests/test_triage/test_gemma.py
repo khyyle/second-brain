@@ -1,0 +1,161 @@
+"""Tests for the Gemma/Ollama triage layer (heuristic + mocked model)."""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import httpx
+import pytest
+
+from second_brain.apps.ingestion.services.triage import gemma
+from second_brain.apps.ingestion.services.triage.gemma import (
+    TriageDecision,
+    heuristic_skip,
+    triage_content,
+    triage_file,
+)
+from second_brain.config import TriageConfig
+from second_brain.ollama import client as ollama_client
+from second_brain.ollama.client import OllamaUnavailableError
+
+
+class FakeResponse:
+    """Minimal stand-in for an httpx.Response wrapping an Ollama reply."""
+
+    def __init__(self, payload: dict) -> None:
+        self._payload = payload
+
+    def raise_for_status(self) -> None:
+        return None
+
+    def json(self) -> dict:
+        return self._payload
+
+
+@pytest.fixture
+def config() -> TriageConfig:
+    return TriageConfig(min_word_count=10, worthwhile_threshold=0.6)
+
+
+def _ollama_reply(decision: str, confidence: float) -> dict:
+    """Build an Ollama /api/generate reply whose 'response' is triage JSON."""
+    inner = json.dumps(
+        {
+            "decision": decision,
+            "confidence": confidence,
+            "concept_hints": ["x"],
+            "content_type_hint": "concept",
+            "domain_hints": ["math"],
+            "reason": "test",
+        }
+    )
+    return {"response": inner}
+
+
+def test_heuristic_skips_thin_content() -> None:
+    assert heuristic_skip("one two three", min_word_count=10) is True
+    assert heuristic_skip("word " * 50, min_word_count=10) is False
+
+
+def test_triage_content_worthwhile(config: TriageConfig, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        ollama_client.httpx, "post", lambda *a, **k: FakeResponse(_ollama_reply("worthwhile", 0.9))
+    )
+    result = triage_content("a substantive document " * 50, config)
+    assert result.decision == TriageDecision.WORTHWHILE
+    assert result.confidence == pytest.approx(0.9)
+    assert "math" in result.domain_hints
+
+
+def test_low_confidence_worthwhile_demoted_to_review(
+    config: TriageConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        ollama_client.httpx, "post", lambda *a, **k: FakeResponse(_ollama_reply("worthwhile", 0.3))
+    )
+    result = triage_content("content " * 50, config)
+    assert result.decision == TriageDecision.REVIEW
+
+
+def test_skip_decision_passthrough(config: TriageConfig, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        ollama_client.httpx, "post", lambda *a, **k: FakeResponse(_ollama_reply("skip", 0.95))
+    )
+    result = triage_content("content " * 50, config)
+    assert result.decision == TriageDecision.SKIP
+
+
+def test_transport_error_raises(config: TriageConfig, monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = {"n": 0}
+
+    def _raise(*_a, **_k):
+        calls["n"] += 1
+        raise httpx.ConnectError("connection refused")
+
+    monkeypatch.setattr(ollama_client.httpx, "post", _raise)
+    with pytest.raises(OllamaUnavailableError):
+        triage_content("content " * 50, config)
+    assert calls["n"] == 1
+
+
+@pytest.mark.parametrize("status_code", [404, 500])
+def test_unavailable_status_raises(
+    config: TriageConfig, monkeypatch: pytest.MonkeyPatch, status_code: int
+) -> None:
+    def _raise(*_a, **_k):
+        request = httpx.Request("POST", "http://localhost:11434/api/generate")
+        response = httpx.Response(status_code, request=request)
+        raise httpx.HTTPStatusError("unavailable", request=request, response=response)
+
+    monkeypatch.setattr(ollama_client.httpx, "post", _raise)
+    with pytest.raises(OllamaUnavailableError):
+        triage_content("content " * 50, config)
+
+
+def test_triage_file_heuristic_skip_avoids_model(
+    config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    called = False
+
+    def _should_not_run(*_a, **_k):
+        nonlocal called
+        called = True
+        raise AssertionError("model must not be called for thin content")
+
+    monkeypatch.setattr(ollama_client.httpx, "post", _should_not_run)
+    f = tmp_path / "thin.md"
+    f.write_text("too short")
+    result = triage_file(f, config)
+    assert result.decision == TriageDecision.SKIP
+    assert called is False
+
+
+def test_profile_selects_matching_prompt(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The configured profile's prompt text is what gets sent to Ollama."""
+    captured: dict[str, str] = {}
+
+    def _capture(url, json, timeout):  # noqa: A002
+        captured["prompt"] = json["prompt"]
+        return FakeResponse(_ollama_reply("worthwhile", 0.9))
+
+    monkeypatch.setattr(ollama_client.httpx, "post", _capture)
+    triage_content("content " * 50, TriageConfig(profile="technical"))
+    assert "STEM researcher" in captured["prompt"]
+    assert "Document:" in captured["prompt"]
+
+
+def test_invalid_json_goes_to_review(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Unparseable model output is retried, then sent to review."""
+    calls = {"n": 0}
+
+    def _invalid(*_a, **_k):
+        calls["n"] += 1
+        return FakeResponse({"response": "not json"})
+
+    monkeypatch.setattr(ollama_client.httpx, "post", _invalid)
+    result = triage_content("content " * 50, TriageConfig())
+    assert calls["n"] == gemma.TRIAGE_MAX_ATTEMPTS
+    assert result.decision == TriageDecision.REVIEW
+    assert result.confidence == 0.0
+    assert result.reason == "triage-invalid-output"
