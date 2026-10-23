@@ -16,9 +16,21 @@ from second_brain.ingestion.triage.skipped import SKIPPED_DIRNAME
 logger = logging.getLogger(__name__)
 
 
-def _raw_output_exists(raw_dir: Path, raw_output: str | None) -> bool:
-    """Whether a manifest row's raw output is still on disk, counting one held in
-    the skipped folder, which is still there until a build purges it."""
+def raw_output_exists(raw_dir: Path, raw_output: str | None) -> bool:
+    """Check for a parsed output, including sources held in the skipped folder.
+
+    Parameters
+    ----------
+    raw_dir: Path
+        Root of the parsed source tree.
+    raw_output: str | None
+        Output path recorded in the manifest.
+
+    Returns
+    -------
+    bool
+        Whether the parsed source is still available.
+    """
     if not raw_output:
         return False
     return (raw_dir / raw_output).exists() or (raw_dir / SKIPPED_DIRNAME / raw_output).exists()
@@ -37,6 +49,8 @@ class ManifestEntry:
     ingested_at: str
     updated_at: str
     content_hash: str | None = None
+    origin_path: str | None = None
+    origin_sha256: str | None = None
 
 
 @dataclass(frozen=True)
@@ -71,7 +85,10 @@ class Manifest:
         return connect(self._db_path)
 
     def needs_processing(self, file_path: Path, raw_dir: Path | None = None) -> bool:
-        """Check whether a file is new, changed, or previously failed.
+        """Check whether a file is new, changed, or missing its parsed output.
+
+        An unchanged failure waits for an explicit retry rather than repeating
+        the same attempt on every scan.
 
         Parameters
         ----------
@@ -101,10 +118,14 @@ class Manifest:
             return not self._content_already_complete(current_hash, raw_dir)
         if row["sha256"] != current_hash:
             return True
+        if row["status"] == "failed":
+            return False
+        if row["status"] == "pending":
+            return not self._content_already_complete(current_hash, raw_dir)
         if row["status"] not in ("complete", "duplicate"):
             return True
         # Complete + unchanged: re-process only if its raw output is gone.
-        if raw_dir is not None and not _raw_output_exists(raw_dir, row["raw_output"]):
+        if raw_dir is not None and not raw_output_exists(raw_dir, row["raw_output"]):
             return True
         return False
 
@@ -134,7 +155,7 @@ class Manifest:
             return False
         if raw_dir is None:
             return True
-        return any(_raw_output_exists(raw_dir, r["raw_output"]) for r in rows)
+        return any(raw_output_exists(raw_dir, r["raw_output"]) for r in rows)
 
     def mark_processing(self, file_path: Path, source_type: str) -> None:
         """Record that a file is being processed (upsert on file_path).
@@ -202,8 +223,8 @@ class Manifest:
     def mark_duplicate(self, file_path: Path, source_type: str) -> None:
         """Record a file whose content was already ingested under another path.
 
-        No-op when the path already has any manifest record. The row points
-        at the existing raw output, so the raw-exists self-heal still applies.
+        Existing terminal records are preserved. A pending managed copy can
+        become a duplicate while retaining its original-file association.
 
         Parameters
         ----------
@@ -214,9 +235,9 @@ class Manifest:
         """
         with self._conn() as conn:
             exists = conn.execute(
-                "SELECT 1 FROM manifest WHERE file_path = ?", (str(file_path),)
+                "SELECT status FROM manifest WHERE file_path = ?", (str(file_path),)
             ).fetchone()
-        if exists:
+        if exists and exists["status"] != "pending":
             return
         sha = hash_file(file_path)
         now = datetime.now(UTC).isoformat()
@@ -226,10 +247,13 @@ class Manifest:
                 (sha,),
             ).fetchone()
             conn.execute(
-                """INSERT OR IGNORE INTO manifest
+                """INSERT INTO manifest
                    (file_path, sha256, source_type, status, raw_output,
                     ingested_at, updated_at)
-                   VALUES (?, ?, ?, 'duplicate', ?, ?, ?)""",
+                   VALUES (?, ?, ?, 'duplicate', ?, ?, ?)
+                   ON CONFLICT(file_path) DO UPDATE SET
+                     status = 'duplicate', raw_output = excluded.raw_output,
+                     updated_at = excluded.updated_at""",
                 (
                     str(file_path),
                     sha,
@@ -241,7 +265,7 @@ class Manifest:
             )
 
     def mark_failed(self, file_path: Path, error: str | None = None) -> None:
-        """Mark a file as failed so it will be retried on the next run.
+        """Record a failure that waits for a retry or changed file content.
 
         Parameters
         ----------
@@ -296,6 +320,87 @@ class Manifest:
         if row is None:
             return None
         return _row_to_entry(row)
+
+    def get_origin_copy(self, origin_path: Path) -> ManifestEntry | None:
+        """Find the managed copy of a watched original.
+
+        Parameters
+        ----------
+        origin_path: Path
+            Absolute path of the watched original.
+
+        Returns
+        -------
+        ManifestEntry | None
+            The copy's current ingestion record, if one exists.
+        """
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT * FROM manifest WHERE origin_path = ?", (str(origin_path),)
+            ).fetchone()
+        return _row_to_entry(row) if row is not None else None
+
+    def record_pending_copy(self, file_path: Path, origin_path: Path, source_type: str) -> None:
+        """Record a copied source before it enters parsing.
+
+        The original's captured hash remains independent of later edits to the
+        managed copy, so repairing that copy does not trigger a stale recopy.
+
+        Parameters
+        ----------
+        file_path: Path
+            The managed input under drops/.
+        origin_path: Path
+            Original file from which this version was copied.
+        source_type: str
+            Source folder's name and parsing settings.
+        """
+        previous = self.get_entry(file_path) or self.get_entry(origin_path)
+        sha256 = hash_file(file_path)
+        now = datetime.now(UTC).isoformat()
+        with self._conn() as conn:
+            conn.execute(
+                """INSERT INTO manifest
+                   (file_path, sha256, source_type, status, ingested_at, updated_at,
+                    origin_path, origin_sha256, parse_lane, raw_output, content_hash)
+                   VALUES (?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(file_path) DO UPDATE SET
+                     sha256 = excluded.sha256, source_type = excluded.source_type,
+                     status = 'pending', error = NULL, updated_at = excluded.updated_at,
+                     origin_path = excluded.origin_path, origin_sha256 = excluded.origin_sha256""",
+                (
+                    str(file_path),
+                    sha256,
+                    source_type,
+                    now,
+                    now,
+                    str(origin_path),
+                    sha256,
+                    previous.parse_lane if previous else None,
+                    previous.raw_output_path if previous else None,
+                    previous.content_hash if previous else None,
+                ),
+            )
+            conn.execute("DELETE FROM manifest WHERE file_path = ?", (str(origin_path),))
+
+    def source_stems(self, source_type: str) -> set[str]:
+        """Return source names reserved by manifest records.
+
+        Parameters
+        ----------
+        source_type: str
+            Source lane whose input names must not be reused.
+
+        Returns
+        -------
+        set[str]
+            Case-insensitive stems, including copies whose parsed output is gone.
+        """
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT file_path FROM manifest WHERE source_type = ?", (source_type,)
+            ).fetchall()
+        return {Path(row["file_path"]).stem.casefold() for row in rows}
 
     def get_content_hash(self, file_path: Path) -> str | None:
         """Return the post-OCR content hash recorded for a file, if any.
@@ -438,6 +543,8 @@ def _row_to_entry(row: sqlite3.Row) -> ManifestEntry:
         ingested_at=row["ingested_at"],
         updated_at=row["updated_at"],
         content_hash=row["content_hash"],
+        origin_path=row["origin_path"],
+        origin_sha256=row["origin_sha256"],
     )
 
 

@@ -155,6 +155,16 @@ def _add_build_content_hashes(conn: sqlite3.Connection) -> None:
     conn.execute("ALTER TABLE deferred_sources ADD COLUMN content_hash TEXT")
 
 
+def _add_watched_origins(conn: sqlite3.Connection) -> None:
+    conn.execute("ALTER TABLE manifest ADD COLUMN origin_path TEXT")
+    conn.execute("ALTER TABLE manifest ADD COLUMN origin_sha256 TEXT")
+    conn.execute("CREATE UNIQUE INDEX idx_manifest_origin ON manifest(origin_path)")
+
+
 # Append only: a migration's position is the version recorded in existing
 # databases, so reordering or removing one skips or repeats work on them.
-_MIGRATIONS: tuple[Migration, ...] = (_create_tables, _add_build_content_hashes)
+_MIGRATIONS: tuple[Migration, ...] = (
+    _create_tables,
+    _add_build_content_hashes,
+    _add_watched_origins,
+)

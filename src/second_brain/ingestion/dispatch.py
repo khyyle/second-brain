@@ -8,26 +8,26 @@ from pathlib import Path
 from second_brain.api.run_record import CRASH_REASON
 from second_brain.config import Config
 from second_brain.errors import SecondBrainError
+from second_brain.ingestion.intake import source_name
 from second_brain.ingestion.manifest import Manifest
 
 logger = logging.getLogger(__name__)
 
 _TEXT_SUFFIXES = (".md", ".txt", ".tex")
-_UNMATCHED_SOURCE_DIR = "documents"
 
 
 def ingest_file(
     file_path: Path,
     config: Config,
     manifest: Manifest,
-    source_type: str = "document",
+    source_type: str | None = None,
 ) -> bool:
     """
     Route a single file to the appropriate parser and record the result.
 
     A failure is recorded on the file's manifest row and does not raise, so
-    one bad file never stops the rest of a batch. The file is retried on the
-    next run.
+    one bad file never stops the rest of a batch. Unchanged failed files wait
+    for an explicit retry; changed files are eligible on the next scan.
 
     Parameters
     ----------
@@ -37,8 +37,8 @@ def ingest_file(
         Application configuration (used for output directories).
     manifest: Manifest
         Ingestion manifest to record processing status.
-    source_type: str
-        Source category label (e.g. ``"document"``, ``"chatgpt"``).
+    source_type: str | None
+        Source label, inferred from its queue lane or watched folder when omitted.
 
     Returns
     -------
@@ -50,6 +50,7 @@ def ingest_file(
         logger.warning("File not found: %s", file_path)
         return False
 
+    source_type = source_type or source_name(file_path, config)
     source = config.sources.get(source_type)
     force_lane = source.force_parse_lane if source else None
     manifest.mark_processing(file_path, source_type)
@@ -84,7 +85,7 @@ def _ingest_pdf(
 ) -> None:
     from second_brain.ingestion.pdf_handler import process_pdf_sync
 
-    output_dir = config.raw_dir / _output_subdir(file_path, config)
+    output_dir = config.raw_dir / source_name(file_path, config)
     ingest = process_pdf_sync(
         file_path, output_dir, config, force_lane=force_lane, manifest=manifest
     )
@@ -109,7 +110,7 @@ def _ingest_pdf(
 def _ingest_text(file_path: Path, config: Config, manifest: Manifest) -> None:
     from second_brain.ingestion.text_handler import process_text_file
 
-    output_dir = config.raw_dir / _output_subdir(file_path, config)
+    output_dir = config.raw_dir / source_name(file_path, config)
     md_path = process_text_file(file_path, output_dir)
     manifest.mark_complete(
         file_path, parse_lane="passthrough", raw_output=str(md_path.relative_to(config.raw_dir))
@@ -125,11 +126,3 @@ def _ingest_chatgpt_export(file_path: Path, config: Config, manifest: Manifest) 
             parse_lane="passthrough",
             raw_output=str(conversation.relative_to(config.raw_dir)),
         )
-
-
-def _output_subdir(file_path: Path, config: Config) -> str:
-    """Name of the source that owns the file, or ``documents`` when none does."""
-    for name, source in config.sources.items():
-        if file_path.is_relative_to(source.path):
-            return name
-    return _UNMATCHED_SOURCE_DIR

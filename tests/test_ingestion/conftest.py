@@ -5,7 +5,24 @@ from pathlib import Path
 
 import pytest
 
+from second_brain.config import Config, SourceConfig
 from second_brain.ingestion import pdf_handler
+
+
+@pytest.fixture
+def watched_config(config: Config, tmp_path: Path) -> Config:
+    watched = tmp_path / "watched"
+    watched.mkdir()
+    return config.model_copy(
+        update={
+            "sources": {
+                "documents": SourceConfig(
+                    path=config.drops_dir / "documents", file_types=("md", "txt")
+                ),
+                "research": SourceConfig(path=watched, file_types=("md", "txt", "pdf", "json")),
+            }
+        }
+    )
 
 
 @pytest.fixture(autouse=True)

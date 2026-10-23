@@ -12,8 +12,8 @@ One piece of build state stays out of the database on purpose. When you preview 
 
 ## The life of a source
 
-1. A file is dropped or copied into `drops/`. Ingestion picks it up and records a manifest row.
-2. The parser writes Markdown into `raw/<lane>/`, the manifest row is marked complete with the source's content hash, and the original is removed from `drops/`.
+1. A file is dropped or copied into `drops/`. Watched originals are copied into the same queue, with their original path and captured content hash recorded in the manifest. All watched inputs are captured before parsing starts.
+2. The parser writes Markdown into `raw/<lane>/`, the manifest row is marked complete with the source's content hash, and the queued copy is removed from `drops/`. Watched originals remain untouched. A failed copy stays in Ingest with its reason and Retry; automatic scans try it again only when its contents or the original change.
 3. If the source is in a triaged lane (ChatGPT by default), triage records a verdict and a review-tier chat is copied into `inbox/`. A document you dropped skips this step and carries no verdict.
 4. On build, the agent writes a wiki page, the source is marked compiled, and the wiki commit is made. Re-ingesting the same source later clears its compiled marker so the next build refreshes it.
 
@@ -37,9 +37,9 @@ Both caches are disposable. The page cache can always be rebuilt by re-OCR, and 
 
 Removal happens in two places: hovering a row in the app reveals its remove action, and the CLI's `forget-drop` and `forget`. What a removal means depends on how far the source has traveled:
 
-- **Remove a file that is still ingesting** (an Ingest row, or `second-brain forget-drop <path>`). The file in `drops/` is trashed and nothing remembers it was ever added.
+- **Remove a file that is still ingesting** (an Ingest row, or `second-brain forget-drop <path>`). The file in `drops/` is trashed and nothing remembers it was ever added. If its original remains in a watched folder, a later scan can capture it again.
 - **Skip a chat** (Skip on a review row or a staged chat). The conversation leaves the build corpus but its verdict is remembered, so re-importing the same export keeps it skipped instead of resurfacing it for review. A skip, yours or the triage model's, is recoverable until the next build: **Keep** on the skipped row re-stages it, while a build that compiles everything staged makes the removal permanent (the verdict stays).
-- **Remove a staged source** (a Build row, or `second-brain forget <raw-path>`). This forgets the source entirely: its Markdown in `raw/` is trashed and every record of it is cleared with it, so a re-import would treat it as new.
+- **Remove a staged source** (a Build row, or `second-brain forget <raw-path>`). This forgets the source entirely: its Markdown in `raw/` is trashed and every record of it is cleared with it, so a re-import would treat it as new. An original still in a watched folder can be captured again on a later scan.
 
 Skipping and removing both take a source out of the build. The difference is memory: a skip keeps the verdict and can be undone, while removal forgets immediately. Either way the related records are cleared together, so a removed source never leaves a dangling compiled marker behind.
 

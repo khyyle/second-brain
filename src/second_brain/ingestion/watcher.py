@@ -13,11 +13,16 @@ from watchdog.events import FileSystemEvent, FileSystemEventHandler
 from watchdog.observers import Observer
 
 from second_brain.config import Config, SourceConfig
+from second_brain.ingestion.intake import (
+    SUPPORTED_EXTENSIONS,
+    source_name,
+    stage_watched_file,
+    stage_watched_folders,
+)
 from second_brain.ingestion.manifest import Manifest
 
 logger = logging.getLogger(__name__)
 
-SUPPORTED_EXTENSIONS = {".pdf", ".md", ".txt", ".tex", ".json"}
 # File writes often arrive as multiple rapid events (create, modify, flush);
 # debouncing ensures we process each file only once after it stabilizes
 DEBOUNCE_SECONDS = 2.0
@@ -79,6 +84,8 @@ class IngestionEventHandler(FileSystemEventHandler):
             and enabled for this source.
         """
         if path.suffix.lower() not in SUPPORTED_EXTENSIONS:
+            return False
+        if any(part.startswith(".") for part in path.relative_to(self._source_config.path).parts):
             return False
         allowed = {f".{ft}" for ft in self._source_config.file_types}
         return path.suffix.lower() in allowed
@@ -166,6 +173,15 @@ def watch_sources(
     observer = Observer()
     handlers: list[IngestionEventHandler] = []
 
+    def process_event(path: Path, name: str) -> None:
+        queued = (
+            path
+            if path.is_relative_to(config.drops_dir)
+            else stage_watched_file(path, name, config, manifest)
+        )
+        if queued is not None and _prepare_queued_file(queued, name, config, manifest):
+            process_callback(queued, name)
+
     for name, source in config.sources.items():
         if not source.enabled:
             continue
@@ -173,7 +189,7 @@ def watch_sources(
             logger.warning("Source path does not exist: %s (%s)", source.path, name)
             continue
 
-        handler = IngestionEventHandler(source, process_callback, manifest)
+        handler = IngestionEventHandler(source, process_event, manifest)
         handler.set_source_name(name)
         handlers.append(handler)
         observer.schedule(handler, str(source.path), recursive=True)
@@ -268,28 +284,24 @@ def batch_scan(
     """
     from second_brain.api.status import clear_status, now_iso, write_status
 
-    # Gather the work list up front so the heartbeat can report an
-    # accurate "i of n" as files are processed.
+    if not drops_only:
+        stage_watched_folders(config, manifest)
+
     work: list[tuple[Path, str]] = []
-    for name, source in config.sources.items():
-        if not source.enabled or not source.path.exists():
-            if source.enabled:
-                logger.warning("Source path does not exist: %s (%s)", source.path, name)
+    for file_path in sorted(config.drops_dir.rglob("*")):
+        if not file_path.is_file() or file_path.suffix.lower() not in SUPPORTED_EXTENSIONS:
             continue
-        if drops_only and not _is_drop_lane(source.path, config):
+        if any(part.startswith(".") for part in file_path.relative_to(config.drops_dir).parts):
             continue
-        allowed = {f".{ft}" for ft in source.file_types}
-        # Sorted so files are parsed in a predictable order, alphabetically by path.
-        for file_path in sorted(source.path.rglob("*")):
-            if file_path.is_dir() or file_path.suffix.lower() not in allowed:
+        name = source_name(file_path, config)
+        source = config.sources.get(name)
+        if source is not None:
+            if not source.enabled and _is_drop_lane(source.path, config):
                 continue
-            if manifest.needs_processing(file_path, config.raw_dir):
-                work.append((file_path, name))
-            else:
-                # A re-dropped copy of ingested content would otherwise sit in
-                # the queue indefinitely and be re-hashed on every scan.
-                manifest.mark_duplicate(file_path, name)
-                remove_drop_copy(file_path, config)
+            if file_path.suffix.lower().lstrip(".") not in source.file_types:
+                continue
+        if _prepare_queued_file(file_path, name, config, manifest):
+            work.append((file_path, name))
 
     # Exports must be expanded before slow document parsers delay their chats.
     work.sort(key=lambda entry: (entry[0].suffix.lower() != ".json", str(entry[0])))
@@ -340,6 +352,17 @@ def batch_scan(
 
     logger.info("Batch scan complete: %d files processed", processed)
     return processed
+
+
+def _prepare_queued_file(path: Path, name: str, config: Config, manifest: Manifest) -> bool:
+    """Clear duplicate queue copies while leaving unchanged failures visible."""
+    if manifest.needs_processing(path, config.raw_dir):
+        return True
+    entry = manifest.get_entry(path)
+    if entry is None or entry.status in ("pending", "complete", "duplicate"):
+        manifest.mark_duplicate(path, name)
+        remove_drop_copy(path, config)
+    return False
 
 
 async def batch_scan_async(

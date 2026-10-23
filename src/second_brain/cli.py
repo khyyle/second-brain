@@ -273,7 +273,24 @@ def ingest(
             completed = len(paths)
             emit_state(config)
         elif file_path:
-            ingested = ingest_file(Path(file_path).expanduser().resolve(), config, manifest)
+            from second_brain.ingestion.intake import source_name, stage_watched_file
+
+            target = Path(file_path).expanduser().resolve()
+            entry = manifest.get_entry(target)
+            if entry is not None and entry.origin_path and Path(entry.origin_path).exists():
+                stage_watched_file(
+                    Path(entry.origin_path),
+                    entry.source_type,
+                    config,
+                    manifest,
+                    force=not target.exists(),
+                )
+            elif not target.is_relative_to(config.drops_dir):
+                target = stage_watched_file(
+                    target, source_name(target, config), config, manifest, force=True
+                )
+                assert target is not None
+            ingested = ingest_file(target, config, manifest)
             if ingested:
                 completed = 1
             else:

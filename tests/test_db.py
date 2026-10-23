@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from second_brain.db import connect, migrate
+from second_brain.db import _add_build_content_hashes, _create_tables, connect, migrate
+from second_brain.ingestion.manifest import Manifest
 
 
 def _version(db_path: Path) -> int:
@@ -50,3 +51,25 @@ def test_migrating_again_changes_nothing(tmp_path: Path) -> None:
     with connect(db_path) as conn:
         rows = conn.execute("SELECT raw_path FROM compiled").fetchall()
     assert [row["raw_path"] for row in rows] == ["documents/a.md"]
+
+
+def test_existing_manifest_rows_survive_adding_watched_origins(tmp_path: Path) -> None:
+    db_path = tmp_path / "manifest.db"
+    with connect(db_path) as conn:
+        _create_tables(conn)
+        _add_build_content_hashes(conn)
+        conn.execute(
+            "INSERT INTO manifest "
+            "(file_path, sha256, source_type, status, ingested_at, updated_at) "
+            "VALUES ('/watched/notes.md', 'original-hash', 'research', 'complete', 'then', 'then')"
+        )
+        # Version 2 is the persisted schema before watched-origin tracking.
+        conn.execute("PRAGMA user_version = 2")
+
+    migrate(db_path)
+    entry = Manifest(db_path).get_entry(Path("/watched/notes.md"))
+
+    assert entry.sha256 == "original-hash"
+    assert entry.status == "complete"
+    assert entry.origin_path is None
+    assert entry.origin_sha256 is None
