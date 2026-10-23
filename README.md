@@ -107,6 +107,7 @@ See [Querying over MCP](docs/mcp.md) for more details and tool reference.
 - [Command line](docs/cli.md): manage the pipeline and inspect vault status from the terminal.
 - [Querying over MCP](docs/mcp.md): configure desktop AI clients and query tools.
 - [Architecture](docs/architecture.md): pipeline execution model and on-disk layout.
+- [Backend development](docs/backend-development.md): run the Django API, navigate feature apps, and add services, models, and tests.
 - [Wiki structure](docs/wiki-structure.md): vault directory layout, metadata conventions, and link semantics.
 - [Data lifecycle and deletion](docs/lifecycle.md): content hashing, caching, and recovery behavior.
 
