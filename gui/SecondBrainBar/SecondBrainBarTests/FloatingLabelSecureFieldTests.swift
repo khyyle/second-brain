@@ -62,9 +62,14 @@ final class FloatingLabelSecureFieldTests: XCTestCase {
         XCTAssertEqual(draft.key, "test-only-key")
         XCTAssertEqual(hosting.fittingSize.height, 52, accuracy: 0.5)
 
+        editor.selectAll(nil)
+        editor.insertText("replacement", replacementRange: NSRange(location: NSNotFound, length: 0))
+        settle(hosting)
+        XCTAssertEqual(draft.key, "replacement")
+
         XCTAssertTrue(window.makeFirstResponder(nil))
         settle(hosting)
-        XCTAssertEqual(field.stringValue, "test-only-key")
+        XCTAssertEqual(field.stringValue, "replacement")
         XCTAssertEqual(hosting.fittingSize.height, 52, accuracy: 0.5)
 
         draft.key = ""

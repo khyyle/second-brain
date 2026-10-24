@@ -50,6 +50,8 @@ struct SettingsView: View {
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .topLeading)
+        .contentShape(Rectangle())
+        .onTapGesture { NSApp.keyWindow?.makeFirstResponder(nil) }
         .onAppear(perform: load)
         .disabled(saving)
         .alert("Couldn't update settings", isPresented: Binding(
