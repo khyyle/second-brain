@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from second_brain.apps.ingestion.services.parsing.provider import ParseLane
-from second_brain.apps.ingestion.services.parsing.router import classify_page
+from second_brain.apps.ingestion.services.parsing.parser_protocol import ParseLane
+from second_brain.apps.ingestion.services.parsing.pdf_routing import classify_page
 
 
 class FakePage:

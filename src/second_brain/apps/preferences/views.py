@@ -1,4 +1,4 @@
-"""Settings contracts; vault config and Keychain integration remain implementation work."""
+"""HTTP entry points for preferences, credentials, and assistant integrations."""
 
 from typing import Literal
 
@@ -13,88 +13,94 @@ from second_brain.apps.preferences.schemas import (
     SettingsUpdate,
     WatchedFolder,
 )
-from second_brain.config import Config
-from second_brain.django_config.scaffold import ErrorResponse, pending
+from second_brain.apps.preferences.services import (
+    catalog,
+    mcp_integrations,
+    provider_credentials,
+    user_settings,
+)
+from second_brain.apps.preferences.services import watched_folders as folders
+from second_brain.django_config.schemas import ErrorResponse
+from second_brain.ollama.client import check_ollama
+from second_brain.pipeline_config import Preferences
 
 router = Router(tags=["Preferences"])
 MCPTarget = Literal["claude-desktop", "chatgpt-desktop", "cursor"]
 
 
-@router.get("/catalog", response={200: Catalog, 501: ErrorResponse})
-def get_catalog(request: HttpRequest) -> Catalog:
-    """TODO: Serialize llm.SUPPORTED_MODELS/resolve_profile and file/profile choices.
-
-    Replace Swift's duplicated catalog; keep application definitions in Python code.
-    """
-    pending("Read application catalog")
+@router.get("/catalog", response={200: Catalog, 400: ErrorResponse, 503: ErrorResponse})
+def get_catalog(request: HttpRequest) -> dict:
+    """List supported models, prices, file types, and default preferences."""
+    return catalog.get_catalog()
 
 
-@router.get("/settings", response={200: Config, 501: ErrorResponse})
-def read_settings(request: HttpRequest) -> Config:
-    """TODO: Add preferences/services/configuration.py to load <vault>/config.yaml.
-
-    Use settings.VAULT_DIR as the authoritative vault, validate with Config, and adopt
-    legacy config/config.yaml + sources.json deliberately. Never include provider keys.
-    """
-    pending("Read settings")
+@router.get("/settings", response={200: Preferences, 400: ErrorResponse, 503: ErrorResponse})
+def read_settings(request: HttpRequest) -> Preferences:
+    """Read the validated preferences for the active vault."""
+    return user_settings.get_preferences()
 
 
-@router.patch("/settings", response={200: Config, 501: ErrorResponse})
-def patch_settings(request: HttpRequest, payload: SettingsUpdate) -> Config:
-    """TODO: Merge payload.model_dump(exclude_unset=True) with current preferences,
-    validate the merged Config, then save atomically under a lock. Do not reset omitted
-    nested settings. Reject null sections. The running vault cannot change via this API.
-    """
-    pending("Update settings")
+@router.patch("/settings", response={200: Preferences, 400: ErrorResponse, 503: ErrorResponse})
+def patch_settings(request: HttpRequest, payload: SettingsUpdate) -> Preferences:
+    """Merge supplied preferences and atomically save the validated result."""
+    return user_settings.update_preferences(payload.model_dump(mode="json", exclude_unset=True))
 
 
-@router.get("/watched-folders", response={200: list[WatchedFolder], 501: ErrorResponse})
-def watched_folders(request: HttpRequest) -> list[WatchedFolder]:
-    """TODO: Return user sources from vault config, excluding built-in drop folders.
+@router.get(
+    "/watched-folders", response={200: list[WatchedFolder], 400: ErrorResponse, 503: ErrorResponse}
+)
+def watched_folders(request: HttpRequest) -> list[dict]:
+    """List configured input folders and their enabled file types."""
+    return folders.list_folders()
 
-    Replaces SourcesStore and config._merge_user_sources once adoption is implemented.
-    """
-    pending("Read watched folders")
 
-
-@router.put("/watched-folders", response={200: list[WatchedFolder], 501: ErrorResponse})
+@router.put(
+    "/watched-folders", response={200: list[WatchedFolder], 400: ErrorResponse, 503: ErrorResponse}
+)
 def replace_watched_folders(
     request: HttpRequest,
     payload: list[WatchedFolder],
-) -> list[WatchedFolder]:
-    """TODO: Validate unique/reserved names and paths; persist with settings atomically.
-
-    Backend watchers will consume these settings; saving must not start a build.
-    """
-    pending("Update watched folders")
+) -> list[dict]:
+    """Validate and replace the complete watched-folder configuration."""
+    return folders.replace_folders([item.model_dump(mode="json") for item in payload])
 
 
-@router.get("/credentials/{provider}", response={200: CredentialStatus, 501: ErrorResponse})
-def credential_status(request: HttpRequest, provider: str) -> CredentialStatus:
-    """TODO: Report whether the backend can access this provider's Keychain credential.
-
-    GUI saves secrets using native Keychain APIs. Establish shared access before workers
-    use them; return configured status only, never the secret. No provider env fallback.
-    """
-    pending("Read credential availability")
-
-
-@router.get("/diagnostics", response={200: Diagnostics, 501: ErrorResponse})
-def diagnostics(request: HttpRequest) -> Diagnostics:
-    """TODO: Adapt cli.doctor / ollama.client.check_ollama with a bounded timeout."""
-    pending("Read dependency diagnostics")
+@router.get(
+    "/credentials/{provider}",
+    response={200: CredentialStatus, 400: ErrorResponse, 503: ErrorResponse},
+)
+def credential_status(request: HttpRequest, provider: str) -> dict:
+    """Report whether the provider credential is available in Keychain."""
+    return {"provider": provider, "configured": bool(provider_credentials.read_api_key(provider))}
 
 
-@router.get("/integrations/mcp/{target}", response={200: IntegrationStatus, 501: ErrorResponse})
-def integration_status(request: HttpRequest, target: MCPTarget) -> IntegrationStatus:
-    """TODO: Inspect mcp_server.install's target/config metadata without changing it."""
-    pending("Read MCP integration status")
+@router.get("/diagnostics", response={200: Diagnostics, 400: ErrorResponse, 503: ErrorResponse})
+def diagnostics(request: HttpRequest) -> dict:
+    """Check Ollama availability and required local models."""
+    probe = check_ollama(user_settings.get_pipeline_config())
+    return {
+        "healthy": probe.reachable and not probe.missing_models,
+        "reachable": probe.reachable,
+        "host": probe.host,
+        "required_models": list(probe.required_models),
+        "missing_models": list(probe.missing_models),
+        "message": probe.message(),
+    }
 
 
-@router.put("/integrations/mcp/{target}", response={200: IntegrationStatus, 501: ErrorResponse})
-def install_integration(request: HttpRequest, target: MCPTarget) -> IntegrationStatus:
-    """TODO: Call mcp_server.install.install_mcp_client after explicit GUI Connect action.
+@router.get(
+    "/integrations/mcp/{target}",
+    response={200: IntegrationStatus, 400: ErrorResponse, 503: ErrorResponse},
+)
+def integration_status(request: HttpRequest, target: MCPTarget) -> dict:
+    """Check whether the selected assistant has the MCP integration installed."""
+    return mcp_integrations.status(target)
 
-    Preserve unrelated client configuration; this intentionally changes an external file.
-    """
-    pending("Configure MCP integration")
+
+@router.put(
+    "/integrations/mcp/{target}",
+    response={200: IntegrationStatus, 400: ErrorResponse, 503: ErrorResponse},
+)
+def install_integration(request: HttpRequest, target: MCPTarget) -> dict:
+    """Configure the selected assistant while preserving other integrations."""
+    return mcp_integrations.install(target)

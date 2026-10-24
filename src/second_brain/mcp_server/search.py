@@ -18,10 +18,10 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
-from second_brain.apps.wiki.services.structure import LINK_KINDS, extract_typed_edges
-from second_brain.config import SearchConfig
+from second_brain.apps.wiki.services.wiki_structure import LINK_KINDS, extract_typed_edges
 from second_brain.ollama import embeddings
 from second_brain.ollama.client import OllamaUnavailableError
+from second_brain.pipeline_config import SearchConfig
 
 logger = logging.getLogger(__name__)
 
@@ -619,7 +619,7 @@ class SearchIndex:
         ----------
         kinds: tuple[str, ...] | None
             Edge kinds to keep; each must be one of
-            ``second_brain.apps.wiki.services.structure.LINK_KINDS``.
+            ``second_brain.apps.wiki.services.wiki_structure.LINK_KINDS``.
 
         Returns
         -------
@@ -657,7 +657,7 @@ class SearchIndex:
             Page stems to walk out from.
         kinds: tuple[str, ...] | None, default=None
             Edge kinds to traverse; each must be one of
-            ``second_brain.apps.wiki.services.structure.LINK_KINDS``. ``None`` traverses
+            ``second_brain.apps.wiki.services.wiki_structure.LINK_KINDS``. ``None`` traverses
             every kind.
         following: str
             Which end of each edge to walk toward: ``"targets"`` for what a
@@ -717,7 +717,7 @@ class SearchIndex:
             Stems to read outgoing edges from; each is matched as an edge source.
         kinds: tuple[str, ...] | None
             Edge kinds to include; each must be one of
-            ``second_brain.apps.wiki.services.structure.LINK_KINDS``. ``None`` includes every
+            ``second_brain.apps.wiki.services.wiki_structure.LINK_KINDS``. ``None`` includes every
             kind.
 
         Returns
@@ -895,7 +895,7 @@ class SearchIndex:
         int
             Number of pages (re)indexed during this sync.
         """
-        from second_brain.apps.wiki.services.structure import CONTENT_DIRS, _parse_frontmatter
+        from second_brain.apps.wiki.services.wiki_structure import CONTENT_DIRS, _parse_frontmatter
 
         with self._conn() as conn:
             rows = conn.execute("SELECT stem, content_hash, mtime FROM wiki_meta").fetchall()
@@ -967,7 +967,7 @@ class SearchIndex:
         int
             Number of pages indexed.
         """
-        from second_brain.apps.wiki.services.structure import CONTENT_DIRS, _parse_frontmatter
+        from second_brain.apps.wiki.services.wiki_structure import CONTENT_DIRS, _parse_frontmatter
 
         with self._conn() as conn:
             conn.execute("DELETE FROM wiki_fts")

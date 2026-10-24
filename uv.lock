@@ -3367,7 +3367,7 @@ requires-dist = [
     { name = "chandra-ocr", extras = ["hf"] },
     { name = "click" },
     { name = "django", specifier = ">=5.2,<5.3" },
-    { name = "django-ninja", specifier = ">=1.4,<2" },
+    { name = "django-ninja", specifier = ">=1.7,<2" },
     { name = "docling" },
     { name = "mcp", extras = ["cli"] },
     { name = "mlx-vlm", marker = "platform_machine == 'arm64' and sys_platform == 'darwin'" },

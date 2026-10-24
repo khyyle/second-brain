@@ -5,8 +5,8 @@ from __future__ import annotations
 import httpx
 import pytest
 
-from second_brain.config import Config
 from second_brain.ollama import client as ollama_client
+from second_brain.pipeline_config import PipelineConfig
 
 
 class _FakeResponse:
@@ -20,7 +20,7 @@ class _FakeResponse:
         return self._payload
 
 
-def test_unreachable_server(config: Config, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_unreachable_server(config: PipelineConfig, monkeypatch: pytest.MonkeyPatch) -> None:
     def _raise(*_args, **_kwargs):
         raise httpx.ConnectError("connection refused")
 
@@ -36,7 +36,9 @@ def test_unreachable_server(config: Config, monkeypatch: pytest.MonkeyPatch) -> 
     )
 
 
-def test_healthy_when_all_models_present(config: Config, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_healthy_when_all_models_present(
+    config: PipelineConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
     payload = {"models": [{"name": "gemma4:12b"}, {"name": "nomic-embed-text:latest"}]}
     monkeypatch.setattr(ollama_client.httpx, "get", lambda *a, **k: _FakeResponse(payload))
 
@@ -47,7 +49,7 @@ def test_healthy_when_all_models_present(config: Config, monkeypatch: pytest.Mon
     assert status.missing_models == ()
 
 
-def test_reports_missing_model(config: Config, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_reports_missing_model(config: PipelineConfig, monkeypatch: pytest.MonkeyPatch) -> None:
     # Embedding model absent; only the tagged Gemma is installed.
     payload = {"models": [{"name": "gemma4:12b"}]}
     monkeypatch.setattr(ollama_client.httpx, "get", lambda *a, **k: _FakeResponse(payload))
@@ -63,7 +65,9 @@ def test_reports_missing_model(config: Config, monkeypatch: pytest.MonkeyPatch) 
     )
 
 
-def test_wrong_gemma_tag_is_missing(config: Config, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_wrong_gemma_tag_is_missing(
+    config: PipelineConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
     # A tagged requirement (gemma4:12b) must match exactly, not just the repo.
     payload = {"models": [{"name": "gemma4:4b"}, {"name": "nomic-embed-text:latest"}]}
     monkeypatch.setattr(ollama_client.httpx, "get", lambda *a, **k: _FakeResponse(payload))

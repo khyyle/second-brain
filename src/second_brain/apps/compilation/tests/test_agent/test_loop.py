@@ -16,12 +16,12 @@ from second_brain.apps.compilation.tests.fakes import (
     install_fake,
     status_error,
 )
-from second_brain.apps.wiki.services.schema import register_domains, write_default_schema
-from second_brain.apps.wiki.services.structure import serialize_page
-from second_brain.config import CompilationConfig, Config
+from second_brain.apps.wiki.services.topic_schema import register_domains, write_default_schema
+from second_brain.apps.wiki.services.wiki_structure import serialize_page
 from second_brain.llm import resolve_profile
 from second_brain.mcp_server.tools import WikiTools
 from second_brain.ollama.client import OllamaUnavailableError
+from second_brain.pipeline_config import CompilationConfig, PipelineConfig
 
 
 class FakeBlock:
@@ -48,8 +48,8 @@ def _make_config(
     max_iterations: int = 20,
     cost_cap: float = 0.0,
     explore_tools: bool = False,
-) -> Config:
-    config = Config(
+) -> PipelineConfig:
+    config = PipelineConfig(
         data_dir=tmp_path / "sb",
         compilation=CompilationConfig(
             max_iterations=max_iterations,
@@ -61,7 +61,7 @@ def _make_config(
     return config
 
 
-def _run(config: Config) -> RunResult:
+def _run(config: PipelineConfig) -> RunResult:
     return loop.run_agent(
         config,
         ["a.md"],

@@ -5,12 +5,12 @@ from pathlib import Path
 
 import pytest
 
-from second_brain.apps.ingestion.services import pdf_handler
-from second_brain.config import Config, SourceConfig
+from second_brain.apps.ingestion.services.parsing import pdf_handler
+from second_brain.pipeline_config import PipelineConfig, SourceConfig
 
 
 @pytest.fixture
-def watched_config(config: Config, tmp_path: Path) -> Config:
+def watched_config(config: PipelineConfig, tmp_path: Path) -> PipelineConfig:
     watched = tmp_path / "watched"
     watched.mkdir()
     return config.model_copy(

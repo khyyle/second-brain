@@ -15,7 +15,6 @@ Explicit caching is used for Anthropic models.
 
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
 
 # Selectable models per provider.
@@ -49,7 +48,6 @@ _MODELS: dict[str, _ModelSpec] = {
 
 @dataclass(frozen=True)
 class _ProviderSpec:
-    api_key_env: str
     base_url: str | None
     prompt_caching: bool
     cache_read_multiplier: float
@@ -58,7 +56,6 @@ class _ProviderSpec:
 
 _PROVIDERS: dict[str, _ProviderSpec] = {
     "anthropic": _ProviderSpec(
-        api_key_env="ANTHROPIC_API_KEY",
         base_url=None,
         prompt_caching=True,
         cache_read_multiplier=0.1,
@@ -66,7 +63,6 @@ _PROVIDERS: dict[str, _ProviderSpec] = {
     ),
     # DeepSeek auto-caches, so multipliers are kept inert
     "deepseek": _ProviderSpec(
-        api_key_env="DEEPSEEK_API_KEY",
         base_url="https://api.deepseek.com/anthropic",
         prompt_caching=False,
         cache_read_multiplier=0,
@@ -85,8 +81,7 @@ class ProviderProfile:
         Provider key (``"anthropic"`` or ``"deepseek"``).
     model: str
         Model id passed to the Anthropic Messages API.
-    api_key_env: str
-        Environment variable holding the API key.
+
     base_url: str | None
         Override base URL, or ``None`` for Anthropic's default.
     prompt_caching: bool
@@ -109,7 +104,7 @@ class ProviderProfile:
 
     name: str
     model: str
-    api_key_env: str
+
     base_url: str | None
     prompt_caching: bool
     input_price_per_mtok: float
@@ -142,12 +137,9 @@ class ProviderProfile:
             + output_tokens / 1_000_000 * self.output_price_per_mtok
         )
 
-    def client_kwargs(self) -> dict:
-        """Build kwargs for the Messages API client from the environment."""
-        kwargs: dict = {}
-        api_key = os.environ.get(self.api_key_env)
-        if api_key:
-            kwargs["api_key"] = api_key
+    def client_kwargs(self, api_key: str) -> dict:
+        """Build SDK transport arguments from an explicitly supplied in-memory secret."""
+        kwargs = {"api_key": api_key}
         if self.base_url:
             kwargs["base_url"] = self.base_url
         return kwargs
@@ -196,7 +188,6 @@ def resolve_profile(provider: str, model: str | None) -> ProviderProfile:
     return ProviderProfile(
         name=provider,
         model=chosen_model,
-        api_key_env=spec.api_key_env,
         base_url=spec.base_url,
         prompt_caching=spec.prompt_caching,
         input_price_per_mtok=model_spec.input_price_per_mtok,

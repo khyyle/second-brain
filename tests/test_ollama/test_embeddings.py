@@ -10,7 +10,6 @@ from __future__ import annotations
 import httpx
 import pytest
 
-from second_brain.config import SearchConfig
 from second_brain.ollama import client as ollama_client
 from second_brain.ollama import embeddings as embeddings_mod
 from second_brain.ollama.client import OllamaUnavailableError
@@ -20,6 +19,7 @@ from second_brain.ollama.embeddings import (
     EmbeddingRole,
     embed_text,
 )
+from second_brain.pipeline_config import SearchConfig
 
 
 def _patch_chunk(

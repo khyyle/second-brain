@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import logging
-from typing import Annotated
+from collections.abc import Callable
+from typing import Annotated, Any
 
 from mcp.server.fastmcp import FastMCP
 from pydantic import Field
 
-from second_brain.config import load_config
-from second_brain.mcp_server.search import SearchIndex
+from second_brain.backend_client import BackendClient, BackendRequestError
 from second_brain.mcp_server.tools import (
     DEFAULT_GAPS_LIMIT,
     DEFAULT_LIST_LIMIT,
@@ -19,34 +19,29 @@ from second_brain.mcp_server.tools import (
     DEFAULT_SEARCH_LIMIT,
     DEFAULT_SOURCES_LIMIT,
     INDEX_PAGES_PER_DOMAIN,
-    WikiTools,
 )
-from second_brain.ollama.client import OllamaUnavailableError
 
 logger = logging.getLogger(__name__)
 
 mcp = FastMCP("second-brain")
 
-_tools: WikiTools | None = None
+_client = BackendClient()
 
 
-def _get_tools() -> WikiTools:
-    """
-    Lazily initialize and return the shared WikiTools instance.
+class RemoteTools:
+    """Dispatch named assistant tools through the local HTTP API."""
 
-    Returns
-    -------
-    WikiTools
-        Singleton tools instance backed by the user's config.
-    """
-    global _tools
-    if _tools is None:
-        config = load_config()
-        search_index = SearchIndex(config.search_db_path, config.search)
-        _tools = WikiTools(config.wiki_dir, config.raw_dir, search_index)
+    def __getattr__(self, name: str) -> Callable[..., str]:
+        def call(*args: Any, **kwargs: Any) -> str:
+            return _client.request(
+                "POST", f"/assistant-tools/{name}", payload={"args": list(args), "kwargs": kwargs}
+            )
 
-    _tools.ensure_synced()
-    return _tools
+        return call
+
+
+def _get_tools() -> RemoteTools:
+    return RemoteTools()
 
 
 @mcp.tool()
@@ -108,7 +103,9 @@ def semantic_search(
     """
     try:
         return _get_tools().semantic_search(query, limit)
-    except OllamaUnavailableError:
+    except BackendRequestError as error:
+        if error.status_code != 503:
+            raise
         # The person asking can't see this tool's output, so the agent has
         # to relay it or the degraded answer looks like a complete one.
         return (
@@ -329,21 +326,11 @@ def list_gaps(
     return _get_tools().list_gaps(limit=limit, offset=offset)
 
 
-def serve() -> None:
-    """
-    Start the MCP server.
-
-    Rebuilds the search index from any existing wiki content, then
-    enters the FastMCP run loop (called by CLI or spawned by Claude
-    Desktop).
-    """
-    config = load_config()
-    search_index = SearchIndex(config.search_db_path, config.search)
-
-    if config.wiki_dir.exists():
-        search_index.sync_from_wiki(config.wiki_dir)
-
-    logger.info("Starting MCP server for wiki at %s", config.wiki_dir)
+def serve(client: BackendClient | None = None) -> None:
+    """Start the stdio adapter with no database or filesystem mutations."""
+    global _client
+    if client is not None:
+        _client = client
     mcp.run()
 
 

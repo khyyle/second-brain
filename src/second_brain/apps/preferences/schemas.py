@@ -3,26 +3,35 @@
 from ninja import Schema
 from pydantic import ConfigDict, Field
 
-from second_brain.config import (
+from second_brain.pipeline_config import (
     ClusteringConfig,
-    CompilationConfig,
     ParsingConfig,
-    ScheduleConfig,
     SearchConfig,
     SourceConfig,
     TriageConfig,
 )
 
 
+class CompilationUpdate(Schema):
+    """Partial fields; provider/model compatibility is checked after merging settings."""
+
+    model_config = ConfigDict(extra="forbid")
+    provider: str | None = None
+    model: str | None = None
+    max_tokens_per_page: int | None = None
+    max_iterations: int | None = None
+    max_cost_per_build_usd: float | None = None
+    explore_tools: bool | None = None
+
+
 class SettingsUpdate(Schema):
     model_config = ConfigDict(extra="forbid")
     sources: dict[str, SourceConfig] | None = None
     parsing: ParsingConfig | None = None
-    compilation: CompilationConfig | None = None
+    compilation: CompilationUpdate | None = None
     clustering: ClusteringConfig | None = None
     search: SearchConfig | None = None
     triage: TriageConfig | None = None
-    schedule: ScheduleConfig | None = None
 
 
 class WatchedFolder(Schema):
@@ -31,6 +40,7 @@ class WatchedFolder(Schema):
     path: str
     enabled: bool = True
     file_types: list[str] = Field(default_factory=lambda: ["pdf", "md", "txt"])
+    force_parse_lane: str | None = None
 
 
 class CredentialStatus(Schema):

@@ -18,8 +18,8 @@ from pathlib import Path
 
 from second_brain.apps.compilation.services.clustering import get_clusterer
 from second_brain.apps.compilation.services.clustering.sources import cluster_scoped_sources
-from second_brain.config import Config
 from second_brain.llm import SUPPORTED_MODELS, resolve_profile
+from second_brain.pipeline_config import PipelineConfig
 
 logger = logging.getLogger(__name__)
 
@@ -103,12 +103,12 @@ def model_prices() -> dict[str, tuple[float, float]]:
     return prices
 
 
-def _staged_sources(config: Config) -> list[str]:
+def _staged_sources(config: PipelineConfig) -> list[str]:
     """Return the raw paths the build would compile: new and worthwhile.
 
     Parameters
     ----------
-    config: Config
+    config: PipelineConfig
         Application configuration.
 
     Returns
@@ -116,7 +116,7 @@ def _staged_sources(config: Config) -> list[str]:
     list[str]
         Sorted relative raw paths staged for compilation.
     """
-    from second_brain.apps.compilation.services.compiler import find_new_sources
+    from second_brain.apps.compilation.services.staging import find_new_sources
     from second_brain.apps.ingestion.services.triage.pipeline import worthwhile_sources
 
     new_sources = find_new_sources(config)
@@ -126,14 +126,16 @@ def _staged_sources(config: Config) -> list[str]:
 
 
 def build_preview(
-    config: Config,
+    config: PipelineConfig,
     progress: Callable[[int, int], None] | None = None,
+    *,
+    sources: list[str] | None = None,
 ) -> dict:
     """Cluster the staged sources and return a preview artifact dict.
 
     Parameters
     ----------
-    config: Config
+    config: PipelineConfig
         Application configuration (clustering and embedding settings).
     progress: Callable[[int, int], None] | None
         Called with ``(done, total)`` as sources are embedded, for a live
@@ -145,18 +147,22 @@ def build_preview(
         The preview artifact: metadata plus a list of group descriptors,
         each with a stable id, representative title, members, and cost.
     """
-    staged = _staged_sources(config)
+    staged = _staged_sources(config) if sources is None else sources
     profile = resolve_profile(config.compilation.provider, config.compilation.model)
     prices = model_prices()
-    clusters = cluster_scoped_sources(
-        staged,
-        config.raw_dir,
-        config.search,
-        get_clusterer(config.clustering),
-        config.clustering.sources,
-        signature_chars=config.clustering.signature_chars,
-        progress=progress,
-    )
+    if config.clustering.enabled:
+        clusters = cluster_scoped_sources(
+            staged,
+            config.raw_dir,
+            config.search,
+            get_clusterer(config.clustering),
+            config.clustering.sources,
+            signature_chars=config.clustering.signature_chars,
+            progress=progress,
+        )
+
+    else:
+        clusters = [[source] for source in staged]
 
     groups: list[dict] = []
     total_costs: dict[str, float] = dict.fromkeys(prices, 0.0)
@@ -194,14 +200,14 @@ def build_preview(
 
 
 def write_preview(
-    config: Config,
+    config: PipelineConfig,
     progress: Callable[[int, int], None] | None = None,
 ) -> dict:
     """Compute the preview, write it to the vault, and clear stale overrides.
 
     Parameters
     ----------
-    config: Config
+    config: PipelineConfig
         Application configuration.
     progress: Callable[[int, int], None] | None
         Forwarded to :func:`build_preview` for a live progress readout.

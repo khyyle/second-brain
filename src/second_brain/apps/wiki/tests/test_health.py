@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from second_brain.apps.wiki.services.domain_ops import delete_domain
+from second_brain.apps.wiki.services.domain_actions import delete_domain
 from second_brain.apps.wiki.services.health import run_health_check
 
 

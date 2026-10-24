@@ -7,8 +7,6 @@ from pathlib import Path
 
 import pytest
 
-from second_brain.db import _MIGRATIONS
-
 
 @pytest.mark.parametrize("version", [1, 2, 3])
 def test_launcher_adopts_legacy_data_and_preserves_a_backup(
@@ -21,8 +19,9 @@ def test_launcher_adopts_legacy_data_and_preserves_a_backup(
     legacy = sqlite3.connect(database)
     try:
         legacy.execute("PRAGMA journal_mode=WAL")
-        for migration in _MIGRATIONS[:version]:
-            migration(legacy)
+        fixtures = Path(__file__).with_name("fixtures")
+        for schema_version in range(1, version + 1):
+            legacy.executescript((fixtures / f"legacy_schema_v{schema_version}.sql").read_text())
         legacy.execute(f"PRAGMA user_version={version}")
         timestamp = "2026-10-23T12:34:56+00:00"
         legacy.execute(

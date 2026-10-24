@@ -12,7 +12,6 @@ from .base import sqlite_database
 
 load_environment()
 
-# Normal application values are the defaults. Development overrides are explicit.
 DEBUG = env_bool("SECOND_BRAIN_DEBUG", default=False)
 API_DOCS_ENABLED = DEBUG
 
@@ -29,9 +28,9 @@ try:
     BACKEND_PORT = int(os.environ.get("SECOND_BRAIN_PORT", "8000"))
 except ValueError as exc:
     raise ImproperlyConfigured(
-        "SECOND_BRAIN_PORT must be an integer between 0 and 65535."
+        "SECOND_BRAIN_PORT must be an integer between 1 and 65535."
     ) from exc
-if not 0 <= BACKEND_PORT <= 65535:
-    raise ImproperlyConfigured("SECOND_BRAIN_PORT must be an integer between 0 and 65535.")
+if not 1 <= BACKEND_PORT <= 65535:
+    raise ImproperlyConfigured("SECOND_BRAIN_PORT must be an integer between 1 and 65535.")
 
 SECRET_KEY = os.environ.get("SECOND_BRAIN_SECRET_KEY") or signing_key(VAULT_DIR)

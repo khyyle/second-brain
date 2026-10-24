@@ -1,41 +1,30 @@
-"""Tests for the Ollama preflight gate used before a build."""
+"""Diagnostics are a backend operation exposed by the thin CLI."""
 
-from __future__ import annotations
+import json
 
-from pathlib import Path
+from click.testing import CliRunner
 
-import pytest
-from click import ClickException
-
-from second_brain import cli
-from second_brain.config import Config
-from second_brain.ollama import client as ollama_client
+from second_brain.cli import main
 
 
-def _status(*, reachable: bool, missing: tuple[str, ...]) -> ollama_client.OllamaStatus:
-    return ollama_client.OllamaStatus(
-        host="http://localhost:11434",
-        reachable=reachable,
-        required_models=("gemma4:12b", "nomic-embed-text"),
-        missing_models=missing,
-    )
+def test_doctor_reads_backend_diagnostics(monkeypatch):
+    calls = []
+
+    def request(self, method, path, **kwargs):
+        calls.append((method, path))
+        return {"healthy": True}
+
+    monkeypatch.setattr("second_brain.backend_client.BackendClient.request", request)
+    result = CliRunner().invoke(main, ["doctor"])
+    assert result.exit_code == 0
+    assert calls == [("GET", "/diagnostics")]
 
 
-def test_require_ollama_raises_when_unhealthy(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_unhealthy_doctor_preserves_json_and_exits_nonzero(monkeypatch):
+    diagnostics = {"healthy": False, "message": "Start Ollama and try again."}
     monkeypatch.setattr(
-        ollama_client, "check_ollama", lambda _config: _status(reachable=False, missing=("x",))
+        "second_brain.backend_client.BackendClient.request", lambda *args, **kwargs: diagnostics
     )
-    with pytest.raises(ClickException):
-        cli._require_ollama(Config(data_dir=tmp_path))
-
-
-def test_require_ollama_passes_when_healthy(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(
-        ollama_client, "check_ollama", lambda _config: _status(reachable=True, missing=())
-    )
-    # Should not raise.
-    cli._require_ollama(Config(data_dir=tmp_path))
+    result = CliRunner().invoke(main, ["doctor", "--json"])
+    assert result.exit_code == 1
+    assert json.loads(result.output) == diagnostics

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import threading
 from pathlib import Path
 
@@ -10,10 +9,11 @@ import pytest
 
 from second_brain.apps.ingestion.services.triage import pipeline as pipeline_mod
 from second_brain.apps.ingestion.services.triage.gemma import TriageDecision, TriageResult
-from second_brain.apps.ingestion.services.triage.store import TriageStore
-from second_brain.apps.jobs.services.status import STATUS_FILENAME
-from second_brain.config import Config
+from second_brain.apps.ingestion.services.triage.triage_decisions import TriageStore
 from second_brain.ollama.client import OllamaUnavailableError
+from second_brain.pipeline_config import PipelineConfig
+
+pytestmark = pytest.mark.django_db(transaction=True)
 
 
 def _write(raw_dir: Path, rel: str, text: str) -> None:
@@ -23,7 +23,10 @@ def _write(raw_dir: Path, rel: str, text: str) -> None:
 
 
 def test_triage_only_touches_scoped_lanes(
-    config: Config, triage_store: TriageStore, monkeypatch: pytest.MonkeyPatch
+    config: PipelineConfig,
+    triage_store: TriageStore,
+    monkeypatch: pytest.MonkeyPatch,
+    read_job_progress,
 ) -> None:
     _write(config.raw_dir, "chatgpt/chat.md", "chat body " * 100)
     _write(config.raw_dir, "documents/doc.md", "doc body " * 100)
@@ -43,15 +46,14 @@ def test_triage_only_touches_scoped_lanes(
 
 
 def test_the_heartbeat_names_the_chat_being_triaged_and_those_waiting(
-    config: Config, monkeypatch: pytest.MonkeyPatch
+    config: PipelineConfig, monkeypatch: pytest.MonkeyPatch, read_job_progress
 ) -> None:
     _write(config.raw_dir, "chatgpt/a.md", "chat body " * 100)
     _write(config.raw_dir, "chatgpt/b.md", "chat body " * 100)
-    status_file = config.data_dir / STATUS_FILENAME
     heartbeats: list[tuple[list[str], list[str]]] = []
 
     def fake_triage(path: Path, _config: object) -> TriageResult:
-        heartbeat = json.loads(status_file.read_text())
+        heartbeat = read_job_progress()
         heartbeats.append((heartbeat["current_sources"], heartbeat["queued_sources"]))
         return TriageResult(decision=TriageDecision.WORTHWHILE, confidence=0.9)
 
@@ -63,40 +65,39 @@ def test_the_heartbeat_names_the_chat_being_triaged_and_those_waiting(
 
 
 def test_a_blocking_triage_keeps_its_heartbeat_fresh(
-    config: Config, monkeypatch: pytest.MonkeyPatch
+    config: PipelineConfig, monkeypatch: pytest.MonkeyPatch, read_job_progress
 ) -> None:
     _write(config.raw_dir, "chatgpt/slow.md", "chat body " * 100)
-    status_file = config.data_dir / STATUS_FILENAME
     started = threading.Event()
     refreshed = threading.Event()
-    touch_status = pipeline_mod.touch_status
+    touch_heartbeat = pipeline_mod.touch_heartbeat
 
-    def record_refresh(data_dir: Path) -> None:
-        touch_status(data_dir)
+    def record_refresh() -> None:
+        touch_heartbeat()
         if started.is_set():
             refreshed.set()
 
     def blocking_triage(_path: Path, _config: object) -> TriageResult:
-        before = json.loads(status_file.read_text())
+        before = read_job_progress()
         started.set()
         assert refreshed.wait(timeout=1)
-        after = json.loads(status_file.read_text())
+        after = read_job_progress()
         assert after["updated_at"] > before["updated_at"]
         assert after["current_started_at"] == before["current_started_at"]
         assert after["current_sources"] == ["chatgpt/slow.md"]
         return TriageResult(decision=TriageDecision.WORTHWHILE, confidence=0.9)
 
     monkeypatch.setattr(pipeline_mod, "_HEARTBEAT_INTERVAL_SECONDS", 0.01)
-    monkeypatch.setattr(pipeline_mod, "touch_status", record_refresh)
+    monkeypatch.setattr(pipeline_mod, "touch_heartbeat", record_refresh)
     monkeypatch.setattr(pipeline_mod, "triage_file", blocking_triage)
 
     pipeline_mod.triage_pending(config)
 
-    assert json.loads(status_file.read_text())["running"] is False
+    assert read_job_progress()["running"] is False
 
 
 def test_each_decision_is_reported_and_a_skip_is_held_at_once(
-    config: Config, monkeypatch: pytest.MonkeyPatch
+    config: PipelineConfig, monkeypatch: pytest.MonkeyPatch, read_job_progress
 ) -> None:
     _write(config.raw_dir, "chatgpt/keep.md", "chat body " * 100)
     _write(config.raw_dir, "chatgpt/skip.md", "chat body " * 100)
@@ -119,7 +120,10 @@ def test_each_decision_is_reported_and_a_skip_is_held_at_once(
 
 
 def test_triage_skips_a_vanished_source(
-    config: Config, triage_store: TriageStore, monkeypatch: pytest.MonkeyPatch
+    config: PipelineConfig,
+    triage_store: TriageStore,
+    monkeypatch: pytest.MonkeyPatch,
+    read_job_progress,
 ) -> None:
     # A source deleted mid-run must be skipped, not crash the whole pass.
     _write(config.raw_dir, "chatgpt/present.md", "body " * 100)
@@ -141,7 +145,10 @@ def test_triage_skips_a_vanished_source(
 
 
 def test_triage_stops_when_ollama_stops(
-    config: Config, triage_store: TriageStore, monkeypatch: pytest.MonkeyPatch
+    config: PipelineConfig,
+    triage_store: TriageStore,
+    monkeypatch: pytest.MonkeyPatch,
+    read_job_progress,
 ) -> None:
     for name in ("a.md", "b.md", "c.md"):
         _write(config.raw_dir, f"chatgpt/{name}", "body " * 100)
@@ -163,11 +170,11 @@ def test_triage_stops_when_ollama_stops(
     assert "chatgpt/a.md" in decisions
     assert "chatgpt/b.md" not in decisions
     assert "chatgpt/c.md" not in decisions
-    status = json.loads((config.data_dir / STATUS_FILENAME).read_text(encoding="utf-8"))
+    status = read_job_progress()
     assert status["running"] is False
 
 
-def test_worthwhile_sources_holds_undecided_chats(config: Config) -> None:
+def test_worthwhile_sources_holds_undecided_chats(config: PipelineConfig) -> None:
     sources = ["chatgpt/chat.md", "documents/doc.md"]
 
     assert pipeline_mod.worthwhile_sources(config, sources) == ["documents/doc.md"]

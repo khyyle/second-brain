@@ -11,7 +11,7 @@ from second_brain.apps.compilation.services.agent.tools import (
     build_source_block,
     compact_history,
 )
-from second_brain.apps.wiki.services.structure import _parse_frontmatter
+from second_brain.apps.wiki.services.wiki_structure import _parse_frontmatter
 
 
 def _executor(tmp_path: Path) -> tuple[WikiToolExecutor, Path, Path]:

@@ -28,8 +28,8 @@ from pathlib import Path
 import httpx
 
 from second_brain.apps.ingestion.services.triage.prompts import get_prompt
-from second_brain.config import TriageConfig
 from second_brain.ollama.client import OllamaUnavailableError, post_to_ollama
+from second_brain.pipeline_config import TriageConfig
 
 logger = logging.getLogger(__name__)
 

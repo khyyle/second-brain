@@ -6,10 +6,10 @@ from second_brain.apps.ingestion.services.triage.skipped import (
     move_skips_to_holding,
     purge_skipped,
 )
-from second_brain.config import Config
+from second_brain.pipeline_config import PipelineConfig
 
 
-def test_purge_skipped_removes_folder(config: Config) -> None:
+def test_purge_skipped_removes_folder(config: PipelineConfig) -> None:
     skipped = config.raw_dir / ".skipped" / "chatgpt"
     skipped.mkdir(parents=True, exist_ok=True)
     (skipped / "junk.md").write_text("y", encoding="utf-8")
@@ -19,11 +19,11 @@ def test_purge_skipped_removes_folder(config: Config) -> None:
     assert not (config.raw_dir / ".skipped").exists()
 
 
-def test_purge_skipped_noop_when_absent(config: Config) -> None:
+def test_purge_skipped_noop_when_absent(config: PipelineConfig) -> None:
     purge_skipped(config.raw_dir)  # must not raise
 
 
-def test_move_skips_to_holding_moves_only_skips(config: Config) -> None:
+def test_move_skips_to_holding_moves_only_skips(config: PipelineConfig) -> None:
     raw = config.raw_dir
     for rel in ("chatgpt/skip-me.md", "chatgpt/keep.md", "chatgpt/review-me.md"):
         path = raw / rel

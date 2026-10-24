@@ -6,7 +6,7 @@ from pathlib import Path
 
 import yaml
 
-from second_brain.apps.wiki.services.schema import (
+from second_brain.apps.wiki.services.topic_schema import (
     DEFAULT_SCHEMA,
     register_domains,
     write_default_schema,

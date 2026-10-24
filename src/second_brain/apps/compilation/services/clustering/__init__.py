@@ -14,7 +14,7 @@ from second_brain.apps.compilation.services.clustering.sources import (
     embed_sources,
 )
 from second_brain.apps.compilation.services.clustering.threshold import ThresholdClusterer
-from second_brain.config import ClusteringConfig
+from second_brain.pipeline_config import ClusteringConfig
 
 __all__ = [
     "Clusterer",

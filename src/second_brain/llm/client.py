@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import os
-
 import anthropic
 
 from second_brain.llm.errors import ModelError, ModelErrorKind, classify_status
@@ -17,37 +15,41 @@ def create_client(profile: ProviderProfile) -> anthropic.Anthropic:
     Parameters
     ----------
     profile: ProviderProfile
-        Transport settings, including which environment variable holds the
-        API key and an optional base URL.
+        Transport settings and the provider identity used to read its Keychain item.
 
     Returns
     -------
     anthropic.Anthropic
-        Client configured from the profile and the current environment.
+        Client configured from the profile and the Keychain credential.
     """
-    return anthropic.Anthropic(**profile.client_kwargs())
+    return anthropic.Anthropic(**profile.client_kwargs(require_api_key(profile)))
 
 
-def require_api_key(profile: ProviderProfile) -> None:
+def require_api_key(profile: ProviderProfile) -> str:
     """
-    Raise when the profile's API key is missing from the environment.
+    Raise when the provider has no accessible Keychain credential.
 
     Parameters
     ----------
     profile: ProviderProfile
-        Provider whose key variable is checked.
+        Provider whose Keychain item is checked.
 
     Raises
     ------
     ModelError
-        Kind ``ACCOUNT`` when the variable is unset or empty.
+        Kind ``ACCOUNT`` when the Keychain item is absent or empty.
     """
-    if not os.environ.get(profile.api_key_env):
+    from second_brain.apps.preferences.services.provider_credentials import read_api_key
+
+    key = read_api_key(profile.name)
+    if not key:
         raise ModelError(
             ModelErrorKind.ACCOUNT,
-            f"{profile.api_key_env} isn't set. Add the API key in Settings, or in .env "
-            "at the repository root, then build again.",
+            f"No {profile.name} credential is available in Keychain. "
+            "Add it in Settings, then build again.",
         )
+
+    return key
 
 
 def _error_code(body: object) -> str | None:

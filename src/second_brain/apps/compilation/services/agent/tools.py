@@ -7,7 +7,7 @@ import re
 from pathlib import Path
 
 from second_brain.apps.wiki.services.slugs import normalize_link_list, normalize_wikilinks, slugify
-from second_brain.apps.wiki.services.structure import (
+from second_brain.apps.wiki.services.wiki_structure import (
     _FRONTMATTER_RE,
     CONTENT_DIRS,
     FRONTMATTER_EDGE_FIELDS,

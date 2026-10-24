@@ -6,7 +6,7 @@ from pathlib import Path
 
 from second_brain.apps.compilation.services.agent.prompt import COMPILATION_SYSTEM_PROMPT
 from second_brain.apps.compilation.services.agent.tools import WikiToolExecutor
-from second_brain.apps.wiki.services.structure import CONTENT_DIRS, _parse_frontmatter
+from second_brain.apps.wiki.services.wiki_structure import CONTENT_DIRS, _parse_frontmatter
 
 
 def _executor(tmp_path: Path) -> tuple[WikiToolExecutor, Path]:

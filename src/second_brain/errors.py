@@ -9,13 +9,13 @@ class SecondBrainError(Exception):
     Ollama down, an exhausted account) and the raising code can say what went
     wrong.
 
-    Unexpected failures should keep built-in exceptions so the CLI reports them
-    as crashes, and thus should not inherit this class.
+    Unexpected failures should keep built-in exceptions so API/worker handlers log
+    the traceback and return a generic failure, and thus should not inherit this class.
 
     Parameters
     ----------
     reason: str
-        One sentence, shown as-is by the CLI and recorded in the run record.
+        One sentence, shown by clients and retained in the durable job result/error.
     """
 
     def __init__(self, reason: str) -> None:

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from second_brain.apps.wiki.services.structure import (
+from second_brain.apps.wiki.services.wiki_structure import (
     _parse_frontmatter,
     build_link_graph,
     detect_gaps,

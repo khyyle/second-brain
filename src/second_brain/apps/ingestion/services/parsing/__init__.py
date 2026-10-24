@@ -1,6 +1,6 @@
 """Parsing service — document conversion to structured markdown + JSON."""
 
-from second_brain.apps.ingestion.services.parsing.provider import (
+from second_brain.apps.ingestion.services.parsing.parser_protocol import (
     DocumentParser,
     ParseBlock,
     ParseLane,

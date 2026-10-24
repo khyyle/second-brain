@@ -13,9 +13,9 @@ from second_brain.apps.compilation.services.clustering import (
     get_clusterer,
 )
 from second_brain.apps.compilation.services.clustering import sources as sources_mod
-from second_brain.config import ClusteringConfig, SearchConfig
 from second_brain.ollama.client import OllamaUnavailableError
 from second_brain.ollama.embeddings import EmbeddingRole
+from second_brain.pipeline_config import ClusteringConfig, SearchConfig
 
 
 def _write(raw_dir: Path, rel: str, text: str) -> None:

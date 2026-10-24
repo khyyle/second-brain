@@ -1,0 +1,296 @@
+"""ChatGPT JSON export parser — converts conversations to individual markdown files."""
+
+from __future__ import annotations
+
+import json
+import logging
+from datetime import UTC, datetime
+from pathlib import Path
+
+from second_brain.apps.ingestion.services.parsing.parsed_output import write_parse_output
+from second_brain.apps.ingestion.services.parsing.parser_protocol import (
+    ParseBlock,
+    ParseLane,
+    ParseResult,
+)
+from second_brain.apps.wiki.services.slugs import slugify
+from second_brain.errors import SecondBrainError
+
+logger = logging.getLogger(__name__)
+
+
+class ExportFormatError(SecondBrainError):
+    """A dropped file or folder is not a readable ChatGPT export."""
+
+
+# Cap source slugs so nested dirs + the conversation-ID suffix stay under the
+# macOS 1024-byte path limit.
+_MAX_SOURCE_SLUG_CHARS = 80
+
+
+def _slugify(title: str) -> str:
+    """Convert a conversation title to a filesystem-safe kebab-case slug.
+
+    Parameters
+    ----------
+    title: str
+        Raw conversation title.
+
+    Returns
+    -------
+    str
+        Kebab-cased slug capped at 80 characters, or ``"untitled"`` when the
+        title yields no slug-able characters.
+    """
+    return slugify(title)[:_MAX_SOURCE_SLUG_CHARS] or "untitled"
+
+
+def _format_timestamp(ts: float | int | None) -> str:
+    """Convert a Unix timestamp to an ISO date string.
+
+    Parameters
+    ----------
+    ts: float | int | None
+        Unix epoch seconds, or ``None`` if unavailable.
+
+    Returns
+    -------
+    str
+        ISO date (``YYYY-MM-DD``) or ``"unknown"`` when *ts* is None.
+    """
+    if ts is None:
+        return "unknown"
+    return datetime.fromtimestamp(ts, tz=UTC).strftime("%Y-%m-%d")
+
+
+def _extract_message_text(message: dict) -> str | None:
+    """Extract text content from a ChatGPT message node.
+
+    Parameters
+    ----------
+    message: dict
+        A single message object from the ChatGPT export mapping.
+
+    Returns
+    -------
+    str | None
+        Concatenated text parts, or ``None`` if the message has no
+        extractable text.
+    """
+    content = message.get("content", {})
+    parts = content.get("parts")
+    if not parts:
+        return None
+
+    # ChatGPT export format uses "parts" that can be plain strings
+    # or dicts with a "text" key (for multimodal messages)
+    texts = []
+    for part in parts:
+        if isinstance(part, str):
+            texts.append(part)
+        elif isinstance(part, dict) and "text" in part:
+            texts.append(part["text"])
+    return "\n".join(texts) if texts else None
+
+
+def _conversation_to_parse_result(conversation: dict) -> ParseResult | None:
+    """Convert a single ChatGPT conversation dict to a ParseResult.
+
+    Parameters
+    ----------
+    conversation: dict
+        One conversation object from the ``conversations.json`` array.
+
+    Returns
+    -------
+    ParseResult | None
+        Structured result with markdown and blocks, or ``None`` if the
+        entry is not a conversation object or has no user/assistant
+        messages.
+    """
+    if not isinstance(conversation, dict):
+        return None
+    title = conversation.get("title", "Untitled Conversation")
+    create_time = conversation.get("create_time")
+    conversation_id = conversation.get("id", conversation.get("conversation_id", "unknown"))
+
+    mapping = conversation.get("mapping", {})
+    if not mapping:
+        return None
+
+    # The mapping dict is keyed by node id, not ordered chronologically, so
+    # sort by create_time to reconstruct the real conversation flow.
+    ordered_messages: list[tuple[str, str, float]] = []
+    for node in mapping.values():
+        message = node.get("message")
+        if message is None:
+            continue
+        role = message.get("author", {}).get("role", "unknown")
+        if role not in ("user", "assistant"):
+            continue
+        text = _extract_message_text(message)
+        if not text or not text.strip():
+            continue
+        created_at = message.get("create_time", 0) or 0
+        ordered_messages.append((role, text, created_at))
+
+    ordered_messages.sort(key=lambda entry: entry[2])
+
+    if not ordered_messages:
+        return None
+
+    md_lines = [
+        "---",
+        f'title: "{title}"',
+        "type: chatgpt-conversation",
+        f"conversation_id: {conversation_id}",
+        f"date: {_format_timestamp(create_time)}",
+        "---",
+        "",
+        f"# {title}",
+        "",
+    ]
+
+    blocks: list[ParseBlock] = []
+    for order, (role, text, _) in enumerate(ordered_messages):
+        label = "**User**" if role == "user" else "**Assistant**"
+        md_lines.append(f"### {label}\n")
+        md_lines.append(text)
+        md_lines.append("")
+
+        blocks.append(
+            ParseBlock(
+                content=text,
+                block_type="text",
+                page_number=1,
+                reading_order=order,
+            )
+        )
+
+    return ParseResult(
+        markdown="\n".join(md_lines),
+        blocks=blocks,
+        metadata={
+            "source": f"chatgpt/{conversation_id}",
+            "parse_lane": ParseLane.PASSTHROUGH.value,
+            "conversation_id": conversation_id,
+            "title": title,
+            "date": _format_timestamp(create_time),
+        },
+    )
+
+
+def _resolve_conversation_files(export_path: Path) -> list[Path]:
+    """Locate conversation JSON files from a ChatGPT data export.
+
+    Handles both the legacy single-file format (``conversations.json``)
+    and the newer split format (``conversations-000.json``, etc.).
+
+    Parameters
+    ----------
+    export_path: Path
+        A ``.json`` file or the extracted export directory.
+
+    Returns
+    -------
+    list[Path]
+        Sorted list of conversation JSON file paths.
+
+    Raises
+    ------
+    ExportFormatError
+        If *export_path* is not a ``.json`` file or a folder holding
+        ``conversations.json`` or ``conversations-*.json``.
+    """
+    if export_path.suffix == ".json" and export_path.is_file():
+        return [export_path]
+
+    if not export_path.is_dir():
+        raise ExportFormatError(
+            f"{export_path.name} isn't a ChatGPT export. "
+            "Choose the .json file or the export folder."
+        )
+
+    single = export_path / "conversations.json"
+    if single.exists():
+        return [single]
+
+    split_files = sorted(export_path.glob("conversations-*.json"))
+    if split_files:
+        return split_files
+
+    raise ExportFormatError(f"No conversations.json found in {export_path.name}.")
+
+
+def process_chatgpt_export(
+    export_path: Path,
+    output_dir: Path,
+) -> list[Path]:
+    """Parse a ChatGPT export and write each conversation as markdown.
+
+    Accepts a single ``conversations.json``, an extracted export directory
+    containing one, or a directory with the split format
+    (``conversations-000.json``, ``conversations-001.json``, ...).
+
+    Parameters
+    ----------
+    export_path: Path
+        Path to the JSON file or extracted export directory.
+    output_dir: Path
+        Directory to write per-conversation markdown files into.
+
+    Returns
+    -------
+    list[Path]
+        Paths to the generated markdown files.
+
+    Raises
+    ------
+    ExportFormatError
+        If the export can't be located, a file isn't valid JSON or a JSON
+        array, or no conversations could be parsed.
+    """
+    json_paths = _resolve_conversation_files(export_path)
+
+    conversations: list[dict] = []
+    for json_path in json_paths:
+        try:
+            with open(json_path, encoding="utf-8") as json_file:
+                parsed = json.load(json_file)
+        except json.JSONDecodeError as exc:
+            raise ExportFormatError(f"{json_path.name} isn't valid JSON.") from exc
+        if not isinstance(parsed, list):
+            raise ExportFormatError(f"{json_path.name} isn't a ChatGPT export.")
+        conversations.extend(parsed)
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output_paths: list[Path] = []
+    skipped = 0
+
+    for conversation in conversations:
+        result = _conversation_to_parse_result(conversation)
+        if result is None:
+            skipped += 1
+            continue
+
+        slug = _slugify(conversation.get("title", "untitled"))
+        conversation_id = conversation.get("id", conversation.get("conversation_id", ""))
+        # Disambiguate conversations that share a title.
+        stem = f"{slug}-{conversation_id[:8]}" if conversation_id else slug
+
+        md_path, _ = write_parse_output(result, output_dir, stem)
+        output_paths.append(md_path)
+
+    # A file that parsed as JSON but yielded no conversations is not a usable
+    # ChatGPT export. Fail loudly so it surfaces for the user rather than
+    # vanishing as a silent no-op.
+    if not output_paths:
+        raise ExportFormatError(f"{export_path.name} has no ChatGPT conversations.")
+
+    logger.info(
+        "Parsed %d conversations (%d skipped) from %s",
+        len(output_paths),
+        skipped,
+        export_path,
+    )
+    return output_paths

@@ -4,7 +4,7 @@ import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from second_brain.apps.wiki.services.structure import (
+from second_brain.apps.wiki.services.wiki_structure import (
     build_link_graph,
     detect_orphans,
     discover_all_pages,

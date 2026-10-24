@@ -21,6 +21,7 @@ class JobOut(ModelSchema):
             "created_at",
             "started_at",
             "finished_at",
+            "heartbeat_at",
             "retry_of",
         ]
 

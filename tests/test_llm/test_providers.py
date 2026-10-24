@@ -5,8 +5,8 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from second_brain.config import CompilationConfig
 from second_brain.llm import SUPPORTED_MODELS, resolve_profile
+from second_brain.pipeline_config import CompilationConfig
 
 
 def test_anthropic_profile_defaults() -> None:
@@ -15,14 +15,12 @@ def test_anthropic_profile_defaults() -> None:
     assert profile.model == "claude-sonnet-4-6"
     assert profile.base_url is None
     assert profile.prompt_caching is True
-    assert profile.api_key_env == "ANTHROPIC_API_KEY"
     assert profile.input_price_per_mtok == 3.0
 
 
 def test_deepseek_profile_uses_anthropic_compatible_endpoint() -> None:
     profile = resolve_profile("deepseek", None)
     assert profile.base_url == "https://api.deepseek.com/anthropic"
-    assert profile.api_key_env == "DEEPSEEK_API_KEY"
     # DeepSeek ignores cache_control, so we don't send it.
     assert profile.prompt_caching is False
     # Default model when none is configured (Flash: cheapest, fits the task).
@@ -96,10 +94,10 @@ def test_estimate_cost_discounts_cache_tokens() -> None:
     assert cost == pytest.approx(3.0 + 0.3 + 6.0 + 15.0)
 
 
-def test_client_kwargs_reads_env(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_client_kwargs_uses_explicit_credential(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
-    kwargs = resolve_profile("deepseek", None).client_kwargs()
+    kwargs = resolve_profile("deepseek", None).client_kwargs("test-key")
     assert kwargs == {
-        "api_key": "sk-test",
+        "api_key": "test-key",
         "base_url": "https://api.deepseek.com/anthropic",
     }

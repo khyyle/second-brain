@@ -3,49 +3,60 @@
 from uuid import UUID
 
 from django.http import HttpRequest
-from ninja import Query, Router
+from ninja import Query, Router, Status
 
+from second_brain.apps.jobs.models import Job
 from second_brain.apps.jobs.schemas import JobOut, JobPage, JobProgress
-from second_brain.django_config.scaffold import ErrorResponse, pending
+from second_brain.apps.jobs.services import job_queue
+from second_brain.django_config.schemas import ErrorResponse
 
 router = Router(tags=["Jobs"])
 
 
-@router.get("/jobs", response={200: JobPage, 501: ErrorResponse})
+@router.get(
+    "/jobs", response={200: JobPage, 400: ErrorResponse, 404: ErrorResponse, 409: ErrorResponse}
+)
 def list_jobs(
     request: HttpRequest,
     lane: str | None = None,
     status: str | None = None,
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
-) -> JobPage:
-    """TODO: Query/filter Job, order by -created_at/id, count and slice."""
-    pending("List jobs")
+) -> dict:
+    """List attempts newest first, with optional lane and status filters."""
+    return job_queue.list_jobs(lane=lane, status=status, limit=limit, offset=offset)
 
 
-@router.get("/jobs/{job_id}", response={200: JobProgress, 501: ErrorResponse})
-def get_job(request: HttpRequest, job_id: UUID) -> JobProgress:
-    """TODO: Load Job and per-job progress; 404 if absent.
-
-    services.status currently writes one shared .status.json. Make progress job-scoped
-    before allowing ingest and build workers to run at the same time.
-    """
-    pending("Read job")
-
-
-@router.post("/jobs/{job_id}/cancel", response={200: JobOut, 501: ErrorResponse})
-def cancel_job(request: HttpRequest, job_id: UUID) -> JobOut:
-    """TODO: Atomically cancel queued jobs or request cooperative cancellation of running jobs.
-
-    Adapt services.status.request_stop to target a job; finished jobs stay finished.
-    """
-    pending("Cancel job")
+@router.get(
+    "/jobs/{job_id}",
+    response={200: JobProgress, 400: ErrorResponse, 404: ErrorResponse, 409: ErrorResponse},
+)
+def get_job(request: HttpRequest, job_id: UUID) -> dict:
+    """Read an attempt and its latest recorded progress."""
+    job = job_queue.get_job(job_id)
+    return {"job": job, "progress": job.progress}
 
 
-@router.post("/jobs/{job_id}/retry", response={202: JobOut, 501: ErrorResponse})
-def retry_job(request: HttpRequest, job_id: UUID) -> tuple[int, JobOut]:
-    """TODO: Create a new attempt with retry_of; enqueue with transaction.on_commit.
+@router.post(
+    "/jobs/{job_id}/cancel",
+    response={200: JobOut, 400: ErrorResponse, 404: ErrorResponse, 409: ErrorResponse},
+)
+def cancel_job(request: HttpRequest, job_id: UUID) -> Job:
+    """Cancel queued work or request a cooperative stop for a running attempt."""
+    return job_queue.cancel(job_id)
 
-    Validate terminal status and reusable inputs. Do not overwrite the failed attempt.
-    """
-    pending("Retry job")
+
+@router.post(
+    "/jobs/{job_id}/retry",
+    response={
+        202: JobOut,
+        400: ErrorResponse,
+        404: ErrorResponse,
+        409: ErrorResponse,
+        500: ErrorResponse,
+        503: ErrorResponse,
+    },
+)
+def retry_job(request: HttpRequest, job_id: UUID) -> Status[Job]:
+    """Accept a fresh attempt, applying the same prerequisites as the original request."""
+    return Status(202, job_queue.retry(job_id))

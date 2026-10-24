@@ -10,8 +10,8 @@ from dataclasses import dataclass
 
 import httpx
 
-from second_brain.config import Config
 from second_brain.errors import SecondBrainError
+from second_brain.pipeline_config import PipelineConfig
 
 PROBE_TIMEOUT_SECONDS = 5.0
 
@@ -54,7 +54,7 @@ class OllamaStatus:
         return "Ollama is running with the required models."
 
 
-def required_models(config: Config) -> tuple[str, ...]:
+def required_models(config: PipelineConfig) -> tuple[str, ...]:
     """The Ollama models the pipeline depends on (triage + embeddings)."""
     return (config.triage.model, config.search.embedding_model)
 
@@ -86,7 +86,7 @@ def _is_present(required: str, installed: set[str]) -> bool:
     return any(name.split(":", 1)[0] == required for name in installed)
 
 
-def check_ollama(config: Config) -> OllamaStatus:
+def check_ollama(config: PipelineConfig) -> OllamaStatus:
     """Probe Ollama for reachability and the presence of required models."""
     host = config.triage.ollama_host
     needed = required_models(config)

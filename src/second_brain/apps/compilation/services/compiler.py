@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 import subprocess
-import threading
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -18,14 +17,16 @@ from second_brain.apps.compilation.services.agent.loop import (
     run_agent,
     too_large_reason,
 )
-from second_brain.apps.compilation.services.store import BuildStore, DeferredSource
+from second_brain.apps.compilation.services.build_log import record_built_pages
+from second_brain.apps.compilation.services.build_records import BuildStore
+from second_brain.apps.compilation.services.staging import find_new_sources
 from second_brain.apps.ingestion.services.triage.skipped import purge_skipped
-from second_brain.apps.jobs.services.build_log import record_built_pages
-from second_brain.apps.jobs.services.run_record import CRASH_REASON, StageOutcome
-from second_brain.apps.wiki.services.structure import rebuild_structure
-from second_brain.config import Config
-from second_brain.hashing import hash_file
+from second_brain.apps.jobs.outcomes import CRASH_REASON, StageOutcome
+from second_brain.apps.wiki.services.wiki_structure import rebuild_structure
+from second_brain.errors import SecondBrainError
+from second_brain.file_hashing import hash_file
 from second_brain.llm import require_api_key, resolve_profile
+from second_brain.pipeline_config import PipelineConfig
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +62,9 @@ def _split_oversized(clusters: list[list[str]], max_size: int) -> list[list[str]
     return units
 
 
-def _build_work_units(config: Config, raw_dir: Path, new_sources: list[str]) -> list[list[str]]:
+def _build_work_units(
+    config: PipelineConfig, raw_dir: Path, new_sources: list[str]
+) -> list[list[str]]:
     """Group staged sources into the per-run work units for this build.
 
     A reviewed cluster preview drives the build where each group is narrowed to the
@@ -72,7 +75,7 @@ def _build_work_units(config: Config, raw_dir: Path, new_sources: list[str]) -> 
 
     Parameters
     ----------
-    config: Config
+    config: PipelineConfig
         Application configuration (clustering and embedding settings).
     raw_dir: Path
         Directory containing raw parsed source files.
@@ -110,85 +113,8 @@ def _build_work_units(config: Config, raw_dir: Path, new_sources: list[str]) -> 
     return _split_oversized(clusters, config.clustering.max_sources_per_run)
 
 
-def _raw_sources(raw_dir: Path) -> list[str]:
-    """Relative paths of every raw markdown source, outside hidden folders such as
-    the skipped holding folder."""
-    if not raw_dir.exists():
-        return []
-    sources: list[str] = []
-    for md_file in raw_dir.rglob("*.md"):
-        relative = md_file.relative_to(raw_dir)
-        if not any(part.startswith(".") for part in relative.parts):
-            sources.append(str(relative))
-    return sorted(sources)
-
-
-def _record_is_current(recorded_hash: str | None, raw_file: Path) -> bool:
-    # Records made before hashes were kept have none; trust them rather than
-    # paying to rebuild every source.
-    return recorded_hash is None or recorded_hash == hash_file(raw_file)
-
-
 def _hash_sources(raw_dir: Path, raw_paths: list[str]) -> dict[str, str]:
     return {rel: hash_file(raw_dir / rel) for rel in raw_paths}
-
-
-def find_new_sources(config: Config) -> list[str]:
-    """
-    Find raw source files that haven't been compiled in their current version.
-
-    A source whose file changed since it was built is staged again. Set-aside
-    sources (a prior run ended without completing) are excluded until their
-    file changes, so scheduled builds don't retry them unattended.
-
-    Parameters
-    ----------
-    config: Config
-        Application configuration.
-
-    Returns
-    -------
-    list[str]
-        Sorted relative paths of raw sources to compile.
-    """
-    raw_dir = config.raw_dir
-    build_store = BuildStore(config.manifest_db_path)
-    compiled_hashes = build_store.get_compiled()
-    deferred_sources = build_store.get_deferred()
-
-    new_sources: list[str] = []
-    for rel in _raw_sources(raw_dir):
-        raw_file = raw_dir / rel
-        if rel in deferred_sources and _record_is_current(
-            deferred_sources[rel].content_hash, raw_file
-        ):
-            continue
-        if rel in compiled_hashes and _record_is_current(compiled_hashes[rel], raw_file):
-            continue
-        new_sources.append(rel)
-    return new_sources
-
-
-def find_set_aside_sources(config: Config) -> dict[str, DeferredSource]:
-    """
-    Find set-aside sources whose file is still the version that was set aside.
-
-    Parameters
-    ----------
-    config: Config
-        Application configuration.
-
-    Returns
-    -------
-    dict[str, DeferredSource]
-        Relative raw path mapped to why the build set it aside.
-    """
-    raw_dir = config.raw_dir
-    return {
-        rel: deferred
-        for rel, deferred in BuildStore(config.manifest_db_path).get_deferred().items()
-        if (raw_dir / rel).exists() and _record_is_current(deferred.content_hash, raw_dir / rel)
-    }
 
 
 def _source_count(count: int) -> str:
@@ -249,40 +175,18 @@ def _outcome_fields(
 
 
 @contextmanager
-def _build_heartbeat(data_dir: Path) -> Iterator[None]:
-    """Keep blocking model calls visible and clear build flags on exit.
+def _build_progress() -> Iterator[None]:
+    """Mark progress idle on exit, including cancellation or a failed conversation."""
+    from second_brain.apps.jobs.services.job_progress import finish_progress
 
-    Parameters
-    ----------
-    data_dir: Path
-        Vault containing the progress and stop files.
-
-    Yields
-    ------
-    None
-        The build can run while a thread refreshes its heartbeat.
-    """
-    from second_brain.apps.jobs.services.status import clear_status, clear_stop, touch_status
-
-    stop = threading.Event()
-
-    def keepalive() -> None:
-        while not stop.wait(5.0):
-            touch_status(data_dir)
-
-    heartbeat = threading.Thread(target=keepalive, daemon=True)
-    heartbeat.start()
     try:
         yield
     finally:
-        stop.set()
-        heartbeat.join(timeout=2.0)
-        clear_stop(data_dir)
-        clear_status(data_dir)
+        finish_progress()
 
 
 def _run_unit(
-    config: Config,
+    config: PipelineConfig,
     sources: list[str],
     *,
     started_at: str,
@@ -293,7 +197,7 @@ def _run_unit(
 
     Parameters
     ----------
-    config: Config
+    config: PipelineConfig
         Vault paths and model settings.
     sources: list[str]
         Sources in this conversation.
@@ -309,12 +213,15 @@ def _run_unit(
     RunResult
         Conversation outcome, including an explicit stop or unexpected failure.
     """
-    from second_brain.apps.jobs.services.status import now_iso, stop_requested, write_status
+    from second_brain.apps.jobs.services.job_progress import (
+        now_iso,
+        stop_requested,
+        update_progress,
+    )
 
     unit_started_at = now_iso()
     current, total = progress
-    write_status(
-        config.data_dir,
+    update_progress(
         phase="compile",
         current=current,
         total=total,
@@ -333,18 +240,23 @@ def _run_unit(
             progress=progress,
             unit_started_at=unit_started_at,
         )
+    except SecondBrainError as exc:
+        # Credentials/dependencies can change after request-time validation.
+        # Preserve the expected reason while allowing the caller to roll back this unit.
+        logger.warning("Compile stopped for %s: %s", ", ".join(sources), exc.reason)
+        result = RunResult(0.0, RunOutcome.FAILED, exc.reason)
     except Exception:
         # Unexpected failures still need a result so the caller can roll back
         # the current conversation before stopping the build.
         logger.exception("Compile failed for %s", ", ".join(sources))
         result = RunResult(0.0, RunOutcome.FAILED, CRASH_REASON)
-    if stop_requested(config.data_dir):
+    if stop_requested():
         return RunResult(result.cost, RunOutcome.STOPPED)
     return result
 
 
 def _compile_work_units(
-    config: Config,
+    config: PipelineConfig,
     work_units: list[list[str]],
     build_store: BuildStore,
     *,
@@ -355,7 +267,7 @@ def _compile_work_units(
 
     Parameters
     ----------
-    config: Config
+    config: PipelineConfig
         Vault paths and build limits.
     work_units: list[list[str]]
         Source groups, in build order.
@@ -371,7 +283,7 @@ def _compile_work_units(
     dict
         Completed source count, build outcome, reason, and remaining counts.
     """
-    from second_brain.apps.jobs.services.status import stop_requested
+    from second_brain.apps.jobs.services.job_progress import stop_requested
 
     compiled_count = 0
     deferred_count = 0
@@ -385,9 +297,9 @@ def _compile_work_units(
         config.compilation.provider, config.compilation.model
     ).context_window_tokens
 
-    with _build_heartbeat(config.data_dir):
+    with _build_progress():
         for index, unit in enumerate(work_units):
-            if stop_requested(config.data_dir):
+            if stop_requested():
                 logger.info("Stop requested before group %d/%d", index + 1, total)
                 outcome = StageOutcome.STOPPED
                 break
@@ -420,8 +332,8 @@ def _compile_work_units(
                 _git_restore(config.wiki_dir)
             match result.outcome:
                 case RunOutcome.COMPLETED:
-                    build_store.mark_compiled(unit_hashes)
                     _git_commit(config.wiki_dir)
+                    build_store.mark_compiled(unit_hashes)
                     record_built_pages(config.data_dir, list(result.changes), unit)
                     compiled_count += len(unit)
                 case RunOutcome.STOPPED:
@@ -455,7 +367,7 @@ def _compile_work_units(
     left_count = staged_count - compiled_count - deferred_count
     outcome, reason = _finalize_outcome(outcome, reason, deferred_count, left_count)
     # Incomplete builds leave curation open for a later attempt.
-    if compiled_count == staged_count:
+    if compiled_count == staged_count and config.raw_input_dir is None:
         from second_brain.apps.compilation.services.clustering.preview import clear_preview
 
         purge_skipped(config.raw_dir)
@@ -467,10 +379,13 @@ def _compile_work_units(
 
 
 def run_compilation(
-    config: Config,
+    config: PipelineConfig,
     force_full: bool = False,
     dry_run: bool = False,
     on_unit_finished: Callable[[], None] | None = None,
+    *,
+    source_paths: list[str] | None = None,
+    work_units: list[list[str]] | None = None,
 ) -> dict:
     """
     Run the full compilation pipeline.
@@ -480,7 +395,7 @@ def run_compilation(
 
     Parameters
     ----------
-    config: Config
+    config: PipelineConfig
         Application configuration.
     force_full: bool
         If ``True``, recompile all sources regardless of
@@ -501,14 +416,16 @@ def run_compilation(
     """
     wiki_dir = config.wiki_dir
     raw_dir = config.raw_dir
-    build_store = BuildStore(config.manifest_db_path)
+    build_store = BuildStore()
 
-    from second_brain.apps.wiki.services.schema import write_default_schema
+    from second_brain.apps.wiki.services.topic_schema import write_default_schema
 
     if not (wiki_dir / "_meta" / "topic_schema.yaml").exists():
         write_default_schema(wiki_dir)
 
-    if force_full:
+    if source_paths is not None:
+        new_sources = source_paths
+    elif force_full:
         new_sources = sorted(str(f.relative_to(raw_dir)) for f in raw_dir.rglob("*.md"))
     else:
         new_sources = find_new_sources(config)
@@ -521,7 +438,7 @@ def run_compilation(
     # Triage already ran during ingestion (free, local). Catch up anything
     # still undecided, then drop review, skip, and chats that never got a
     # decision so an interrupted sort cannot reach the paid build.
-    if config.triage.enabled:
+    if config.triage.enabled and source_paths is None:
         from second_brain.apps.ingestion.services.triage.pipeline import (
             triage_pending,
             worthwhile_sources,
@@ -542,12 +459,14 @@ def run_compilation(
     if dry_run:
         logger.info("[dry-run] Would compile: %s", new_sources)
     else:
-        from second_brain.apps.jobs.services.status import clear_stop, now_iso
+        from second_brain.apps.jobs.services.job_progress import now_iso
 
         require_api_key(profile)
-        clear_stop(config.data_dir)
+        _git_commit(wiki_dir)
+
         started_at = now_iso()
-        work_units = _build_work_units(config, raw_dir, new_sources)
+        if work_units is None:
+            work_units = _build_work_units(config, raw_dir, new_sources)
         summary = _compile_work_units(
             config,
             work_units,
@@ -558,7 +477,7 @@ def run_compilation(
 
     stats = rebuild_structure(wiki_dir)
     if not dry_run:
-        from second_brain.apps.wiki.services.schema import register_domains
+        from second_brain.apps.wiki.services.topic_schema import register_domains
 
         register_domains(wiki_dir, set(stats.get("domains", {})))
         _git_commit(wiki_dir)
@@ -587,6 +506,6 @@ def _git_commit(wiki_dir: Path) -> None:
     """
     Checkpoint the wiki after a build step.
     """
-    from second_brain.apps.wiki.services.repo import commit_all
+    from second_brain.apps.wiki.services.git_history import commit_all
 
     commit_all(wiki_dir, "auto: compilation + structure rebuild")

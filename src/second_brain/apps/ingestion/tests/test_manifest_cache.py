@@ -6,8 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from second_brain.apps.compilation.services.store import BuildStore
-from second_brain.apps.ingestion.services.manifest import Manifest
+from second_brain.apps.compilation.services.build_records import BuildStore
+from second_brain.apps.ingestion.services.source_manifest import Manifest
 
 
 @pytest.fixture

@@ -20,7 +20,7 @@ from pathlib import Path
 
 import fitz
 
-from second_brain.apps.ingestion.services.parsing.provider import (
+from second_brain.apps.ingestion.services.parsing.parser_protocol import (
     DocumentParser,
     PageParseError,
     ParseBlock,

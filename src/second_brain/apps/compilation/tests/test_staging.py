@@ -4,17 +4,16 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from second_brain.apps.compilation.services.compiler import (
+from second_brain.apps.compilation.services.build_records import BuildStore
+from second_brain.apps.compilation.services.staging import (
     find_new_sources,
     find_set_aside_sources,
 )
-from second_brain.apps.compilation.services.store import BuildStore
-from second_brain.config import Config
-from second_brain.db import connect
-from second_brain.hashing import hash_file
+from second_brain.file_hashing import hash_file
+from second_brain.pipeline_config import PipelineConfig
 
 
-def _write_source(config: Config, rel: str, body: str) -> Path:
+def _write_source(config: PipelineConfig, rel: str, body: str) -> Path:
     raw_file = config.raw_dir / rel
     raw_file.parent.mkdir(parents=True, exist_ok=True)
     raw_file.write_text(body, encoding="utf-8")
@@ -22,7 +21,7 @@ def _write_source(config: Config, rel: str, body: str) -> Path:
 
 
 def test_a_built_source_is_staged_again_once_its_file_changes(
-    config: Config, build_store: BuildStore
+    config: PipelineConfig, build_store: BuildStore
 ) -> None:
     unchanged = _write_source(config, "documents/unchanged.md", "first version")
     edited = _write_source(config, "documents/edited.md", "first version")
@@ -36,7 +35,7 @@ def test_a_built_source_is_staged_again_once_its_file_changes(
 
 
 def test_a_set_aside_source_is_staged_again_once_its_file_changes(
-    config: Config, build_store: BuildStore
+    config: PipelineConfig, build_store: BuildStore
 ) -> None:
     raw_file = _write_source(config, "documents/long.md", "first version")
     build_store.defer_sources(
@@ -52,7 +51,7 @@ def test_a_set_aside_source_is_staged_again_once_its_file_changes(
 
 
 def test_setting_aside_one_source_leaves_other_sources_staged(
-    config: Config, build_store: BuildStore
+    config: PipelineConfig, build_store: BuildStore
 ) -> None:
     _write_source(config, "documents/ready.md", "alpha")
     deferred = _write_source(config, "documents/deferred.md", "beta")
@@ -65,13 +64,12 @@ def test_setting_aside_one_source_leaves_other_sources_staged(
     assert find_new_sources(config) == ["documents/ready.md"]
 
 
-def test_a_build_record_without_a_hash_counts_as_current(config: Config) -> None:
+def test_a_build_record_without_a_hash_counts_as_current(config: PipelineConfig) -> None:
     _write_source(config, "documents/old.md", "built before hashes were kept")
-    BuildStore(config.manifest_db_path)
-    with connect(config.manifest_db_path) as conn:
-        conn.execute(
-            "INSERT INTO compiled (raw_path, compiled_at) VALUES (?, ?)",
-            ("documents/old.md", "2026-01-01T00:00:00"),
-        )
+    from django.utils import timezone
+
+    from second_brain.apps.compilation.models import CompiledSource
+
+    CompiledSource.objects.create(raw_path="documents/old.md", compiled_at=timezone.now())
 
     assert find_new_sources(config) == []

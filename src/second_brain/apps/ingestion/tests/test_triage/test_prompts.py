@@ -8,7 +8,7 @@ from second_brain.apps.ingestion.services.triage.prompts import (
     TRIAGE_PROMPTS,
     get_prompt,
 )
-from second_brain.config import _TRIAGE_PROFILES
+from second_brain.pipeline_config import _TRIAGE_PROFILES
 
 
 def test_config_and_prompt_profile_names_in_sync() -> None:

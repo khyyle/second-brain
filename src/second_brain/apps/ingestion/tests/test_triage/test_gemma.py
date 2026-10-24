@@ -15,9 +15,9 @@ from second_brain.apps.ingestion.services.triage.gemma import (
     triage_content,
     triage_file,
 )
-from second_brain.config import TriageConfig
 from second_brain.ollama import client as ollama_client
 from second_brain.ollama.client import OllamaUnavailableError
+from second_brain.pipeline_config import TriageConfig
 
 
 class FakeResponse:

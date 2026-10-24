@@ -3,7 +3,7 @@
 from ninja import Schema
 from pydantic import Field
 
-from second_brain.django_config.scaffold import RequestSchema
+from second_brain.django_config.schemas import RequestSchema
 
 
 class WikiPage(Schema):

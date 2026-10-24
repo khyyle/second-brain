@@ -16,15 +16,15 @@ from pathlib import Path
 
 from second_brain.apps.ingestion.services.triage.gemma import TriageDecision, triage_file
 from second_brain.apps.ingestion.services.triage.skipped import move_skips_to_holding
-from second_brain.apps.ingestion.services.triage.store import TriageStore
-from second_brain.apps.jobs.services.status import (
-    clear_status,
+from second_brain.apps.ingestion.services.triage.triage_decisions import TriageStore
+from second_brain.apps.jobs.services.job_progress import (
+    finish_progress,
     now_iso,
-    touch_status,
-    write_status,
+    touch_heartbeat,
+    update_progress,
 )
-from second_brain.config import Config
 from second_brain.ollama.client import OllamaUnavailableError
+from second_brain.pipeline_config import PipelineConfig
 
 logger = logging.getLogger(__name__)
 _HEARTBEAT_INTERVAL_SECONDS = 5.0
@@ -55,7 +55,7 @@ def _source_of(rel_path: str) -> str:
     return parts[0] if parts else ""
 
 
-def find_untriaged_sources(config: Config, triage_store: TriageStore) -> list[str]:
+def find_untriaged_sources(config: PipelineConfig, triage_store: TriageStore) -> list[str]:
     """Return undecided raw .md paths in triage-scoped lanes.
 
     Only lanes listed in ``config.triage.sources`` are triaged. Sources in
@@ -64,7 +64,7 @@ def find_untriaged_sources(config: Config, triage_store: TriageStore) -> list[st
 
     Parameters
     ----------
-    config: Config
+    config: PipelineConfig
         Application configuration (raw directory and triage scope).
     triage_store: TriageStore
         Store holding existing triage decisions.
@@ -91,7 +91,9 @@ def find_untriaged_sources(config: Config, triage_store: TriageStore) -> list[st
     return sorted(pending)
 
 
-def triage_pending(config: Config, on_decided: Callable[[], None] | None = None) -> dict[str, int]:
+def triage_pending(
+    config: PipelineConfig, on_decided: Callable[[], None] | None = None
+) -> dict[str, int]:
     """Triage every untriaged source in a scoped lane and record decisions.
 
     Review-tier sources are also copied into the inbox for a manual pass.
@@ -103,7 +105,7 @@ def triage_pending(config: Config, on_decided: Callable[[], None] | None = None)
 
     Parameters
     ----------
-    config: Config
+    config: PipelineConfig
         Application configuration (triage settings, paths).
     on_decided: Callable[[], None] | None
         Called after each chat's decision is recorded, so a reader of the
@@ -122,7 +124,7 @@ def triage_pending(config: Config, on_decided: Callable[[], None] | None = None)
     if not config.triage.enabled:
         return {"worthwhile": 0, "review": 0, "skip": 0}
 
-    triage_store = TriageStore(config.manifest_db_path)
+    triage_store = TriageStore()
     pending = find_untriaged_sources(config, triage_store)
     counts = {"worthwhile": 0, "review": 0, "skip": 0}
     interruption: TriageInterruptedError | None = None
@@ -137,15 +139,18 @@ def triage_pending(config: Config, on_decided: Callable[[], None] | None = None)
         def keepalive() -> None:
             while not stop_heartbeat.wait(_HEARTBEAT_INTERVAL_SECONDS):
                 with heartbeat_lock:
-                    touch_status(config.data_dir)
+                    touch_heartbeat()
 
         heartbeat = threading.Thread(target=keepalive, daemon=True)
         heartbeat.start()
         try:
             for idx, rel in enumerate(pending):
+                from second_brain.apps.jobs.services.job_progress import stop_requested
+
+                if stop_requested():
+                    break
                 with heartbeat_lock:
-                    write_status(
-                        config.data_dir,
+                    update_progress(
                         phase="triage",
                         current=idx,
                         total=total,
@@ -178,7 +183,7 @@ def triage_pending(config: Config, on_decided: Callable[[], None] | None = None)
         finally:
             stop_heartbeat.set()
             heartbeat.join()
-            clear_status(config.data_dir)
+            finish_progress()
 
         _route_review_to_inbox(config, review_paths)
         logger.info(
@@ -197,7 +202,7 @@ def triage_pending(config: Config, on_decided: Callable[[], None] | None = None)
     return counts
 
 
-def _route_review_to_inbox(config: Config, review: list[str]) -> None:
+def _route_review_to_inbox(config: PipelineConfig, review: list[str]) -> None:
     """Copy review-tier sources into the inbox for a manual pass."""
     if not review:
         return
@@ -212,7 +217,7 @@ def _route_review_to_inbox(config: Config, review: list[str]) -> None:
             logger.warning("Could not copy %s to inbox: %s", rel, exc)
 
 
-def worthwhile_sources(config: Config, sources: list[str]) -> list[str]:
+def worthwhile_sources(config: PipelineConfig, sources: list[str]) -> list[str]:
     """Filter sources to those a paid build should compile.
 
     Review and skip decisions are excluded. When triage is enabled, a source
@@ -223,7 +228,7 @@ def worthwhile_sources(config: Config, sources: list[str]) -> list[str]:
 
     Parameters
     ----------
-    config: Config
+    config: PipelineConfig
         Application configuration (triage scope and whether it is on).
     sources: list[str]
         Candidate raw source paths.
@@ -233,7 +238,7 @@ def worthwhile_sources(config: Config, sources: list[str]) -> list[str]:
     list[str]
         The subset to compile.
     """
-    decisions = TriageStore(config.manifest_db_path).get_decisions()
+    decisions = TriageStore().get_decisions()
     held = {TriageDecision.REVIEW.value, TriageDecision.SKIP.value}
     triaged_lanes = set(config.triage.sources)
     kept: list[str] = []

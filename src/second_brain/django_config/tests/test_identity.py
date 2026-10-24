@@ -15,4 +15,4 @@ def test_concurrent_startup_uses_one_private_persistent_key(tmp_path: Path) -> N
     assert len(keys[0]) >= 64
     assert signing_key(vault) == keys[0]
     assert (vault / ".backend" / "django-secret-key").stat().st_mode & 0o777 == 0o600
-    assert list((vault / ".backend").glob(".signing-key-*")) == []
+    assert list((vault / ".backend").glob(".identity-*")) == []

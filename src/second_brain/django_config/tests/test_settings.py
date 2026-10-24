@@ -33,21 +33,38 @@ print(json.dumps({
     'database_open': connection.connection is not None,
     'pipeline_loaded': any(name in sys.modules for name in (
         'second_brain.apps.compilation.services.compiler',
-        'second_brain.apps.ingestion.services.watcher',
+        'second_brain.apps.ingestion.services.source_scanning',
     )),
 }))
 """
 
 
-def _inspect_settings(env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+def _inspect_settings(
+    env: dict[str, str], bootstrap: str = ""
+) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        [sys.executable, "-c", _INSPECT_SETTINGS],
+        [sys.executable, "-c", bootstrap + _INSPECT_SETTINGS],
         env=env,
         capture_output=True,
         text=True,
         timeout=30,
         check=False,
     )
+
+
+@pytest.fixture
+def dotenv_checkout(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    checkout = tmp_path / "checkout"
+    module = checkout / "src" / "second_brain" / "django_config" / "environment.py"
+    module.parent.mkdir(parents=True)
+    (checkout / "pyproject.toml").touch()
+    monkeypatch.setattr(environment, "__file__", str(module))
+    monkeypatch.delenv("PYTHON_DOTENV_DISABLED", raising=False)
+    # Restore variables that load_dotenv may add to the test process.
+    for name in ("SECOND_BRAIN_VAULT", "SECOND_BRAIN_DEBUG", "SECOND_BRAIN_PORT"):
+        monkeypatch.setenv(name, "")
+        monkeypatch.delenv(name)
+    return checkout
 
 
 def test_defaults_work_without_an_env_file(backend_env: dict[str, str]) -> None:
@@ -64,7 +81,7 @@ def test_defaults_work_without_an_env_file(backend_env: dict[str, str]) -> None:
 
 
 @pytest.mark.parametrize("debug", ["true", "false"])
-def test_settings_and_asgi_do_not_create_a_vault_or_load_the_pipeline(
+def test_asgi_with_explicit_signing_key_does_not_create_storage_or_load_pipeline(
     backend_env: dict[str, str], debug: str
 ) -> None:
     backend_env.update(SECOND_BRAIN_DEBUG=debug, SECOND_BRAIN_SECRET_KEY="test-only-signing-key")
@@ -92,10 +109,10 @@ def test_settings_and_asgi_do_not_create_a_vault_or_load_the_pipeline(
 
 
 def test_env_file_is_shared_by_management_and_asgi_with_process_values_taking_priority(
-    tmp_path: Path, backend_env: dict[str, str]
+    tmp_path: Path, backend_env: dict[str, str], dotenv_checkout: Path
 ) -> None:
     vault = tmp_path / "vault from dotenv"
-    env_file = tmp_path / "backend.env"
+    env_file = dotenv_checkout / ".env"
     env_file.write_text(
         f'SECOND_BRAIN_VAULT="{vault}"\n'
         "SECOND_BRAIN_DEBUG=false\n"
@@ -103,9 +120,13 @@ def test_env_file_is_shared_by_management_and_asgi_with_process_values_taking_pr
         "SECOND_BRAIN_PORT=8100\n"
     )
     backend_env.pop("SECOND_BRAIN_VAULT")
-    backend_env["SECOND_BRAIN_ENV_FILE"] = str(env_file)
+    backend_env.pop("PYTHON_DOTENV_DISABLED")
     backend_env["SECOND_BRAIN_PORT"] = "8200"
-    result = _inspect_settings(backend_env)
+    bootstrap = (
+        "from second_brain.django_config import environment\n"
+        f"environment.__file__ = {environment.__file__!r}\n"
+    )
+    result = _inspect_settings(backend_env, bootstrap)
 
     assert result.returncode == 0, result.stderr
     config = json.loads(result.stdout)
@@ -118,6 +139,9 @@ def test_env_file_is_shared_by_management_and_asgi_with_process_values_taking_pr
     managed = subprocess.run(
         [
             sys.executable,
+            "-c",
+            bootstrap + "import runpy, sys; sys.argv = sys.argv[1:]; "
+            "runpy.run_path(sys.argv[0], run_name='__main__')",
             str(manage),
             "shell",
             "--command",
@@ -138,37 +162,31 @@ def test_env_file_is_shared_by_management_and_asgi_with_process_values_taking_pr
 
 
 def test_default_dotenv_is_resolved_from_the_checkout_not_the_working_directory(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, dotenv_checkout: Path
 ) -> None:
-    checkout = tmp_path / "checkout"
-    module = checkout / "src" / "second_brain" / "django_config" / "environment.py"
-    module.parent.mkdir(parents=True)
-    (checkout / "pyproject.toml").write_text("")
-    (checkout / ".env").write_text(
-        "SECOND_BRAIN_PORT=8100\nANTHROPIC_API_KEY=test-only-provider-key\n"
-    )
+    (dotenv_checkout / ".env").write_text("SECOND_BRAIN_PORT=8100\n")
     (tmp_path / ".env").write_text("SECOND_BRAIN_PORT=9999\n")
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(environment, "__file__", str(module))
-    monkeypatch.delenv("SECOND_BRAIN_ENV_FILE", raising=False)
-    monkeypatch.delenv("PYTHON_DOTENV_DISABLED", raising=False)
-    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    # Register restoration before dotenv writes to os.environ.
-    monkeypatch.setenv("SECOND_BRAIN_PORT", "")
-    monkeypatch.delenv("SECOND_BRAIN_PORT")
 
     environment.load_environment()
 
     assert os.environ["SECOND_BRAIN_PORT"] == "8100"
-    assert "ANTHROPIC_API_KEY" not in os.environ
 
 
-def test_test_settings_ignore_dotenv_and_invalid_runtime_values(
-    tmp_path: Path, backend_env: dict[str, str]
+def test_launcher_can_disable_dotenv(monkeypatch: pytest.MonkeyPatch, dotenv_checkout: Path):
+    (dotenv_checkout / ".env").write_text("SECOND_BRAIN_DEBUG=true\n")
+    monkeypatch.setenv("PYTHON_DOTENV_DISABLED", "1")
+
+    environment.load_environment()
+
+    assert "SECOND_BRAIN_DEBUG" not in os.environ
+
+
+def test_test_settings_ignore_invalid_runtime_values(
+    backend_env: dict[str, str],
 ) -> None:
     backend_env.update(
         DJANGO_SETTINGS_MODULE="second_brain.django_config.settings.test",
-        SECOND_BRAIN_ENV_FILE=str(tmp_path / "missing.env"),
         SECOND_BRAIN_DEBUG="invalid",
         SECOND_BRAIN_PORT="invalid",
         SECOND_BRAIN_VAULT="relative/path",

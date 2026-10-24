@@ -8,7 +8,7 @@ from second_brain.apps.compilation.services.agent.tools import (
     WikiToolExecutor,
     build_compilation_prompt,
 )
-from second_brain.apps.wiki.services.structure import (
+from second_brain.apps.wiki.services.wiki_structure import (
     _parse_frontmatter,
     build_link_graph,
     discover_all_pages,

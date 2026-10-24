@@ -23,13 +23,12 @@ from second_brain.apps.compilation.services.agent.tools import (
     describe_tool_call,
     explore_tool_schemas,
 )
-from second_brain.apps.wiki.services.domain_ops import list_domains
-from second_brain.apps.wiki.services.structure import (
+from second_brain.apps.wiki.services.domain_actions import list_domains
+from second_brain.apps.wiki.services.wiki_structure import (
     build_link_graph,
     discover_all_pages,
     rank_gaps,
 )
-from second_brain.config import Config
 from second_brain.llm import (
     ModelError,
     ModelErrorKind,
@@ -39,6 +38,7 @@ from second_brain.llm import (
     resolve_profile,
 )
 from second_brain.ollama.client import OllamaUnavailableError
+from second_brain.pipeline_config import PipelineConfig
 
 logger = logging.getLogger(__name__)
 
@@ -89,7 +89,7 @@ def estimate_source_tokens(raw_dir: Path, sources: list[str]) -> int:
     return total_bytes // 4
 
 
-def _create_executor(config: Config, sources: list[str]) -> WikiToolExecutor:
+def _create_executor(config: PipelineConfig, sources: list[str]) -> WikiToolExecutor:
     """Create wiki tools with an optional search snapshot for this conversation."""
     read_tools = None
     if config.compilation.explore_tools:
@@ -108,13 +108,13 @@ def _create_executor(config: Config, sources: list[str]) -> WikiToolExecutor:
 
 
 def _prepare_request(
-    config: Config, sources: list[str], profile: ProviderProfile
+    config: PipelineConfig, sources: list[str], profile: ProviderProfile
 ) -> _AgentRequest:
     """Prepare the source context and provider-specific prompt caching.
 
     Parameters
     ----------
-    config: Config
+    config: PipelineConfig
         Wiki paths and enabled tools.
     sources: list[str]
         Raw-relative paths compiled in this conversation.
@@ -193,7 +193,7 @@ def _execute_tools(
 
 
 def run_agent(
-    config: Config,
+    config: PipelineConfig,
     sources: list[str],
     *,
     started_at: str,
@@ -205,7 +205,7 @@ def run_agent(
 
     Parameters
     ----------
-    config: Config
+    config: PipelineConfig
         Provider, source paths, and conversation limits.
     sources: list[str]
         Raw-relative paths of one document, chat, or chat group.
@@ -224,7 +224,7 @@ def run_agent(
         Accumulated cost, outcome, reason, and wiki changes. The caller decides
         whether to commit or roll back the conversation's edits.
     """
-    from second_brain.apps.jobs.services.status import stop_requested, write_status
+    from second_brain.apps.jobs.services.job_progress import stop_requested, update_progress
 
     profile = resolve_profile(config.compilation.provider, config.compilation.model)
     client = create_client(profile)
@@ -245,8 +245,7 @@ def run_agent(
     def report(description: str) -> None:
         nonlocal activity
         activity = description
-        write_status(
-            config.data_dir,
+        update_progress(
             phase="compile",
             current=current,
             total=total,
@@ -262,7 +261,7 @@ def run_agent(
     reason = f"The model didn't finish within the {max_iterations}-step limit."
     cost_cap = config.compilation.max_cost_per_build_usd
     for iteration in range(max_iterations):
-        if stop_requested(config.data_dir):
+        if stop_requested():
             logger.info("Stop requested after %d model turns", iteration)
             break
         compact_history(request.messages)

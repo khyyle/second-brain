@@ -12,23 +12,45 @@ import pytest
 
 from second_brain.apps.compilation.services import compiler
 from second_brain.apps.compilation.services.agent.loop import RunOutcome, RunResult
-from second_brain.apps.compilation.services.store import BuildStore
+from second_brain.apps.compilation.services.build_log import BUILD_LOG_FILENAME
+from second_brain.apps.compilation.services.build_records import BuildStore
 from second_brain.apps.compilation.tests.fakes import (
     FakeResponse,
     FakeUsage,
     install_fake,
     status_error,
 )
-from second_brain.apps.jobs.services.build_log import BUILD_LOG_FILENAME
-from second_brain.apps.jobs.services.run_record import CRASH_REASON, StageOutcome
-from second_brain.apps.jobs.services.status import STATUS_FILENAME
-from second_brain.apps.wiki.services.repo import commit_all
-from second_brain.apps.wiki.services.structure import serialize_page
-from second_brain.config import CompilationConfig, Config, TriageConfig
+from second_brain.apps.jobs.outcomes import CRASH_REASON, StageOutcome
+from second_brain.apps.wiki.services.git_history import commit_all
+from second_brain.apps.wiki.services.wiki_structure import serialize_page
+from second_brain.django_config.errors import DependencyError
+from second_brain.pipeline_config import CompilationConfig, PipelineConfig, TriageConfig
+
+pytestmark = pytest.mark.django_db(transaction=True)
 
 
-def _build_config(tmp_path: Path) -> Config:
-    config = Config(
+def test_expected_failure_inside_a_conversation_keeps_its_reason(
+    config,
+    monkeypatch,
+    read_job_progress,
+):
+    restored = []
+    _stage(monkeypatch, config, ["notes.md"])
+    monkeypatch.setattr(compiler, "_git_commit", lambda _: None)
+    monkeypatch.setattr(compiler, "_git_restore", lambda _: restored.append(True))
+
+    def unavailable(*args, **kwargs):
+        raise DependencyError("Keychain denied access to the provider credential.")
+
+    monkeypatch.setattr(compiler, "run_agent", unavailable)
+    result = compiler.run_compilation(config)
+    assert result["outcome"] == StageOutcome.FAILED
+    assert result["reason"] == "Keychain denied access to the provider credential."
+    assert restored == [True]
+
+
+def _build_config(tmp_path: Path) -> PipelineConfig:
+    config = PipelineConfig(
         data_dir=tmp_path / "sb",
         compilation=CompilationConfig(max_cost_per_build_usd=2.0),
         triage=TriageConfig(enabled=False),
@@ -37,7 +59,7 @@ def _build_config(tmp_path: Path) -> Config:
     return config
 
 
-def _stage(monkeypatch: pytest.MonkeyPatch, config: Config, raw_paths: list[str]) -> None:
+def _stage(monkeypatch: pytest.MonkeyPatch, config: PipelineConfig, raw_paths: list[str]) -> None:
     """Stage these sources for the build, writing a raw file for any the test didn't."""
     for rel in raw_paths:
         raw_file = config.raw_dir / rel
@@ -47,15 +69,14 @@ def _stage(monkeypatch: pytest.MonkeyPatch, config: Config, raw_paths: list[str]
 
 
 def test_tool_turns_stay_uncommitted_until_the_conversation_finishes(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, read_job_progress
 ) -> None:
     config = _build_config(tmp_path)
     config = config.model_copy(
         update={"compilation": config.compilation.model_copy(update={"explore_tools": False})}
     )
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
     _stage(monkeypatch, config, ["a.md", "b.md"])
-    build_store = BuildStore(config.manifest_db_path)
+    build_store = BuildStore()
     checkpoints: list[set[str]] = []
     rebuilds: list[Path] = []
     monkeypatch.setattr(
@@ -88,7 +109,7 @@ def test_tool_turns_stay_uncommitted_until_the_conversation_finishes(
             return FakeResponse("tool_use", FakeUsage(10, 10), [write_page])
         assert (config.wiki_dir / "concepts" / f"{title.lower()}.md").exists()
         assert set(build_store.get_compiled()) == (set() if title == "Alpha" else {"a.md"})
-        assert checkpoints == ([] if title == "Alpha" else [{"a.md"}])
+        assert checkpoints == ([set()] if title == "Alpha" else [set(), set()])
         assert rebuilds == []
         return finished
 
@@ -98,7 +119,7 @@ def test_tool_turns_stay_uncommitted_until_the_conversation_finishes(
 
     assert client.messages.calls == 4
     assert stats["sources_compiled"] == 2
-    assert checkpoints == [{"a.md"}, {"a.md", "b.md"}, {"a.md", "b.md"}]
+    assert checkpoints == [set(), set(), {"a.md"}, {"a.md", "b.md"}]
     assert rebuilds == [config.wiki_dir]
 
 
@@ -117,7 +138,6 @@ def test_an_unfinished_conversation_restores_saved_pages_and_removes_new_pages(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, outcome: RunOutcome
 ) -> None:
     config = _build_config(tmp_path)
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
     _stage(monkeypatch, config, ["a.md"])
     saved_page = config.wiki_dir / "concepts/saved.md"
     saved_page.parent.mkdir(exist_ok=True)
@@ -126,7 +146,9 @@ def test_an_unfinished_conversation_restores_saved_pages_and_removes_new_pages(
     assert commit_all(config.wiki_dir, "test: save the existing wiki")
     new_page = config.wiki_dir / "concepts/unfinished.md"
 
-    def leave_unfinished_edits(_config: Config, _sources: list[str], **_kwargs: Any) -> RunResult:
+    def leave_unfinished_edits(
+        _config: PipelineConfig, _sources: list[str], **_kwargs: Any
+    ) -> RunResult:
         saved_page.write_text("Unfinished rewrite.", encoding="utf-8")
         new_page.write_text("Unfinished page.", encoding="utf-8")
         return RunResult(0.1, outcome, "The conversation did not finish.")
@@ -136,18 +158,17 @@ def test_an_unfinished_conversation_restores_saved_pages_and_removes_new_pages(
     stats = compiler.run_compilation(config)
 
     assert stats["sources_compiled"] == 0
-    assert BuildStore(config.manifest_db_path).get_compiled() == {}
+    assert BuildStore().get_compiled() == {}
     assert saved_page.read_text(encoding="utf-8") == original
     assert not new_page.exists()
 
 
 def test_build_stops_when_cost_cap_reached(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, read_job_progress
 ) -> None:
     """run_compilation stops before the source that would cross the cost cap."""
     config = _build_config(tmp_path)
 
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
     _stage(monkeypatch, config, ["a.md", "b.md", "c.md"])
     monkeypatch.setattr(compiler, "rebuild_structure", lambda *_: {})
     monkeypatch.setattr(compiler, "_git_commit", lambda *_: None)
@@ -171,12 +192,10 @@ def test_build_stops_when_cost_cap_reached(
 
 
 def test_the_heartbeat_names_the_group_being_built(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, read_job_progress
 ) -> None:
     config = _build_config(tmp_path)
-    status_file = config.data_dir / STATUS_FILENAME
 
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
     _stage(monkeypatch, config, ["a.md", "b.md"])
     monkeypatch.setattr(compiler, "rebuild_structure", lambda *_: {})
     monkeypatch.setattr(compiler, "_git_commit", lambda *_: None)
@@ -184,7 +203,7 @@ def test_the_heartbeat_names_the_group_being_built(
     heartbeat_sources: list[list[str]] = []
 
     def fake_run_agent(_config, unit, **_kwargs) -> RunResult:
-        heartbeat = json.loads(status_file.read_text(encoding="utf-8"))
+        heartbeat = read_job_progress()
         heartbeat_sources.append(heartbeat["current_sources"])
         return RunResult(0.0, RunOutcome.COMPLETED)
 
@@ -193,14 +212,13 @@ def test_the_heartbeat_names_the_group_being_built(
     compiler.run_compilation(config)
 
     assert heartbeat_sources == [["a.md"], ["b.md"]]
-    assert json.loads(status_file.read_text(encoding="utf-8"))["current_sources"] == []
+    assert read_job_progress()["running"] is False
 
 
 def test_each_finished_group_is_reported_as_it_finishes(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, read_job_progress
 ) -> None:
     config = _build_config(tmp_path)
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
     _stage(monkeypatch, config, ["a.md", "b.md"])
     monkeypatch.setattr(compiler, "rebuild_structure", lambda *_: {})
     monkeypatch.setattr(compiler, "_git_commit", lambda *_: None)
@@ -213,7 +231,7 @@ def test_each_finished_group_is_reported_as_it_finishes(
 
     monkeypatch.setattr(compiler, "run_agent", fake_run_agent)
     finished_after: list[set[str]] = []
-    build_store = BuildStore(config.manifest_db_path)
+    build_store = BuildStore()
 
     compiler.run_compilation(
         config,
@@ -226,10 +244,9 @@ def test_each_finished_group_is_reported_as_it_finishes(
 
 
 def test_only_committed_groups_reach_the_build_log(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, read_job_progress
 ) -> None:
     config = _build_config(tmp_path)
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
     _stage(monkeypatch, config, ["a.md", "b.md"])
     monkeypatch.setattr(compiler, "rebuild_structure", lambda *_: {})
     monkeypatch.setattr(compiler, "_git_commit", lambda *_: None)
@@ -257,13 +274,12 @@ def test_only_committed_groups_reach_the_build_log(
 
 
 def test_exhausted_unit_is_deferred_not_compiled(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, read_job_progress
 ) -> None:
     """A run that never finishes parks its unit and the build moves on."""
     config = _build_config(tmp_path)
-    build_store = BuildStore(config.manifest_db_path)
+    build_store = BuildStore()
 
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
     _stage(monkeypatch, config, ["a.md", "b.md"])
     monkeypatch.setattr(compiler, "rebuild_structure", lambda *_: {})
     monkeypatch.setattr(compiler, "_git_commit", lambda *_: None)
@@ -289,13 +305,12 @@ def test_exhausted_unit_is_deferred_not_compiled(
 
 
 def test_cost_capped_unit_stays_staged_not_deferred(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, read_job_progress
 ) -> None:
     """A cap-stopped unit is retried next build (fresh budget), never parked."""
     config = _build_config(tmp_path)
-    build_store = BuildStore(config.manifest_db_path)
+    build_store = BuildStore()
 
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
     _stage(monkeypatch, config, ["a.md", "b.md"])
     monkeypatch.setattr(compiler, "rebuild_structure", lambda *_: {})
     monkeypatch.setattr(compiler, "_git_commit", lambda *_: None)
@@ -321,13 +336,12 @@ def test_cost_capped_unit_stays_staged_not_deferred(
 
 
 def test_over_window_unit_defers_preflight_without_api_call(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, read_job_progress
 ) -> None:
     """A source too large for the model's window parks before any spend."""
     config = _build_config(tmp_path)
-    build_store = BuildStore(config.manifest_db_path)
+    build_store = BuildStore()
 
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
     monkeypatch.setattr(compiler, "rebuild_structure", lambda *_: {})
     monkeypatch.setattr(compiler, "_git_commit", lambda *_: None)
     # Shrink the window so an ordinary temp file crosses the 60% line.
@@ -355,13 +369,12 @@ def test_over_window_unit_defers_preflight_without_api_call(
 
 
 def test_unexpected_failure_stops_build_and_keeps_units_staged(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, read_job_progress
 ) -> None:
     """An unexpected failure in our own code stops the build and leaves every unit staged."""
     config = _build_config(tmp_path)
-    build_store = BuildStore(config.manifest_db_path)
+    build_store = BuildStore()
 
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
     _stage(monkeypatch, config, ["a.md", "b.md"])
     monkeypatch.setattr(compiler, "rebuild_structure", lambda *_: {})
     monkeypatch.setattr(compiler, "_git_commit", lambda *_: None)
@@ -388,13 +401,12 @@ def test_unexpected_failure_stops_build_and_keeps_units_staged(
 
 
 def test_prompt_too_long_rejection_defers_not_retries(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, read_job_progress
 ) -> None:
     """The API's own too-long rejection parks the unit instead of retry-looping."""
     config = _build_config(tmp_path)
-    build_store = BuildStore(config.manifest_db_path)
+    build_store = BuildStore()
 
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
     _stage(monkeypatch, config, ["a.md"])
     monkeypatch.setattr(compiler, "rebuild_structure", lambda *_: {})
     monkeypatch.setattr(compiler, "_git_commit", lambda *_: None)
@@ -415,11 +427,11 @@ def test_prompt_too_long_rejection_defers_not_retries(
 
 
 def test_provider_failure_stops_build_and_keeps_curation(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, read_job_progress
 ) -> None:
     """An account failure stops the build and leaves skipped files and the preview."""
     config = _build_config(tmp_path)
-    build_store = BuildStore(config.manifest_db_path)
+    build_store = BuildStore()
     skipped = config.raw_dir / ".skipped" / "chatgpt"
     skipped.mkdir(parents=True)
     (skipped / "junk.md").write_text("y", encoding="utf-8")
@@ -428,7 +440,6 @@ def test_provider_failure_stops_build_and_keeps_curation(
     # Not valid preview JSON, so grouping stays one source per run.
     (config.data_dir / ".clusters.json").write_text("{not json", encoding="utf-8")
 
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
     _stage(monkeypatch, config, ["a.md", "b.md"])
     monkeypatch.setattr(compiler, "rebuild_structure", lambda *_: {})
     monkeypatch.setattr(compiler, "_git_commit", lambda *_: None)
@@ -453,17 +464,16 @@ def test_provider_failure_stops_build_and_keeps_curation(
 
 
 def test_stop_before_first_unit_is_stopped(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, read_job_progress
 ) -> None:
     """A stop requested before the first unit ends the build with nothing run."""
     config = _build_config(tmp_path)
 
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
     _stage(monkeypatch, config, ["a.md", "b.md"])
     monkeypatch.setattr(compiler, "rebuild_structure", lambda *_: {})
     monkeypatch.setattr(compiler, "_git_commit", lambda *_: None)
     monkeypatch.setattr(
-        "second_brain.apps.jobs.services.status.stop_requested", lambda _data_dir: True
+        "second_brain.apps.jobs.services.job_progress.stop_requested", lambda: True
     )
 
     def fail_if_called(*_args, **_kwargs):
@@ -480,7 +490,7 @@ def test_stop_before_first_unit_is_stopped(
 
 
 def test_full_build_purges_skipped_holding(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, read_job_progress
 ) -> None:
     """A build that compiles every staged source clears the holding folder."""
     config = _build_config(tmp_path)
@@ -488,7 +498,6 @@ def test_full_build_purges_skipped_holding(
     skipped.mkdir(parents=True, exist_ok=True)
     (skipped / "junk.md").write_text("y", encoding="utf-8")
 
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
     _stage(monkeypatch, config, ["a.md"])
     monkeypatch.setattr(compiler, "rebuild_structure", lambda *_: {})
     monkeypatch.setattr(compiler, "_git_commit", lambda *_: None)
@@ -505,7 +514,7 @@ def test_full_build_purges_skipped_holding(
 
 
 def test_incomplete_build_keeps_skipped_holding(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, read_job_progress
 ) -> None:
     """A failed unit leaves the holding folder for the next attempt."""
     config = _build_config(tmp_path)
@@ -513,7 +522,6 @@ def test_incomplete_build_keeps_skipped_holding(
     skipped.mkdir(parents=True, exist_ok=True)
     (skipped / "junk.md").write_text("y", encoding="utf-8")
 
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
     _stage(monkeypatch, config, ["a.md"])
     monkeypatch.setattr(compiler, "rebuild_structure", lambda *_: {})
     monkeypatch.setattr(compiler, "_git_commit", lambda *_: None)

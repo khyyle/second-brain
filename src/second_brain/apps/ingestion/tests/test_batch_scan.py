@@ -6,14 +6,12 @@ import json
 from pathlib import Path
 
 import pytest
-from click.testing import CliRunner
 
-from second_brain import cli
-from second_brain.apps.ingestion.services import dispatch
-from second_brain.apps.ingestion.services.manifest import Manifest
+from second_brain.apps.ingestion.services import file_ingestion
+from second_brain.apps.ingestion.services.source_manifest import Manifest
+from second_brain.apps.ingestion.services.source_scanning import batch_scan
 from second_brain.apps.ingestion.services.triage.gemma import TriageDecision, TriageResult
-from second_brain.apps.ingestion.services.watcher import batch_scan
-from second_brain.config import Config, SourceConfig
+from second_brain.pipeline_config import PipelineConfig, SourceConfig
 
 CONTENT = "# Notes\n\nSame bytes in every copy.\n"
 
@@ -26,9 +24,9 @@ def watched_dir(tmp_path: Path) -> Path:
 
 
 @pytest.fixture
-def scan_config(config: Config, watched_dir: Path) -> Config:
+def scan_config(config: PipelineConfig, watched_dir: Path) -> PipelineConfig:
     """The test config with a drop lane and one watched folder, both taking Markdown."""
-    return Config(
+    return PipelineConfig(
         data_dir=config.data_dir,
         sources={
             "documents": SourceConfig(path=config.drops_dir / "documents", file_types=("md",)),
@@ -37,7 +35,9 @@ def scan_config(config: Config, watched_dir: Path) -> Config:
     )
 
 
-def _record_ingested(manifest: Manifest, config: Config, path: Path, raw_output: str) -> None:
+def _record_ingested(
+    manifest: Manifest, config: PipelineConfig, path: Path, raw_output: str
+) -> None:
     """Record `path` as ingested, with its raw Markdown present on disk."""
     raw = config.raw_dir / raw_output
     raw.parent.mkdir(parents=True, exist_ok=True)
@@ -46,14 +46,14 @@ def _record_ingested(manifest: Manifest, config: Config, path: Path, raw_output:
     manifest.mark_complete(path, raw_output=raw_output)
 
 
-def _scan(config: Config, manifest: Manifest) -> list[Path]:
+def _scan(config: PipelineConfig, manifest: Manifest) -> list[Path]:
     processed: list[Path] = []
     batch_scan(config, manifest, lambda path, _source: processed.append(path))
     return processed
 
 
 def test_redropped_copy_under_new_name_leaves_the_drop_queue(
-    scan_config: Config, manifest: Manifest, watched_dir: Path
+    scan_config: PipelineConfig, manifest: Manifest, watched_dir: Path
 ) -> None:
     original = watched_dir / "original.md"
     original.write_text(CONTENT, encoding="utf-8")
@@ -71,7 +71,7 @@ def test_redropped_copy_under_new_name_leaves_the_drop_queue(
 
 
 def test_redropped_copy_under_same_name_leaves_the_drop_queue(
-    scan_config: Config, manifest: Manifest
+    scan_config: PipelineConfig, manifest: Manifest
 ) -> None:
     dropped = scan_config.drops_dir / "documents" / "paper.md"
     dropped.write_text(CONTENT, encoding="utf-8")
@@ -84,7 +84,7 @@ def test_redropped_copy_under_same_name_leaves_the_drop_queue(
 
 
 def test_already_ingested_watched_original_is_left_in_place(
-    scan_config: Config, manifest: Manifest, watched_dir: Path
+    scan_config: PipelineConfig, manifest: Manifest, watched_dir: Path
 ) -> None:
     original = watched_dir / "original.md"
     original.write_text(CONTENT, encoding="utf-8")
@@ -97,7 +97,7 @@ def test_already_ingested_watched_original_is_left_in_place(
 
 
 def test_all_exports_are_unpacked_before_documents_regardless_of_source_order(
-    config: Config, manifest: Manifest
+    config: PipelineConfig, manifest: Manifest
 ) -> None:
     sources = {
         "documents": SourceConfig(path=config.drops_dir / "documents", file_types=("md",)),
@@ -116,8 +116,8 @@ def test_all_exports_are_unpacked_before_documents_regardless_of_source_order(
     assert processed == sorted(exports) + [document]
 
 
-def test_unpacked_chats_are_published_before_document_parsing(
-    config: Config, monkeypatch: pytest.MonkeyPatch
+def test_unpacked_chats_exist_before_document_parsing(
+    config: PipelineConfig, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     sources = {
         "documents": SourceConfig(path=config.drops_dir / "documents", file_types=("md",)),
@@ -145,24 +145,30 @@ def test_unpacked_chats_are_published_before_document_parsing(
         ),
         encoding="utf-8",
     )
-    ingest_file = dispatch.ingest_file
+    ingest_file = file_ingestion.ingest_file
     published: list[str] = []
 
-    def observe_parse(path: Path, config: Config, manifest: Manifest, source_type: str) -> bool:
+    def observe_parse(
+        path: Path, config: PipelineConfig, manifest: Manifest, source_type: str
+    ) -> bool:
         if source_type == "documents":
-            snapshot = json.loads((config.data_dir / ".state.json").read_text())
-            published.extend(snapshot["pending_triage"])
+            published.extend(
+                str(chat.relative_to(config.raw_dir))
+                for chat in (config.raw_dir / "chatgpt").glob("*.md")
+            )
         return ingest_file(path, config, manifest, source_type=source_type)
 
-    monkeypatch.setattr(cli, "_load_config", lambda _path: mixed)
-    monkeypatch.setattr(cli, "_preflight_check", lambda: None)
-    monkeypatch.setattr(dispatch, "ingest_file", observe_parse)
+    monkeypatch.setattr(
+        "second_brain.apps.ingestion.services.ingestion_runs.ingest_file", observe_parse
+    )
     monkeypatch.setattr(
         "second_brain.apps.ingestion.services.triage.pipeline.triage_file",
         lambda *_args: TriageResult(decision=TriageDecision.WORTHWHILE, confidence=1.0),
     )
 
-    imported = CliRunner().invoke(cli.main, ["ingest", "--drops-only"])
+    from second_brain.apps.ingestion.services.ingestion_runs import run_ingestion
 
-    assert imported.exit_code == 0, imported.output
+    imported = run_ingestion(mixed, {"drops_only": True})
+
+    assert imported["failed"] == 0
     assert published == ["chatgpt/batch-chat-batch123.md"]

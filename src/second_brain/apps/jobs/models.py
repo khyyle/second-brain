@@ -1,4 +1,4 @@
-"""Durable operation records; worker execution is still to be implemented."""
+"""Durable operation records and per-job progress."""
 
 import uuid
 
@@ -21,6 +21,8 @@ class Job(models.Model):
     payload = models.JSONField(default=dict)
     config_snapshot = models.JSONField(default=dict)
     result = models.JSONField(default=dict)
+    progress = models.JSONField(default=dict)
+    heartbeat_at = models.DateTimeField(null=True)
     error = models.TextField(blank=True)
     cancel_requested = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)

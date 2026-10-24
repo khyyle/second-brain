@@ -6,12 +6,12 @@ from pathlib import Path
 
 import pytest
 
-from second_brain.config import SearchConfig
 from second_brain.mcp_server.search import SearchIndex
 from second_brain.mcp_server.tools import WikiTools
 from second_brain.ollama import embeddings as embeddings_mod
 from second_brain.ollama.client import OllamaUnavailableError
 from second_brain.ollama.embeddings import EmbeddingRole
+from second_brain.pipeline_config import SearchConfig
 
 # Tiny deterministic "embeddings": map keywords to fixed 3-d vectors so
 # nearest-neighbor ordering is predictable without a real model.
@@ -139,11 +139,12 @@ def test_semantic_tool_propagates_ollama_outage(
 def test_mcp_semantic_search_notifies_when_ollama_is_down(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    class _Down:
-        def semantic_search(self, query: str, limit: int = 10) -> str:
-            raise OllamaUnavailableError("down")
+    from second_brain.backend_client import BackendRequestError
 
-    monkeypatch.setattr("second_brain.mcp_server.server._get_tools", lambda: _Down())
+    def unavailable(*args, **kwargs):
+        raise BackendRequestError(503, "Ollama is unavailable.")
+
+    monkeypatch.setattr("second_brain.backend_client.BackendClient.request", unavailable)
 
     from second_brain.mcp_server.server import semantic_search
 
@@ -153,6 +154,24 @@ def test_mcp_semantic_search_notifies_when_ollama_is_down(
         "Ollama isn't responding, so search by meaning is unavailable. Tell the "
         "user, and use search_wiki for keyword search instead."
     )
+
+
+@pytest.mark.parametrize("status", [401, 400, 500])
+def test_mcp_semantic_search_preserves_other_backend_failures(
+    monkeypatch: pytest.MonkeyPatch, status: int
+) -> None:
+    from second_brain.backend_client import BackendRequestError
+    from second_brain.mcp_server.server import semantic_search
+
+    def fail(*args: object, **kwargs: object) -> None:
+        raise BackendRequestError(status, "Request failed.")
+
+    monkeypatch.setattr("second_brain.backend_client.BackendClient.request", fail)
+
+    with pytest.raises(BackendRequestError, match="Request failed") as error:
+        semantic_search("gradient")
+
+    assert error.value.status_code == status
 
 
 def test_semantic_returns_empty_when_embeddings_unavailable(

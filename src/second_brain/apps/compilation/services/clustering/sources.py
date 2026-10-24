@@ -7,8 +7,8 @@ from collections.abc import Callable
 from pathlib import Path
 
 from second_brain.apps.compilation.services.clustering.base import Clusterer
-from second_brain.config import SearchConfig
 from second_brain.ollama.embeddings import embed_text
+from second_brain.pipeline_config import SearchConfig
 
 logger = logging.getLogger(__name__)
 

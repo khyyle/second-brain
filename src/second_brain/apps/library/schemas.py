@@ -7,9 +7,18 @@ from ninja import ModelSchema, Schema
 from pydantic import Field
 
 from second_brain.apps.library.models import Source, TriageDecision
-from second_brain.django_config.scaffold import RequestSchema
+from second_brain.django_config.schemas import RequestSchema
 
 TriageVerdict = Literal["worthwhile", "review", "skip"]
+SourceStatus = Literal["pending", "processing", "complete", "duplicate", "failed"]
+
+
+class SourceListQuery(RequestSchema):
+    """GET /sources query parameters; Ninja validates these before calling the view."""
+
+    status: SourceStatus | None = None
+    limit: int = Field(default=50, ge=1, le=200)
+    offset: int = Field(default=0, ge=0)
 
 
 class SourceOut(ModelSchema):
@@ -36,18 +45,28 @@ class SourcePage(Schema):
 
 
 class TriageOut(ModelSchema):
+    available: bool
+
+    @staticmethod
+    def resolve_available(obj: TriageDecision) -> bool:
+        from second_brain.apps.library.services.source_files import source_locations
+        from second_brain.django_config.paths import get_vault_paths
+
+        locations = source_locations(get_vault_paths().data_dir, obj.raw_path)
+        return any(path.is_file() for path in locations)
+
     class Meta:
         model = TriageDecision
         fields = ["raw_path", "decision", "confidence", "reason", "triaged_at"]
 
 
 class TriageUpdate(RequestSchema):
-    raw_paths: list[str] = Field(min_length=1)
+    raw_paths: list[str] = Field(min_length=1, max_length=200)
     decision: TriageVerdict
 
 
 class SourceSelection(RequestSchema):
-    raw_paths: list[str] = Field(min_length=1)
+    raw_paths: list[str] = Field(min_length=1, max_length=200)
 
 
 class SourceContent(Schema):

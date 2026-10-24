@@ -4,21 +4,22 @@ from __future__ import annotations
 
 import heapq
 import logging
-import subprocess
-import sys
 import threading
 import time
 from collections import defaultdict
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
+from uuid import uuid4
 
+from second_brain.apps.library.services.source_files import checked_path
 from second_brain.apps.wiki.services.slugs import normalize_link_target, slugify
-from second_brain.apps.wiki.services.structure import (
+from second_brain.apps.wiki.services.wiki_structure import (
     CONTENT_DIRS,
     _parse_frontmatter,
     strip_frontmatter,
 )
+from second_brain.django_config.vault_storage import atomic_write
 from second_brain.mcp_server.search import SearchIndex
 
 logger = logging.getLogger(__name__)
@@ -39,28 +40,11 @@ INDEX_PAGES_PER_DOMAIN = 10
 MAX_SOURCE_LENGTH_CHARS = 2000
 
 
-def _spawn_ingest(path: Path) -> None:
-    """Start a detached single-file ingest of a just-captured note.
+def _queue_ingest(path: Path) -> None:
+    """Queue a captured source through Django's durable job lifecycle."""
+    from second_brain.apps.jobs.services.job_queue import enqueue_job
 
-    Uses ``ingest --path`` so only this file moves from the drop queue into
-    ``raw/``. Unlike a drops scan it does not trigger the global triage backlog.
-    Best-effort, so a failed spawn never undoes the capture that already wrote
-    the file to disk.
-
-    Parameters
-    ----------
-    path: Path
-        The captured note file to ingest.
-    """
-    try:
-        subprocess.Popen(
-            [sys.executable, "-m", "second_brain.cli", "ingest", "--path", str(path)],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            start_new_session=True,
-        )
-    except OSError as exc:
-        logger.warning("Could not start ingest for captured note %s: %s", path, exc)
+    enqueue_job("ingest", {"paths": [str(path)], "drops_only": True})
 
 
 def _more_note(shown: int, total: int, *, offset: int = 0, pageable: bool = True) -> str:
@@ -203,7 +187,7 @@ class WikiTools:
         self._wiki = wiki_dir
         self._raw = raw_dir
         self._search = search_index
-        self._ingest_trigger = ingest_trigger or _spawn_ingest
+        self._ingest_trigger = ingest_trigger or _queue_ingest
         self._last_sync_check = 0.0
         self._last_sync_mtime = -1.0
         self._embed_lock = threading.Lock()
@@ -500,7 +484,12 @@ class WikiTools:
         captured_at = datetime.now(tz=UTC)
         drops_documents = self._raw.parent / "drops" / "documents"
         drops_documents.mkdir(parents=True, exist_ok=True)
-        path = drops_documents / f"{captured_at:%Y-%m-%d-%H%M%S}-{slug}.md"
+        path = checked_path(
+            self._raw.parent,
+            "drops",
+            "documents",
+            f"{captured_at:%Y-%m-%d-%H%M%S}-{slug}-{uuid4().hex[:8]}.md",
+        )
 
         frontmatter = [
             "---",
@@ -512,7 +501,7 @@ class WikiTools:
             frontmatter.append(f'suggested_topic: "{topic}"')
         frontmatter.append("---")
 
-        path.write_text("\n".join(frontmatter) + "\n\n" + text + "\n", encoding="utf-8")
+        atomic_write(path, "\n".join(frontmatter) + "\n\n" + text + "\n")
         self._ingest_trigger(path)
         return (
             f"Captured to {path.relative_to(self._raw.parent)} and queued for ingest. "

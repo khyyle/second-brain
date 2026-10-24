@@ -114,7 +114,10 @@ def test_request_turn_translates_connection_error_to_network() -> None:
 
 
 def test_require_api_key_raises_account_when_unset(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setattr(
+        "second_brain.apps.preferences.services.provider_credentials.read_api_key",
+        lambda provider: None,
+    )
     profile = resolve_profile("anthropic", "claude-sonnet-4-6")
 
     with pytest.raises(ModelError) as exc_info:
@@ -122,7 +125,6 @@ def test_require_api_key_raises_account_when_unset(monkeypatch: pytest.MonkeyPat
 
     assert exc_info.value.kind is ModelErrorKind.ACCOUNT
     assert exc_info.value.reason == (
-        "ANTHROPIC_API_KEY isn't set. Add the API key in Settings, or in .env "
-        "at the repository root, then build again."
+        "No anthropic credential is available in Keychain. Add it in Settings, then build again."
     )
     assert str(exc_info.value) == exc_info.value.reason

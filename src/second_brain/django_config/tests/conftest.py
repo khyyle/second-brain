@@ -15,7 +15,7 @@ def backend_env(tmp_path: Path) -> dict[str, str]:
     }
     env.update(
         DJANGO_SETTINGS_MODULE="second_brain.django_config.settings.runtime",
-        SECOND_BRAIN_ENV_FILE="",
+        PYTHON_DOTENV_DISABLED="1",
         SECOND_BRAIN_VAULT=str(tmp_path / "vault"),
         SECOND_BRAIN_SECRET_KEY="test-only-signing-key",
     )
