@@ -1,6 +1,6 @@
 import Foundation
 
-/// The derived state the Python side writes to `.state.json`: the authoritative
+/// The derived state returned by GET /state: the authoritative
 /// staged set, per-model build cost, count of built pages, needs-review and
 /// skipped counts, whether a reviewed grouping has drifted from staging, and
 /// why each failed file failed. The app renders this rather than recomputing it.
@@ -59,10 +59,7 @@ struct AppState: Decodable {
         pendingTriage = try container.decodeIfPresent([String].self, forKey: .pendingTriage) ?? []
     }
 
-    static func load(from url: URL) -> AppState? {
-        guard let data = try? Data(contentsOf: url) else { return nil }
-        return try? JSONDecoder().decode(AppState.self, from: data)
-    }
+
 }
 
 /// A raw source that has been ingested and passed triage but is not yet

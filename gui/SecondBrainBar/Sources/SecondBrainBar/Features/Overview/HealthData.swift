@@ -35,41 +35,44 @@ struct WikiHealth {
     }
 }
 
-enum HealthData {
-    /// Run the health check. Call off the main thread (this spawns a
-    /// subprocess).
-    static func load(config: AppConfig) -> WikiHealth? {
-        guard let repo = config.repoDir,
-              let output = PipelineRunner.runManagedCapturing(
-                  repoDir: repo, command: "health --json"
-              )
-        else { return nil }
-
-        // uv or the shell may prepend lines; the JSON is the last {...} line.
-        guard let jsonLine = output
-            .split(separator: "\n")
-            .last(where: { $0.trimmingCharacters(in: .whitespaces).hasPrefix("{") }),
-            let parsed = try? JSONSerialization.jsonObject(
-                with: Data(jsonLine.utf8)) as? [String: Any]
-        else { return nil }
-
-        let categories = (parsed["categories"] as? [[String: Any]] ?? []).map { raw -> HealthCategory in
-            let items = (raw["items"] as? [[String: Any]] ?? []).compactMap { item -> HealthItem? in
-                guard let text = item["text"] as? String else { return nil }
-                return HealthItem(
-                    text: text,
-                    page: item["page"] as? String,
-                    detail: item["detail"] as? String,
-                    pair: item["pair"] as? String
-                )
-            }
-            return HealthCategory(
-                key: raw["key"] as? String ?? UUID().uuidString,
-                label: raw["label"] as? String ?? "",
-                section: raw["section"] as? String ?? "health",
-                items: items
-            )
+struct WikiHealthResponse: Decodable {
+    let orphan_pages: [String]
+    let gap_links: [CountedPage]
+    let possible_duplicates: [DuplicatePages]
+    let oversized_pages: [CountedPage]
+    let undersized_pages: [CountedPage]
+    let missing_frontmatter: [String]
+    var presentation: WikiHealth {
+        func page(_ name: String, detail: String? = nil) -> HealthItem {
+            HealthItem(text: name, page: name, detail: detail, pair: nil)
         }
-        return WikiHealth(healthy: parsed["healthy"] as? Bool ?? false, categories: categories)
+        let categories = [
+            HealthCategory(key: "orphan_pages", label: "Unlinked pages", section: "improve", items: orphan_pages.map { page($0) }),
+            HealthCategory(key: "gap_links", label: "Missing topics", section: "improve", items: gap_links.map { HealthItem(text: $0.name, page: nil, detail: "\($0.count) links", pair: nil) }),
+            HealthCategory(key: "possible_duplicates", label: "Possible duplicates", section: "health", items: possible_duplicates.map { HealthItem(text: $0.first, page: $0.first, detail: nil, pair: $0.second) }),
+            HealthCategory(key: "oversized_pages", label: "Long pages", section: "health", items: oversized_pages.map { page($0.name, detail: "\($0.count) words") }),
+            HealthCategory(key: "undersized_pages", label: "Short pages", section: "improve", items: undersized_pages.map { page($0.name, detail: "\($0.count) words") }),
+            HealthCategory(key: "missing_frontmatter", label: "Missing metadata", section: "health", items: missing_frontmatter.map { page($0) })
+        ]
+        return WikiHealth(healthy: categories.allSatisfy { $0.items.isEmpty }, categories: categories)
     }
 }
+struct CountedPage: Decodable {
+    let name: String
+    let count: Int
+    init(from decoder: Decoder) throws {
+        var fields = try decoder.unkeyedContainer()
+        name = try fields.decode(String.self)
+        count = try fields.decode(Int.self)
+    }
+}
+struct DuplicatePages: Decodable {
+    let first: String
+    let second: String
+    init(from decoder: Decoder) throws {
+        var fields = try decoder.unkeyedContainer()
+        first = try fields.decode(String.self)
+        second = try fields.decode(String.self)
+    }
+}
+struct WikiPageResponse: Decodable { let path: String }

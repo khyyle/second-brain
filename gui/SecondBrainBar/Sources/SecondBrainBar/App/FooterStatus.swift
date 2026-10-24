@@ -7,14 +7,22 @@ struct FooterStatus: View {
 
     var body: some View {
         Group {
-            if let status = store.status, status.isActive {
+            if store.isActive {
                 TimelineView(.periodic(from: .now, by: 1)) { context in
-                    HStack(spacing: 6) {
-                        ProgressView().controlSize(.small).scaleEffect(0.7)
-                        Text(activeDetail(status, now: context.date))
-                            .font(Theme.Font.meta(10.5))
+                    VStack(alignment: .leading, spacing: 2) {
+                        ForEach([store.ingestStatus, store.buildStatus].compactMap { $0 }) { status in
+                            HStack(spacing: 6) {
+                                if status.queued {
+                                    Image(systemName: "clock").font(.system(size: 10))
+                                } else {
+                                    ProgressView().controlSize(.small).scaleEffect(0.7)
+                                }
+                                Text(status.footerDetail(at: context.date))
+                                    .font(Theme.Font.meta(10.5))
+                                    .monospacedDigit()
+                            }
                             .foregroundStyle(Theme.Colors.textSecondary)
-                            .monospacedDigit()
+                        }
                     }
                 }
             } else {
@@ -28,26 +36,4 @@ struct FooterStatus: View {
         }
     }
 
-    // The single live-progress readout: phase + i/n for every stage, with
-    // elapsed and cost added for the paid build (the free local stages have
-    // no cost to show).
-    private func activeDetail(_ status: PipelineStatus, now: Date) -> String {
-        let verb: String
-        switch status.phase {
-        case "compile": verb = "Building"
-        case "cluster": verb = "Grouping"
-        case "triage":  verb = "Triaging"
-        default:        verb = "Ingesting"
-        }
-        var parts: [String] = [
-            status.total > 0
-                ? "\(verb) \(min(status.current + 1, status.total))/\(status.total)"
-                : verb
-        ]
-        if status.phase == "compile" {
-            parts.append(formatElapsed(max(0, now.timeIntervalSince(status.startedAt))))
-            if status.costUSD > 0 { parts.append(String(format: "$%.2f", status.costUSD)) }
-        }
-        return parts.joined(separator: " · ")
-    }
 }

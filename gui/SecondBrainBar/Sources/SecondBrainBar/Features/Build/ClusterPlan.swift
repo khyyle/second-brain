@@ -1,9 +1,6 @@
 import Foundation
 
-/// The build plan the Python `preview-clusters` command writes to
-/// `.clusters.json`: how staged sources group into compile units and what
-/// that would cost. The menu bar reads it to show the grouped Build view;
-/// the compiler reads the same artifact so the build matches the preview.
+/// Reviewed grouping returned by the API; the backend snapshots it for builds.
 struct ClusterPlan: Decodable {
     let generatedAt: String
     let algorithm: String
@@ -12,6 +9,7 @@ struct ClusterPlan: Decodable {
     let groupCount: Int
     let costs: [String: Double]
     let groups: [ClusterGroup]
+    let overrides: ClusterOverrides
 
     enum CodingKeys: String, CodingKey {
         case generatedAt = "generated_at"
@@ -20,7 +18,7 @@ struct ClusterPlan: Decodable {
         case sourceCount = "source_count"
         case groupCount = "group_count"
         case costs
-        case groups
+        case groups, overrides
     }
 
     /// Total estimated cost for `model`, from the plan's per-model map.
@@ -31,11 +29,7 @@ struct ClusterPlan: Decodable {
         Set(groups.flatMap { group in group.members.map(\.rel) })
     }
 
-    /// Load the plan artifact, or nil if absent or unreadable.
-    static func load(_ url: URL) -> ClusterPlan? {
-        guard let data = try? Data(contentsOf: url) else { return nil }
-        return try? JSONDecoder().decode(ClusterPlan.self, from: data)
-    }
+
 }
 
 struct ClusterGroup: Decodable, Identifiable {
@@ -70,8 +64,7 @@ struct ClusterMember: Decodable, Hashable {
     var displayName: String { (rel as NSString).lastPathComponent }
 }
 
-/// User corrections to the grouping, written to `.cluster-overrides.json`
-/// for the build to honor: sources to pop out of their group, and groups
+/// User corrections saved through PUT /grouping-plan/overrides: sources to pop out of their group, and groups
 /// to split into one page per source.
 struct ClusterOverrides: Codable {
     var excluded: [String]
@@ -103,17 +96,4 @@ struct ClusterOverrides: Codable {
         }
     }
 
-    static func load(_ url: URL) -> ClusterOverrides {
-        guard let data = try? Data(contentsOf: url),
-              let decoded = try? JSONDecoder().decode(ClusterOverrides.self, from: data)
-        else { return .empty }
-        return decoded
-    }
-
-    func write(to url: URL) {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted]
-        guard let data = try? encoder.encode(self) else { return }
-        try? data.write(to: url, options: .atomic)
-    }
 }

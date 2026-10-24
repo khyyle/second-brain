@@ -9,6 +9,8 @@ struct DomainsTab: View {
     @State private var loaded = false
     @State private var unavailable = false
     @State private var busy = false
+    @State private var errorMessage: String?
+    @EnvironmentObject private var store: PipelineStore
     @State private var renaming: DomainInfo?
     @State private var renameText = ""
     @State private var deleting: DomainInfo?
@@ -18,6 +20,9 @@ struct DomainsTab: View {
             header
             content
         }
+        .alert("Domain action failed", isPresented: Binding(
+            get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } }
+        )) { Button("OK", role: .cancel) {} } message: { Text(errorMessage ?? "") }
         .onAppear(perform: refresh)
         .onPanelShow(refresh)
         .alert("Rename domain", isPresented: renamePresented) {
@@ -60,7 +65,7 @@ struct DomainsTab: View {
         if !loaded {
             EmptyListMessage(text: nil)
         } else if unavailable {
-            EmptyListMessage(text: "Domains need the installed pipeline. Reinstall to manage them.")
+            EmptyListMessage(text: "Unable to load domains from the backend.")
         } else if domains.isEmpty {
             EmptyListMessage(text: "No domains yet. They appear once you build the wiki.")
         } else {
@@ -68,7 +73,7 @@ struct DomainsTab: View {
                 DomainRow(
                     domain: domain,
                     others: domains.map(\.name).filter { $0 != domain.name },
-                    busy: busy,
+                    busy: busy || store.locked,
                     onOpen: { open(domain) },
                     onRename: { startRename(domain) },
                     onMerge: { merge(domain, into: $0) },
@@ -96,27 +101,25 @@ struct DomainsTab: View {
         let newName = renameText.trimmingCharacters(in: .whitespacesAndNewlines)
         renaming = nil
         guard !newName.isEmpty, newName != target.name else { return }
-        mutate { DomainMutator.rename(config: config, old: target.name, new: newName, completion: $0) }
+        mutate("/domains/rename", body: ["old": target.name, "new": newName])
     }
 
     private func performDelete() {
         guard let target = deleting else { return }
         deleting = nil
-        mutate { DomainMutator.delete(config: config, name: target.name, completion: $0) }
+        mutate("/domains", method: "DELETE", query: ["name": target.name])
     }
 
     private func merge(_ domain: DomainInfo, into dest: String) {
-        mutate {
-            DomainMutator.merge(config: config, sources: [domain.name], dest: dest, completion: $0)
-        }
+        mutate("/domains/merge", body: ["sources": [domain.name], "dest": dest])
     }
 
-    /// Run a mutation with the busy spinner up, then refresh the list.
-    private func mutate(_ action: (@escaping (Bool) -> Void) -> Void) {
+    private func mutate(_ path: String, method: String = "POST", query: [String: String] = [:], body: [String: Any]? = nil) {
         busy = true
-        action { _ in
-            busy = false
-            refresh()
+        Task {
+            defer { busy = false }
+            do { try await store.api.send(path, method: method, query: query, body: body); refresh() }
+            catch { errorMessage = error.localizedDescription }
         }
     }
 
@@ -125,22 +128,10 @@ struct DomainsTab: View {
     }
 
     private func refresh() {
-        guard config.repoDir != nil else {
-            unavailable = true
+        Task {
+            do { domains = try await store.api.request("/domains"); unavailable = false }
+            catch { unavailable = true; errorMessage = error.localizedDescription }
             loaded = true
-            return
-        }
-        DispatchQueue.global(qos: .userInitiated).async {
-            let result = DomainData.load(config: config)
-            DispatchQueue.main.async {
-                if let result {
-                    domains = result
-                    unavailable = false
-                } else {
-                    unavailable = true
-                }
-                loaded = true
-            }
         }
     }
 }

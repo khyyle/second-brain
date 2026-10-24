@@ -41,62 +41,29 @@ struct QueueItem: Identifiable, Hashable {
     }
 }
 
-/// Reads the ingest queue from the filesystem + manifest. Kept off the
-/// SwiftUI types so views stay declarative.
+/// Import records returned by the backend, including pending filesystem copies.
+struct ImportFile: Decodable {
+    let file_path: String
+    let status: String
+    let updated_at: String
+    let error: String?
+    var queueItem: QueueItem {
+        let state: QueueItem.State
+        switch status {
+        case "processing": state = .processing
+        case "failed": state = .failed
+        case "complete": state = .finished
+        case "duplicate": state = .duplicate
+        default: state = .waiting
+        }
+        return QueueItem(id: file_path, displayName: (file_path as NSString).lastPathComponent,
+                         state: state, since: backendDate(updated_at) ?? Date())
+    }
+}
+
 enum IngestQueue {
-    private static let supported: Set<String> = ["pdf", "md", "txt", "tex", "json"]
-
-    static func queue(config: AppConfig, submitted: [QueueItem] = []) -> [QueueItem] {
-        let statuses = ManifestReader(dbPath: config.manifestDB).statusByPath()
-        let submittedByPath = Dictionary(submitted.map { ($0.id, $0) }, uniquingKeysWith: { _, last in last })
-        let fm = FileManager.default
-        let enumerator = fm.enumerator(
-            at: config.dropsRoot,
-            includingPropertiesForKeys: [.contentModificationDateKey],
-            options: [.skipsHiddenFiles, .skipsPackageDescendants]
-        )
-
-        var items: [QueueItem] = []
-        while let url = enumerator?.nextObject() as? URL {
-            guard supported.contains(url.pathExtension.lowercased()) else { continue }
-            // macOS exposes the same file through /var and /private/var.
-            let sourcePath = statuses[url.path] != nil || submittedByPath[url.path] != nil
-                ? url.path : url.resolvingSymlinksInPath().path
-            let submission = submittedByPath[sourcePath]
-            if submission?.state.isFinished == true { continue }
-            var info = statuses[sourcePath]
-            // A re-submitted path can still have the previous copy's verdict.
-            if let previous = info, let submission, previous.updatedAt < submission.since {
-                info = nil
-            }
-            if info?.status == .complete || info?.status == .duplicate { continue }
-
-            let state: QueueItem.State
-            switch info?.status {
-            case .processing: state = .processing
-            case .duplicate:  state = .duplicate
-            case .failed:     state = .failed
-            default:          state = .waiting
-            }
-            let mod = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?
-                .contentModificationDate ?? Date.distantPast
-            // For a processing item, "since" is when it entered processing.
-            let since = info?.updatedAt ?? submission?.since ?? mod
-            items.append(
-                QueueItem(id: sourcePath, displayName: url.lastPathComponent, state: state, since: since)
-            )
-        }
-        let listedPaths = Set(items.map(\.id))
-        for (path, status) in statuses where status.status == .failed && !listedPaths.contains(path) {
-            if let submission = submittedByPath[path], status.updatedAt < submission.since { continue }
-            items.append(QueueItem(
-                id: path,
-                displayName: (path as NSString).lastPathComponent,
-                state: .failed,
-                since: status.updatedAt
-            ))
-        }
-        return items.sorted { $0.id < $1.id }
+    static func queue(imports: [ImportFile]) -> [QueueItem] {
+        imports.filter { $0.status != "complete" && $0.status != "duplicate" }.map(\.queueItem)
     }
 }
 

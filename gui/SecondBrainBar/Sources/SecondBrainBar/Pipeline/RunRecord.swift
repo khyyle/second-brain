@@ -6,36 +6,11 @@ enum PipelineStage: String, CaseIterable {
     case compile
 }
 
-/// How the last ingest and the last build each ended, read from the
-/// `.last-run.json` the Python CLI writes when a run finishes. Each stage keeps
-/// its own entry, so a clean ingest never hides a failed build.
-struct RunRecord: Decodable, Equatable {
+/// Latest completed ingest and build outcomes from durable jobs.
+struct RunRecord: Equatable {
     let ingest: StageRun?
     let compile: StageRun?
-
-    private enum CodingKeys: String, CodingKey {
-        case ingest
-        case compile
-    }
-
-    init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        // An entry this version can't read must not hide the other stage.
-        ingest = try? container.decodeIfPresent(StageRun.self, forKey: .ingest)
-        compile = try? container.decodeIfPresent(StageRun.self, forKey: .compile)
-    }
-
-    func run(for stage: PipelineStage) -> StageRun? {
-        switch stage {
-        case .ingest: return ingest
-        case .compile: return compile
-        }
-    }
-
-    static func load(from url: URL) -> RunRecord? {
-        guard let data = try? Data(contentsOf: url) else { return nil }
-        return try? JSONDecoder().decode(RunRecord.self, from: data)
-    }
+    func run(for stage: PipelineStage) -> StageRun? { stage == .ingest ? ingest : compile }
 }
 
 /// One stage's ending. `reason` is a plain sentence Python wrote, shown as-is

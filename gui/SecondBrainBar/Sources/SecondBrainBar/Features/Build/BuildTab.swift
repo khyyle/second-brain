@@ -8,10 +8,10 @@ struct BuildTab: View {
     let onBuild: () -> Void
     let canBuild: Bool
     @State private var plan: ClusterPlan?
-    @State private var planStamp = ""
     @State private var overrides = ClusterOverrides.empty
     @State private var entries: [BuildLogEntry] = []
     @State private var loaded = false
+    @State private var savingOverrides = false
     @State private var compilationModel = "claude-sonnet-4-6"
     @State private var groupingError: String?
     @EnvironmentObject private var store: PipelineStore
@@ -35,7 +35,7 @@ struct BuildTab: View {
                 sourceCount: store.stagedForBuild.count,
                 stale: store.stale,
                 hasPlan: plan != nil,
-                canPreview: config.repoDir != nil
+                canPreview: store.connected
                     && store.stagedForBuild.filter { isConversation($0.id) }.count >= 2,
                 onPreview: previewGrouping,
                 onBuild: onBuild,
@@ -48,7 +48,8 @@ struct BuildTab: View {
         }
         .onAppear(perform: refresh)
         .onPanelShow(refresh)
-        .onReceive(Ticker.everySecond) { _ in refresh() }
+        .onChange(of: store.stateStamp) { _ in refresh() }
+        .disabled(savingOverrides)
         .alert(
             "Grouping didn't finish",
             isPresented: Binding(
@@ -137,57 +138,38 @@ struct BuildTab: View {
     }
 
     private func refresh() {
-        let loadedPlan = ClusterPlan.load(config.clusterPlanFile)
-        // Reload overrides only when the plan itself changes (a new preview
-        // clears them server-side), so in-flight tuning isn't clobbered.
-        if loadedPlan?.generatedAt != planStamp {
-            planStamp = loadedPlan?.generatedAt ?? ""
-            overrides = ClusterOverrides.load(config.clusterOverridesFile)
-        }
-        plan = loadedPlan
-        entries = BuildLog.recent(at: config.buildLog)
-        compilationModel = ConfigStore.locate(config)
-            .map { ConfigStore.load(from: $0).model } ?? "claude-sonnet-4-6"
-        loaded = true
+        guard !savingOverrides else { return }
+        plan = store.groupingPlan
+        overrides = plan?.overrides ?? .empty
+        entries = store.buildActions
+        compilationModel = store.compilationModel
+        loaded = store.hasState
     }
 
     private func isConversation(_ rel: String) -> Bool {
         ExportProvider.allCases.contains { rel.hasPrefix($0.lane + "/") }
     }
 
-    private func previewGrouping() {
-        guard let repo = config.repoDir else { return }
-        DispatchQueue.global(qos: .userInitiated).async {
-            let result = PipelineRunner.runManagedResult(repoDir: repo, command: "preview-clusters")
-            guard !result.succeeded else { return }
-            let reason = result.failureReason ?? "The grouping stopped before it finished."
-            DispatchQueue.main.async { groupingError = reason }
-        }
-    }
+    private func previewGrouping() { store.previewGrouping() }
 
     private func writeOverrides() {
-        overrides.write(to: config.clusterOverridesFile)
-    }
-
-    private func remove(_ rawRel: String) {
-        withAnimation(.easeOut(duration: 0.3)) { store.removeStagedSource(rawRel) }
-    }
-
-    private func skip(_ rawRel: String) {
-        ManifestMutator.skipSource(config: config, rawRel: rawRel)
-        refresh()
-    }
-
-    /// Requeue a set-aside source. Single-quoted because raw paths carry
-    /// spaces and shell metacharacters and the command runs through zsh.
-    private func retry(_ rawRel: String) {
-        guard let repo = config.repoDir else { return }
-        let quoted = "'" + rawRel.replacingOccurrences(of: "'", with: "'\\''") + "'"
-        DispatchQueue.global(qos: .userInitiated).async {
-            _ = PipelineRunner.runManagedSync(repoDir: repo, command: "recompile \(quoted)")
-            DispatchQueue.main.async { refresh() }
+        savingOverrides = true
+        let submitted = overrides
+        Task {
+            defer { savingOverrides = false; refresh() }
+            do {
+                overrides = try await store.api.request("/grouping-plan/overrides", method: "PUT",
+                    body: ["excluded": submitted.excluded, "split_groups": submitted.splitGroups])
+                await store.refreshNow()
+            } catch {
+                overrides = plan?.overrides ?? .empty
+                groupingError = error.localizedDescription
+            }
         }
     }
+    private func remove(_ path: String) { store.removeStagedSource(path) }
+    private func skip(_ path: String) { store.setTriage(path, decision: "skip") }
+    private func retry(_ path: String) { store.recompile(path) }
 
     private func openRaw(_ rawRel: String) {
         openInDefaultApp(config.rawRoot.appending(path: rawRel))

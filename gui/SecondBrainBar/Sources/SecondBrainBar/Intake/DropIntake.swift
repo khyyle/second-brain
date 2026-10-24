@@ -10,10 +10,7 @@ struct AddedFiles: Equatable, Identifiable {
     var exportDescription: String? = nil
 }
 
-/// The app's way in for files. It copies dropped or picked files into the drop
-/// folders and holds the outcome the drop card shows. One instance serves the
-/// whole window, so files dropped on any tab land the same way as files
-/// dropped on the card.
+/// Submits selected files for import and holds pending confirmations and outcomes.
 @MainActor
 final class DropIntake: ObservableObject {
     /// Why a drop or import added nothing. `detail` falls back to the card's
@@ -49,7 +46,6 @@ final class DropIntake: ObservableObject {
     private static let slowAddingSeconds: TimeInterval = 0.3
 
     private let config: AppConfig
-    private let stagingQueue = DispatchQueue(label: "SecondBrainBar.DropIntake", qos: .userInitiated)
     private var addedDismissal: DispatchWorkItem?
     private var failureDismissal: DispatchWorkItem?
     private var slowAddingTimer: DispatchWorkItem?
@@ -83,7 +79,7 @@ final class DropIntake: ObservableObject {
                 return true
             }
             let fileExtension = url.pathExtension.lowercased()
-            return fileExtension == "json" || DropStaging.documentExtensions.contains(fileExtension)
+            return fileExtension == "json" || ImportSelection.documentExtensions.contains(fileExtension)
         }
     }
 
@@ -92,7 +88,7 @@ final class DropIntake: ObservableObject {
     func presentAddFilesPanel() {
         guard acceptsFiles else { return }
         let panel = makePanel(prompt: "Add", message: "Choose files or folders to add to Second Brain")
-        panel.allowedContentTypes = DropStaging.documentExtensions.union(["json"])
+        panel.allowedContentTypes = ImportSelection.documentExtensions.union(["json"])
             .compactMap { UTType(filenameExtension: $0) }
         if panel.runModal() == .OK { add(panel.urls) }
     }
@@ -113,68 +109,35 @@ final class DropIntake: ObservableObject {
 
     // MARK: - Adding
 
-    /// Copy document files into the documents lane. A conversation export found
-    /// in the selection waits for confirmation that names it and its conversation
-    /// count, then goes to its provider's lane. Recognized export packages
-    /// contribute only the export so their attachments aren't added separately.
+    /// Inspect the selection locally, then let the backend copy it and queue ingestion.
     func add(_ urls: [URL]) {
-        guard !urls.isEmpty else { return }
+        guard !urls.isEmpty, !isAdding else { return }
         submissionCount += 1
         beginAdding()
-        let config = config
-        stagingQueue.async { [weak self] in
-            let export = ExportProvider.detect(in: urls)
-            let exportFolders = export?.exportFolders ?? []
-            let result = DropStaging.stageDocuments(
-                urls.filter { !exportFolders.contains($0) }, config: config
-            )
-            let alreadyProcessed = export.map {
-                DropStaging.isAlreadyIngested($0.files, config: config)
-            } ?? false
-            DispatchQueue.main.async { [weak self] in
-                guard let self else { return }
-                if let export, alreadyProcessed || self.confirmImport(of: export) {
-                    self.copyExport(export, documents: result)
-                } else {
-                    self.endAdding()
-                    self.reportDocuments(result, declinedExport: export != nil)
-                }
+        Task {
+            defer { endAdding() }
+            let selection = await Task.detached(priority: .userInitiated) {
+                let export = ExportProvider.detect(in: urls)
+                let folders = export?.exportFolders ?? []
+                return (ImportSelection.documentFiles(in: urls.filter { !folders.contains($0) }), export)
+            }.value
+            var files = selection.0
+            var description: String?
+            if let export = selection.1, confirmImport(of: export) {
+                files += export.files
+                description = "\(export.provider.displayName) export: \(export.sourceName)"
             }
-        }
-    }
-
-    private func copyExport(_ export: DetectedExport, documents: DropStaging.Result) {
-        let config = config
-        stagingQueue.async { [weak self] in
-            let exportResult = DropStaging.importExport(export.provider, files: export.files, config: config)
-            DispatchQueue.main.async { [weak self] in
-                guard let self else { return }
-                self.endAdding()
-                if exportResult.added > 0 {
-                    self.confirm(
-                        files: documents.files + exportResult.files,
-                        exportDescription: "\(export.provider.displayName) export: \(export.sourceName)"
-                    )
-                } else if documents.added > 0 {
-                    self.confirm(files: documents.files)
-                } else {
-                    self.fail(Failure(title: "Couldn't import the export", detail: "Try again"))
-                }
+            guard !files.isEmpty else {
+                if selection.1 == nil { fail(Failure(title: "No supported files found")) }
+                return
             }
-        }
-    }
-
-    /// A declined export is the person's choice, so it isn't reported as a
-    /// failure even when nothing else was added.
-    private func reportDocuments(_ result: DropStaging.Result, declinedExport: Bool) {
-        if result.added > 0 {
-            confirm(files: result.files)
-        } else if declinedExport {
-            return
-        } else if result.failed {
-            fail(Failure(title: "Couldn't copy the files", detail: "Try again"))
-        } else {
-            fail(Failure(title: "No supported files found"))
+            do {
+                let submission: ImportSubmission = try await BackendClient(config: config).request(
+                    "/imports", method: "POST", body: ["paths": files.map(\.path), "source_type": "auto"])
+                confirm(files: submission.files.map(\.queueItem), exportDescription: description)
+            } catch {
+                fail(Failure(title: "Couldn't import the files", detail: error.localizedDescription))
+            }
         }
     }
 

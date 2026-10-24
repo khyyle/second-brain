@@ -1,57 +1,43 @@
 import SwiftUI
 import AppKit
 
-/// In-popover settings panel. Scalar knobs are written straight into
-/// `config.yaml`; watched folders go to the GUI-owned `sources.json`;
-/// scheduling and MCP wiring shell out to the CLI so the choices take
-/// effect. Help "?" buttons sit beside non-obvious fields and groups.
+/// API-backed preferences and integrations; provider secrets are stored in Keychain.
 struct SettingsView: View {
     let config: AppConfig
     let onClose: () -> Void
 
-    @State private var settings = PipelineSettings.fallback
-    @State private var scheduleHours: [Int] = []
-    @State private var scheduleEnabled = false
+    @State private var catalog: ApplicationCatalog?
+    @State private var provider = ""
+    @State private var model = ""
+    @State private var triageEnabled = true
+    @State private var triageProfile = ""
+    @State private var costCap = ""
+    @State private var apiKeys: [String: String] = [:]
+    @State private var configured: [String: Bool] = [:]
     @State private var watched: [WatchedFolder] = []
     @State private var connectStatus: [String: ConnectStatus] = [:]
     @State private var connectError: String?
-    @State private var apiKey = ""
-    @State private var loadedKey = ""
-    @State private var costCap = ""
-    @State private var configURL: URL?
-    @State private var ollamaHealth: PipelineRunner.OllamaHealth?
+    @State private var ollamaHealth: OllamaHealth?
     @State private var checkingOllama = false
-
-    private let profileLabels: [String: String] = [
-        "balanced": "Balanced",
-        "technical": "Technical",
-        "skip_heavy": "Skip-heavy",
-        "project_heavy": "Project-heavy",
-        "lenient": "Lenient",
-    ]
-
-    /// Switching provider resets the model to that provider's default and
-    /// reloads the key field to show the newly-selected provider's key.
-    private var providerBinding: Binding<LLMProvider> {
-        Binding(
-            get: { settings.llmProvider },
-            set: { newProvider in
-                settings.provider = newProvider.rawValue
-                settings.model = newProvider.defaultModel
-                loadedKey = EnvStore.readKey(config, keyName: newProvider.envKeyName)
-                apiKey = loadedKey
-            }
-        )
+    @State private var loaded = false
+    @State private var saving = false
+    @State private var errorMessage: String?
+    private var api: BackendClient { BackendClient(config: config) }
+    private var selectedProvider: ProviderInfo? { catalog?.providers.first { $0.id == provider } }
+    private var keyBinding: Binding<String> {
+        Binding(get: { apiKeys[provider] ?? "" }, set: { apiKeys[provider] = $0 })
     }
-
-    private var modelBinding: Binding<String> {
-        Binding(get: { settings.model }, set: { settings.model = $0 })
+    private var providerBinding: Binding<String> {
+        Binding(get: { provider }, set: { value in
+            provider = value
+            model = catalog?.providers.first { $0.id == value }?.models.first?.id ?? ""
+        })
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             header
-            if configURL == nil {
+            if !loaded {
                 unavailable
             } else {
                 ScrollView {
@@ -65,6 +51,10 @@ struct SettingsView: View {
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .topLeading)
         .onAppear(perform: load)
+        .disabled(saving)
+        .alert("Couldn't update settings", isPresented: Binding(
+            get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } }
+        )) { Button("OK", role: .cancel) {} } message: { Text(errorMessage ?? "") }
     }
 
     private var header: some View {
@@ -80,10 +70,10 @@ struct SettingsView: View {
 
     private var unavailable: some View {
         VStack(alignment: .leading, spacing: 5) {
-            Text("Config not found")
+            Text("Loading settings…")
                 .font(Theme.Font.body(12, weight: .semibold))
                 .foregroundStyle(Theme.Colors.textPrimary)
-            Text("Run the installer again so the app can find its settings.")
+            Text("Settings are loaded from the local backend.")
                 .font(Theme.Font.body(11.5))
                 .foregroundStyle(Theme.Colors.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -99,14 +89,14 @@ struct SettingsView: View {
         ) {
             fieldLabel("Provider")
             SegmentedPicker(
-                options: LLMProvider.allCases.map { ($0.displayName, $0) },
+                options: (catalog?.providers ?? []).map { ($0.name, $0.id) },
                 selection: providerBinding
             )
-            if settings.llmProvider.models.count > 1 {
+            if (selectedProvider?.models.count ?? 0) > 1 {
                 SettingsRow("Model") {
-                    Picker("", selection: modelBinding) {
-                        ForEach(settings.llmProvider.models, id: \.id) { model in
-                            Text(model.label).tag(model.id)
+                    Picker("", selection: $model) {
+                        ForEach(selectedProvider?.models ?? [], id: \.id) { model in
+                            Text(model.id).tag(model.id)
                         }
                     }
                     .labelsHidden()
@@ -115,20 +105,16 @@ struct SettingsView: View {
                     .tint(Theme.Colors.textSecondary)
                 }
             }
-            fieldLabel("\(settings.llmProvider.displayName) API key")
-            SecureField(settings.llmProvider.keyPlaceholder, text: $apiKey)
-                .textFieldStyle(.plain)
-                .font(Theme.Font.meta(11))
-                .foregroundStyle(Theme.Colors.textPrimary)
-                .padding(.horizontal, 8).padding(.vertical, 5)
-                .background(
-                    RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .fill(Theme.Colors.background)
-                )
-            if apiKey == loadedKey && !loadedKey.isEmpty {
+            FloatingLabelSecureField(
+                title: "\(selectedProvider?.name ?? provider) API key",
+                text: keyBinding
+            )
+            .id(provider)
+            .help("Leave blank to keep the saved key.")
+            if configured[provider] == true {
                 HStack(spacing: 3) {
                     Image(systemName: "checkmark.circle.fill").font(.system(size: 9))
-                    Text("Saved")
+                    Text("Saved in Keychain")
                 }
                 .font(Theme.Font.meta(9.5))
                 .foregroundStyle(Theme.Colors.success)
@@ -172,7 +158,7 @@ struct SettingsView: View {
                 + "sources are not triaged."
         ) {
             SettingsRow("Filter ChatGPT imports") {
-                Toggle("", isOn: $settings.triageEnabled)
+                Toggle("", isOn: $triageEnabled)
                     .labelsHidden().toggleStyle(.switch).tint(Theme.Colors.accent)
             }
             SettingsRow("Style",
@@ -180,17 +166,17 @@ struct SettingsView: View {
                     + "Technical favors conceptual knowledge; project-heavy "
                     + "favors things you're building; skip-heavy keeps only "
                     + "the strongest chats; lenient keeps almost everything.") {
-                Picker("", selection: $settings.triageProfile) {
-                    ForEach(PipelineSettings.profiles, id: \.self) { p in
-                        Text(profileLabels[p] ?? p).tag(p)
+                Picker("", selection: $triageProfile) {
+                    ForEach(catalog?.triage_profiles ?? [], id: \.self) { p in
+                        Text(p.replacingOccurrences(of: "_", with: " ").capitalized).tag(p)
                     }
                 }
                 .labelsHidden()
                 .pickerStyle(.menu)
                 .font(Theme.Font.body(11.5))
                 .tint(Theme.Colors.textSecondary)
-                .disabled(!settings.triageEnabled)
-                .opacity(settings.triageEnabled ? 1 : 0.4)
+                .disabled(!triageEnabled)
+                .opacity(triageEnabled ? 1 : 0.4)
             }
         }
 
@@ -226,17 +212,6 @@ struct SettingsView: View {
 
         SettingsGroup(title: "Automation") {
             watchedFolders
-            SettingsRow("Ingest on a schedule",
-                help: "Ingests new and changed files while the app is closed. "
-                    + "Build the wiki manually when you are ready. "
-                    + "Missed runs happen when your Mac wakes.") {
-                Toggle("", isOn: $scheduleEnabled)
-                    .labelsHidden().toggleStyle(.switch).tint(Theme.Colors.accent)
-            }
-            if scheduleEnabled {
-                subhead("Schedule")
-                ScheduleEditor(hours: $scheduleHours)
-            }
         }
     }
 
@@ -244,7 +219,7 @@ struct SettingsView: View {
     private var watchedFolders: some View {
         subhead("Watched folders",
                 help: "New and changed files are copied in and ingested automatically "
-                    + "while the app is open, or on a scheduled run. Originals stay in place. "
+                    + "while the backend is running. Originals stay in place. "
                     + "Build the wiki manually when you are ready.")
         if watched.isEmpty {
             Text("No watched folders.")
@@ -261,9 +236,6 @@ struct SettingsView: View {
         TextAction(title: "Add folder", icon: "plus", restTint: Theme.Colors.accent, action: pickFolder)
     }
 
-    /// Caption above a full-width control (segmented control, text field).
-    /// Distinct from `subhead` (a sub-section divider) and `SettingsRow` (label
-    /// with a trailing control), so the three tiers stay visually consistent.
     @ViewBuilder
     private func fieldLabel(_ text: String) -> some View {
         Text(text)
@@ -299,7 +271,7 @@ struct SettingsView: View {
                         )
                 }
                 .buttonStyle(.plain)
-                .disabled(checkingOllama || config.repoDir == nil)
+                .disabled(checkingOllama)
 
                 Text(text)
                     .font(Theme.Font.meta(10))
@@ -314,9 +286,6 @@ struct SettingsView: View {
         }
     }
 
-    /// A small, secondary sub-section header inside a settings card, styled
-    /// like an iOS grouped-settings section header (smaller and dimmer than a
-    /// row label) rather than a row, so it reads as a heading, not a control.
     @ViewBuilder
     private func subhead(_ title: String, help: String? = nil) -> some View {
         HStack(spacing: 5) {
@@ -349,84 +318,88 @@ struct SettingsView: View {
                     )
             }
             .buttonStyle(.plain)
-            .disabled(configURL == nil)
-            .opacity(configURL == nil ? 0.4 : 1)
+            .disabled(!loaded || saving)
+            .opacity(!loaded ? 0.4 : 1)
         }
     }
 
-    // MARK: - Actions
-
     private func load() {
-        guard let url = ConfigStore.locate(config) else { return }
-        configURL = url
-        settings = ConfigStore.load(from: url)
-        costCap = settings.maxCostPerBuildUSD > 0
-            ? String(format: "%g", settings.maxCostPerBuildUSD) : ""
-        scheduleHours = settings.scheduleHours
-        scheduleEnabled = PipelineRunner.scheduleInstalled
-        watched = SourcesStore.load(config)
-        loadedKey = EnvStore.readKey(config, keyName: settings.llmProvider.envKeyName)
-        apiKey = loadedKey
-        for target in ["claude-desktop", "chatgpt-desktop", "cursor"] {
-            connectStatus[target] = PipelineRunner.isMCPConfigured(target) ? .done : .idle
+        Task {
+            do {
+                async let fetchedCatalog: ApplicationCatalog = api.request("/catalog")
+                async let preferences: PreferencesResponse = api.request("/settings")
+                async let folders: [WatchedFolder] = api.request("/watched-folders")
+                let (c, p, f) = try await (fetchedCatalog, preferences, folders)
+                catalog = c
+                provider = p.compilation.provider
+                model = p.compilation.model
+                costCap = p.compilation.max_cost_per_build_usd > 0 ? String(p.compilation.max_cost_per_build_usd) : ""
+                triageEnabled = p.triage.enabled
+                triageProfile = p.triage.profile
+                watched = f
+                loaded = true
+                for provider in c.providers {
+                    let status: CredentialStatus = try await api.request("/credentials/\(provider.id)")
+                    configured[provider.id] = status.configured
+                }
+                for target in ["claude-desktop", "chatgpt-desktop", "cursor"] {
+                    let status: IntegrationStatus = try await api.request("/integrations/mcp/\(target)")
+                    connectStatus[target] = status.configured ? .done : .idle
+                }
+                probeOllama()
+            } catch { errorMessage = error.localizedDescription }
         }
-        probeOllama()
     }
 
     private func probeOllama() {
-        guard let repo = config.repoDir, !checkingOllama else { return }
+        guard !checkingOllama else { return }
         checkingOllama = true
-        DispatchQueue.global(qos: .userInitiated).async {
-            let health = PipelineRunner.checkOllama(repoDir: repo)
-            DispatchQueue.main.async {
-                ollamaHealth = health
-                checkingOllama = false
-            }
+        Task {
+            defer { checkingOllama = false }
+            do { ollamaHealth = try await api.request("/diagnostics") }
+            catch { errorMessage = error.localizedDescription }
         }
     }
 
     private func saveAndClose() {
-        guard let url = configURL else { onClose(); return }
-        settings.scheduleHours = scheduleHours
-        settings.maxCostPerBuildUSD = max(0, Double(costCap.trimmingCharacters(in: .whitespaces)) ?? 0)
-        ConfigStore.save(settings, to: url)
-        SourcesStore.save(watched, config)
-        // Only touch .env when the key actually changed, so a failed read
-        // can never silently wipe an existing key.
-        if apiKey != loadedKey {
-            EnvStore.writeKey(apiKey, config, keyName: settings.llmProvider.envKeyName)
+        let text = costCap.trimmingCharacters(in: .whitespaces)
+        guard text.isEmpty || (Double(text).map { $0.isFinite && $0 >= 0 } ?? false) else {
+            errorMessage = "Enter a nonnegative spend cap, or leave it blank for no cap."
+            return
         }
-
-        let wasInstalled = PipelineRunner.scheduleInstalled
-        let shouldInstall = scheduleEnabled && !scheduleHours.isEmpty
-        if let repo = config.repoDir {
-            if shouldInstall {
-                PipelineRunner.runManaged(repoDir: repo, command: "schedule install")
-            } else if wasInstalled {
-                PipelineRunner.runManaged(repoDir: repo, command: "schedule uninstall")
-            }
+        saving = true
+        Task {
+            defer { saving = false }
+            do {
+                let sources = Dictionary(uniqueKeysWithValues: watched.map { folder -> (String, [String: Any]) in
+                    var value: [String: Any] = ["path": folder.path, "enabled": folder.enabled, "file_types": folder.file_types]
+                    if let lane = folder.force_parse_lane { value["force_parse_lane"] = lane }
+                    return (folder.name, value)
+                })
+                // One validated settings write preserves unrelated preferences and saves folders atomically.
+                try await api.send("/settings", method: "PATCH", body: [
+                    "compilation": ["provider": provider, "model": model, "max_cost_per_build_usd": Double(text) ?? 0],
+                    "triage": ["enabled": triageEnabled, "profile": triageProfile], "sources": sources
+                ])
+                for (provider, key) in apiKeys where !key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    try ProviderKeychain.save(key, provider: provider)
+                }
+                onClose()
+            } catch { errorMessage = error.localizedDescription }
         }
-        onClose()
     }
 
     private func connect(_ target: String) {
-        guard let repo = config.repoDir else {
-            connectStatus[target] = .failed
-            return
-        }
         connectStatus[target] = .working
         connectError = nil
-        DispatchQueue.global(qos: .userInitiated).async {
-            let commandResult = PipelineRunner.runManagedResult(
-                repoDir: repo, command: "mcp install --target \(target)"
-            )
-            DispatchQueue.main.async {
-                if commandResult.succeeded {
-                    connectStatus[target] = .done  // stays done: the server is configured
-                } else {
-                    connectStatus[target] = .failed
-                    connectError = commandResult.message ?? "Could not configure the MCP server."
-                }
+        Task {
+            do {
+                let status: IntegrationStatus = try await api.request("/integrations/mcp/\(target)", method: "PUT")
+                connectStatus[target] = status.configured ? .done : .failed
+                if !status.configured { connectError = status.message }
+            } catch {
+                connectStatus[target] = .failed
+                connectError = error.localizedDescription
             }
         }
     }
@@ -440,10 +413,10 @@ struct SettingsView: View {
         panel.level = .modalPanel
         panel.prompt = "Watch"
         guard panel.runModal() == .OK, let folderURL = panel.url else { return }
-        let name = SourcesStore.uniqueName(for: folderURL, existing: watched)
+        let name = WatchedFolderNames.uniqueName(for: folderURL, existing: watched)
         watched.append(
             WatchedFolder(name: name, path: folderURL.path, enabled: true,
-                          file_types: SourcesStore.defaultFileTypes)
+                          file_types: (catalog?.file_types ?? []).filter { $0 != "json" })
         )
     }
 }

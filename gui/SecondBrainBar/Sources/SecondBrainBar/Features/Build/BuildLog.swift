@@ -14,34 +14,13 @@ struct BuildLogEntry: Identifiable, Hashable {
     }
 }
 
-/// Reads the append-only build log written by the compile stage.
-enum BuildLog {
-    // The on-disk log is capped (see build_log.py), so loading it whole is
-    // cheap and lets a capped view show an accurate "+N more" count.
-    static func recent(at url: URL, limit: Int = 500) -> [BuildLogEntry] {
-        guard let text = try? String(contentsOf: url, encoding: .utf8) else { return [] }
-        let iso = ISO8601DateFormatter()
-        iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-
-        var entries: [BuildLogEntry] = []
-        for line in text.split(separator: "\n").reversed() {
-            guard let data = line.data(using: .utf8),
-                  let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let actionRaw = obj["action"] as? String,
-                  let action = BuildLogEntry.Action(rawValue: actionRaw),
-                  let path = obj["path"] as? String
-            else { continue }
-            let at = (obj["at"] as? String).flatMap { iso.date(from: $0) } ?? Date.distantPast
-            entries.append(
-                BuildLogEntry(
-                    action: action,
-                    pageName: (path as NSString).lastPathComponent,
-                    relativePath: path,
-                    at: at
-                )
-            )
-            if entries.count >= limit { break }
-        }
-        return entries
+struct BuildActionResponse: Decodable {
+    let action: String
+    let path: String
+    let at: String
+    var entry: BuildLogEntry? {
+        guard let kind = BuildLogEntry.Action(rawValue: action) else { return nil }
+        return BuildLogEntry(action: kind, pageName: (path as NSString).lastPathComponent,
+                             relativePath: path, at: backendDate(at) ?? .distantPast)
     }
 }
