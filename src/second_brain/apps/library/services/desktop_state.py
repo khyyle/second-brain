@@ -10,12 +10,15 @@ from second_brain.apps.preferences.services.user_settings import get_pipeline_co
 
 
 def get_desktop_state() -> dict:
-    """Read current screen data, active jobs, and each lane's latest outcome.
+    """Read library state, active jobs, and the latest terminal attempt in each lane.
 
-    Progress travels with its job, avoiding a follow-up request for every active
-    worker. Full job history remains available through the paginated jobs API.
-    This is a read model, not another owner of state; files and ORM records remain
-    authoritative. Database and filesystem reads are not one atomic transaction.
+    Database and filesystem reads do not form one atomic snapshot.
+
+    Returns
+    -------
+    dict
+        Library state, jobs with progress, imports, triage decisions, grouping, build
+        actions, and the compilation model. Completed index jobs are omitted.
     """
     config = get_pipeline_config()
     jobs = Job.objects.defer("payload", "config_snapshot").order_by("-created_at", "-id")

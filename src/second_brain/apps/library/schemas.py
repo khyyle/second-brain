@@ -49,6 +49,18 @@ class TriageOut(ModelSchema):
 
     @staticmethod
     def resolve_available(obj: TriageDecision) -> bool:
+        """Check whether a triaged source still has a raw Markdown file.
+
+        Parameters
+        ----------
+        obj: TriageDecision
+            Decision identifying the source by its raw-relative path.
+
+        Returns
+        -------
+        bool
+            True if the source exists in either its active or skipped location.
+        """
         from second_brain.apps.library.services.source_files import source_locations
         from second_brain.django_config.paths import get_vault_paths
 

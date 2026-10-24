@@ -37,10 +37,23 @@ class OllamaStatus:
 
     @property
     def healthy(self) -> bool:
+        """Check whether the server is reachable and all required models are installed.
+
+        Returns
+        -------
+        bool
+            True only when both conditions hold.
+        """
         return self.reachable and not self.missing_models
 
     def message(self) -> str:
-        """A human-readable, actionable description of the current state."""
+        """A human-readable, actionable description of the current state.
+
+        Returns
+        -------
+        str
+            Healthy status or instructions for starting Ollama and pulling missing models.
+        """
         if not self.reachable:
             return (
                 f"Ollama isn't running at {self.host}. "
@@ -55,7 +68,18 @@ class OllamaStatus:
 
 
 def required_models(config: PipelineConfig) -> tuple[str, ...]:
-    """The Ollama models the pipeline depends on (triage + embeddings)."""
+    """The Ollama models the pipeline depends on (triage + embeddings).
+
+    Parameters
+    ----------
+    config: PipelineConfig
+        Preferences containing triage and embedding model names.
+
+    Returns
+    -------
+    tuple[str, ...]
+        Triage model followed by embedding model, regardless of whether triage is enabled.
+    """
     return (config.triage.model, config.search.embedding_model)
 
 
@@ -87,7 +111,19 @@ def _is_present(required: str, installed: set[str]) -> bool:
 
 
 def check_ollama(config: PipelineConfig) -> OllamaStatus:
-    """Probe Ollama for reachability and the presence of required models."""
+    """Probe Ollama for reachability and the presence of required models.
+
+    Parameters
+    ----------
+    config: PipelineConfig
+        Ollama host and required model settings.
+
+    Returns
+    -------
+    OllamaStatus
+        Server reachability and missing models. Transport or invalid-JSON failures report
+        the server as unreachable.
+    """
     host = config.triage.ollama_host
     needed = required_models(config)
     installed = _installed_models(host)
@@ -100,19 +136,17 @@ def check_ollama(config: PipelineConfig) -> OllamaStatus:
 
 
 def post_to_ollama(host: str, path: str, payload: dict, timeout: float) -> dict:
-    """POST JSON to the local Ollama server and return the parsed body.
+    """POST JSON to the local Ollama server and decode its response.
 
-    A connection failure or HTTP 404 means later requests would fail the
-    same way, so those raise ``OllamaUnavailableError``. Any other HTTP
-    error status propagates as ``httpx.HTTPStatusError`` so the caller
-    can apply its own policy. A body that is not JSON raises ``ValueError``.
+    Connection failures and HTTP 404 raise OllamaUnavailableError. Other error
+    statuses raise httpx.HTTPStatusError; invalid JSON raises ValueError.
 
     Parameters
     ----------
     host: str
         Server origin, including scheme and port.
     path: str
-        Request path appended to ``host``, starting with a slash.
+        Request path appended to `host`, starting with a slash.
     payload: dict
         JSON request body.
     timeout: float

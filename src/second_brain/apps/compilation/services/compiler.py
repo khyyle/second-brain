@@ -387,8 +387,7 @@ def run_compilation(
     source_paths: list[str] | None = None,
     work_units: list[list[str]] | None = None,
 ) -> dict:
-    """
-    Run the full compilation pipeline.
+    """Run the full compilation pipeline.
 
     Executes agent-driven content synthesis, deterministic
     structure rebuild, and git auto-commit.
@@ -398,20 +397,25 @@ def run_compilation(
     config: PipelineConfig
         Application configuration.
     force_full: bool
-        If ``True``, recompile all sources regardless of
+        If `True`, recompile all sources regardless of
         what is already built.
     dry_run: bool
-        If ``True``, skip agent execution and git commit.
+        If `True`, skip agent execution and git commit.
     on_unit_finished: Callable[[], None] | None
         Called after each group is committed or set aside, so a reader of
         the staged set sees finished sources leave it during the build.
+    source_paths: list[str] | None
+        Captured raw-relative paths to compile, or None to discover and triage eligible
+        sources.
+    work_units: list[list[str]] | None
+        Captured source groups, or None to compute grouping for this build.
 
     Returns
     -------
     dict
-        Summary statistics including ``sources_compiled``, ``outcome``,
-        ``reason`` (one sentence, or empty), ``counts`` (``completed``,
-        ``deferred``, and ``left`` source counts), and the
+        Summary statistics including `sources_compiled`, `outcome`,
+        `reason` (one sentence, or empty), `counts` (`completed`,
+        `deferred`, and `left` source counts), and the
         structure rebuild's keys.
     """
     wiki_dir = config.wiki_dir

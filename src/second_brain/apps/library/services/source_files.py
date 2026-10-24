@@ -207,6 +207,10 @@ class FileMoves:
         destination: Path
             Checked destination path. Missing parent directories are created.
 
+        Returns
+        -------
+        None
+
         Raises
         ------
         SourceConflictError
@@ -226,6 +230,10 @@ class FileMoves:
 
     def undo(self) -> None:
         """Reverse completed moves in reverse order after a failed operation.
+
+        Returns
+        -------
+        None
 
         Raises
         ------

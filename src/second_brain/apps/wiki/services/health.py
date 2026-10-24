@@ -41,6 +41,14 @@ class HealthReport:
     def is_healthy(self) -> bool:
         # growth signals (gaps, orphans, duplicates) and the soft undersized
         # signal are omitted as they aren't necessarily hard defects
+        """Check for oversized pages or missing required frontmatter.
+
+        Returns
+        -------
+        bool
+            True when neither defect is present. Gaps, orphan pages, duplicate suggestions, and
+            undersized pages do not make this check fail.
+        """
         return not any(
             [
                 self.oversized_pages,

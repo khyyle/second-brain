@@ -16,10 +16,16 @@ logger = logging.getLogger(__name__)
 
 
 def capture_curation_version() -> list[list[str | int]]:
-    """Record raw-file and grouping versions under the raw-sources/grouping locks.
+    """Record versions of raw files and grouping files, including skipped sources.
 
-    Includes skipped files. Inode and ctime detect replacements and skip/restore
-    moves even when the bytes or modification time remain unchanged.
+    Requires the raw-sources and grouping locks. Inode and ctime detect replacements
+    and skip/restore moves even when bytes or modification times are unchanged.
+
+    Returns
+    -------
+    list[list[str | int]]
+        Sorted records of vault-relative path, inode, ctime in nanoseconds, mtime in
+        nanoseconds, and byte size. Missing files are omitted.
     """
     paths = get_vault_paths()
     files = list(paths.raw_dir.rglob("*.md")) + [
@@ -45,11 +51,19 @@ def capture_curation_version() -> list[list[str | int]]:
 
 
 def finalize_build_curation(captured_version: list | None) -> None:
-    """Clear completed curation if no import or user edit has changed it since submission.
+    """Remove skipped files and grouping data if curation still matches a completed build.
 
-    Call only after a complete, successful build. An active ingestion pass or a
-    changed source/plan defers cleanup until a later build. Cleanup failure does
-    not change the outcome of already committed wiki work.
+    Only valid after a complete, successful build. Lock contention or changed inputs
+    skip cleanup. Filesystem errors are logged without changing the build outcome.
+
+    Parameters
+    ----------
+    captured_version: list | None
+        File versions captured at build submission, or None to skip cleanup.
+
+    Returns
+    -------
+    None
     """
     if captured_version is None:
         return

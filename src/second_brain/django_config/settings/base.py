@@ -39,7 +39,19 @@ API_DOCS_ENABLED = False
 
 
 def sqlite_database(path: Path | str) -> dict[str, Any]:
-    """Configure short write transactions for a local SQLite database."""
+    """Configure short write transactions for a local SQLite database.
+
+    Parameters
+    ----------
+    path: Path | str
+        SQLite database path, or :memory: for an in-memory database.
+
+    Returns
+    -------
+    dict[str, Any]
+        Django database settings with WAL, immediate transactions, a five-second lock
+        timeout, and no persistent connections.
+    """
     return {
         "ENGINE": "django.db.backends.sqlite3",
         "NAME": path,

@@ -20,13 +20,13 @@ def apply_wiki_edit(operation: Callable[..., Any], *args: Any) -> Any:
     ----------
     operation: Callable
         Domain service taking wiki_dir followed by validated operation arguments.
-    args
+    args: Any
         Domain names or page stems. Never arbitrary filesystem destinations.
 
     Returns
     -------
     object
-        The domain operation's result, unchanged for the view to serialize.
+        The operation's return value, unchanged.
 
     Raises
     ------
@@ -43,7 +43,18 @@ def apply_wiki_edit(operation: Callable[..., Any], *args: Any) -> Any:
 
 
 def rollback(count: int) -> dict:
-    """Roll back commits under exclusive ownership and release affected build records."""
+    """Roll back commits under exclusive ownership and release affected build records.
+
+    Parameters
+    ----------
+    count: int
+        Number of recent wiki commits to revert.
+
+    Returns
+    -------
+    dict
+        Reverted short commit hashes under reverted_commits.
+    """
     config = get_pipeline_config()
     with vault_lock("wiki", blocking=False):
         commits = git_history.list_commits(config.wiki_dir, count)
@@ -56,7 +67,18 @@ def rollback(count: int) -> dict:
 
 
 def repair_links(dry_run: bool) -> list:
-    """Detect renamed pages and preview or commit their repaired links under one lock."""
+    """Detect renamed pages and preview or commit their repaired links under one lock.
+
+    Parameters
+    ----------
+    dry_run: bool
+        Report proposed repairs without writing files or creating a Git commit.
+
+    Returns
+    -------
+    list[PageRepair]
+        Link repairs proposed or applied.
+    """
     config = get_pipeline_config()
     with vault_lock("wiki", blocking=False):
         mapping = git_history.detect_renames(config.wiki_dir)
@@ -69,7 +91,19 @@ def repair_links(dry_run: bool) -> list:
 
 
 def dismiss_duplicate(page_a: str, page_b: str) -> None:
-    """Persist a symmetric dismissed pair after checking both page identities."""
+    """Persist a symmetric dismissed pair after checking both page identities.
+
+    Parameters
+    ----------
+    page_a: str
+        Stem of the first existing wiki page.
+    page_b: str
+        Stem of a different existing wiki page.
+
+    Returns
+    -------
+    None
+    """
     pages = wiki_structure.discover_all_pages(get_vault_paths().wiki_dir)
     if page_a == page_b or page_a not in pages or page_b not in pages:
         raise ServiceError("Choose two different existing page stems.")

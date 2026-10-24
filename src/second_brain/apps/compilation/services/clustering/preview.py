@@ -1,11 +1,4 @@
-"""Cluster preview artifact shared between the build and the menu-bar app.
-
-The compiler can group staged sources so a topic compiles in one agent
-run. Before paying for that build, the user can preview the grouping in
-the app and lightly correct it (split a group, pop a source out). This
-module computes the grouping, writes it to a JSON artifact the app reads,
-and applies the user's corrections so the build honors what was shown.
-"""
+"""Compute source grouping previews and persist reviewed grouping overrides."""
 
 from __future__ import annotations
 
@@ -28,8 +21,7 @@ OVERRIDES_FILENAME = ".cluster-overrides.json"
 
 _TITLE_SCAN_BYTES = 4096
 
-# Cost model for the preview, matching the app's per-unit assumptions. Assumed that the
-# agent re-reads each source over a few turns and writes ~2 pages per group.
+# Estimates assume four reads of the input and roughly two output pages per group.
 _INPUT_TURNS = 4
 _OUTPUT_TOKENS_PER_GROUP = 4000
 _CHARS_PER_TOKEN = 4
@@ -81,7 +73,22 @@ def _read_title(path: Path) -> str:
 def group_cost_usd(
     total_bytes: int, input_usd_per_mtok: float, output_usd_per_mtok: float
 ) -> float:
-    """Estimate the USD cost of compiling one group from its total bytes."""
+    """Estimate the USD cost of compiling one group from its total bytes.
+
+    Parameters
+    ----------
+    total_bytes: int
+        Combined size of source text in bytes.
+    input_usd_per_mtok: float
+        Input price in USD per million tokens.
+    output_usd_per_mtok: float
+        Output price in USD per million tokens.
+
+    Returns
+    -------
+    float
+        Estimated compilation cost using the configured token and turn assumptions.
+    """
     input_tokens = max(total_bytes / _CHARS_PER_TOKEN, 1) * _INPUT_TURNS
     return (
         input_tokens / 1_000_000 * input_usd_per_mtok
@@ -90,10 +97,12 @@ def group_cost_usd(
 
 
 def model_prices() -> dict[str, tuple[float, float]]:
-    """Return (input, output) USD-per-Mtok for every selectable model.
+    """Read input and output token prices for supported compilation models.
 
-    Precomputed once per preview so the plan can carry a cost for each
-    model, letting the app switch models without re-running the preview.
+    Returns
+    -------
+    dict[str, tuple[float, float]]
+        Model name mapped to input and output prices in USD per million tokens.
     """
     prices: dict[str, tuple[float, float]] = {}
     for provider, models in SUPPORTED_MODELS.items():
@@ -138,8 +147,9 @@ def build_preview(
     config: PipelineConfig
         Application configuration (clustering and embedding settings).
     progress: Callable[[int, int], None] | None
-        Called with ``(done, total)`` as sources are embedded, for a live
-        progress readout.
+        Called with `(done, total)` as sources are embedded.
+    sources: list[str] | None
+        Explicit raw-relative source paths, or None to discover eligible sources.
 
     Returns
     -------
@@ -215,7 +225,7 @@ def write_preview(
     Returns
     -------
     dict
-        The artifact that was written (so callers can report counts/cost).
+        The grouping artifact written to disk.
     """
     artifact = build_preview(config, progress=progress)
     path = config.data_dir / CLUSTERS_FILENAME
@@ -232,7 +242,18 @@ def write_preview(
 
 
 def load_preview(data_dir: Path) -> dict | None:
-    """Return the written preview artifact, or None if absent or invalid."""
+    """Return the written preview artifact, or None if absent or invalid.
+
+    Parameters
+    ----------
+    data_dir: Path
+        Vault root containing the saved grouping preview.
+
+    Returns
+    -------
+    dict | None
+        Saved preview, or None when absent, unreadable, or invalid JSON.
+    """
     path = data_dir / CLUSTERS_FILENAME
     if not path.exists():
         return None
@@ -313,7 +334,18 @@ def work_units_from_preview(data_dir: Path) -> list[list[str]] | None:
 
 
 def preview_members(preview: dict) -> set[str]:
-    """Return every source path covered by a preview artifact."""
+    """Return every source path covered by a preview artifact.
+
+    Parameters
+    ----------
+    preview: dict
+        Grouping preview containing group member paths.
+
+    Returns
+    -------
+    set[str]
+        All source paths included in the preview groups.
+    """
     return {member["rel"] for group in preview["groups"] for member in group["members"]}
 
 
@@ -356,6 +388,16 @@ def reconcile_work_units(data_dir: Path, staged: list[str]) -> list[list[str]] |
 
 
 def clear_preview(data_dir: Path) -> None:
-    """Remove the preview artifact and overrides once a build consumes them."""
+    """Remove the preview artifact and overrides once a build consumes them.
+
+    Parameters
+    ----------
+    data_dir: Path
+        Vault root containing the preview and override files.
+
+    Returns
+    -------
+    None
+    """
     (data_dir / CLUSTERS_FILENAME).unlink(missing_ok=True)
     (data_dir / OVERRIDES_FILENAME).unlink(missing_ok=True)

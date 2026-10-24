@@ -28,6 +28,10 @@ def delete_source(paths: VaultPaths, raw_path: str) -> None:
         Logical Markdown path relative to raw/, such as "chatgpt/chat.md". Use the
         same path for a skipped source; do not include the .skipped/ prefix.
 
+    Returns
+    -------
+    None
+
     Raises
     ------
     InvalidSourcePathError
@@ -38,7 +42,7 @@ def delete_source(paths: VaultPaths, raw_path: str) -> None:
     Notes
     -----
     Removes matching Source, TriageDecision, CompiledSource, and DeferredSource rows
-    in one database transaction. Returns None after the operation completes.
+    in one database transaction.
     Repeating a deletion succeeds. Shared page-cache entries and original watched
     files are preserved. A failed database write/commit restores the moved raw file.
     Filesystem/database failures propagate. This service must own the outer database
@@ -71,7 +75,11 @@ def stage_recompile(paths: VaultPaths, raw_paths: list[str]) -> None:
         Configuration identifying the active vault's raw directory.
     raw_paths: list[str]
         Logical paths relative to raw/ for the selected Markdown sources. Duplicate
-        paths are processed once. The API requires 1 through 200 entries.
+        paths are processed once.
+
+    Returns
+    -------
+    None
 
     Raises
     ------
@@ -84,10 +92,8 @@ def stage_recompile(paths: VaultPaths, raw_paths: list[str]) -> None:
 
     Notes
     -----
-    Returns None after removing only the selected compiled/deferred records. It
-    does not launch a job, change source/triage records, or modify file contents.
-    Validate the whole selection first. Existing triage decisions still apply, and
-    skipped sources must be restored before requesting recompilation.
+    Validates the full selection before clearing records. Existing triage decisions
+    still apply; skipped sources must be restored before requesting recompilation.
     """
     selected = list(dict.fromkeys(raw_paths))
     with vault_lock("raw-sources", blocking=False), transaction.atomic():

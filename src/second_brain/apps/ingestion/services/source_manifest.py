@@ -142,7 +142,11 @@ class Manifest:
         file_path: Path
             File being processed.
         source_type: str
-            Label for the source (e.g., ``"goodnotes"``).
+            Label for the source (e.g., `"goodnotes"`).
+
+        Returns
+        -------
+        None
         """
         sha = hash_file(file_path)
         now = timezone.now()
@@ -178,13 +182,16 @@ class Manifest:
         file_path: Path
             File that was ingested.
         parse_lane: str | None
-            Parser lane used (e.g., ``"docling"``).
+            Parser lane used (e.g., `"docling"`).
         raw_output: str | None
             Path to the raw markdown output file.
         content_hash: str | None
-            SHA-256 of the assembled post-OCR markdown. When this matches
-            the previously stored value, callers can skip downstream
-            compilation work even though the source file hash has changed.
+            SHA-256 of the assembled Markdown, recorded separately from the original
+            file hash to identify unchanged parsed content.
+
+        Returns
+        -------
+        None
         """
         values = {
             "status": "complete",
@@ -208,6 +215,10 @@ class Manifest:
             The duplicate file.
         source_type: str
             Label for the source lane it arrived through.
+
+        Returns
+        -------
+        None
         """
         sha = hash_file(file_path)
         now = timezone.now()
@@ -246,6 +257,10 @@ class Manifest:
             File that failed processing.
         error: str | None
             One-sentence reason shown to the user, or None if unknown.
+
+        Returns
+        -------
+        None
         """
         Source.objects.filter(pk=str(file_path)).update(
             status="failed", error=error, updated_at=timezone.now()
@@ -313,6 +328,10 @@ class Manifest:
             Original file from which this version was copied.
         source_type: str
             Source folder's name and parsing settings.
+
+        Returns
+        -------
+        None
         """
         sha = hash_file(file_path)
         now = timezone.now()
@@ -444,9 +463,13 @@ class Manifest:
         page_hash: str
             SHA-256 of the page's rendered PNG bytes.
         parse_lane: str
-            Parser used for this page (e.g. ``"chandra"``).
+            Parser used for this page (e.g. `"chandra"`).
         raw_markdown: str
             Markdown extracted by the parser for this single page.
+
+        Returns
+        -------
+        None
         """
         PageCache.objects.update_or_create(
             pk=page_hash,
@@ -458,7 +481,13 @@ class Manifest:
         )
 
     def page_cache_size(self) -> int:
-        """Return the number of cached pages, for diagnostics."""
+        """Count cached page results.
+
+        Returns
+        -------
+        int
+            Number of rows in the page cache.
+        """
         return PageCache.objects.count()
 
 

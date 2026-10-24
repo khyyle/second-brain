@@ -44,18 +44,21 @@ def _is_drop_lane(path: Path, config: PipelineConfig) -> bool:
 
 
 def remove_drop_copy(file_path: Path, config: PipelineConfig) -> None:
-    """Delete a file from the drops queue once its content is in the vault.
+    """Delete an ingested or duplicate copy from the drops queue.
 
-    ``drops/`` holds copies the app made, so a copy is removed after it is
-    ingested or found to duplicate content already ingested. Files outside
-    ``drops/``, such as watched-folder originals, are never touched.
+    Only removes files inside the configured drops directory. Paths outside it,
+    including watched-folder originals, are left untouched.
 
     Parameters
     ----------
     file_path: Path
         File that was ingested or recognized as already ingested.
     config: PipelineConfig
-        Application configuration, used for the ``drops/`` location.
+        Application configuration, used for the `drops/` location.
+
+    Returns
+    -------
+    None
     """
     try:
         file_path.relative_to(config.drops_dir)

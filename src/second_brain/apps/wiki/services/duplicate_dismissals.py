@@ -26,6 +26,10 @@ class DuplicateStore:
             One page's stem.
         stem_b: str
             The other page's stem.
+
+        Returns
+        -------
+        None
         """
         first, second = sorted((stem_a, stem_b))
         DismissedDuplicate.objects.get_or_create(

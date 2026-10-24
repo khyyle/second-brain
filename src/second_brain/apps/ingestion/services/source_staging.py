@@ -131,7 +131,10 @@ def _copy_destination(
 
 
 def stage_watched_folders(config: PipelineConfig, manifest: Manifest) -> None:
-    """Collect watched files before parsing any member of the queue.
+    """Copy supported files from enabled watched folders into drops/.
+
+    Skips hidden paths, symlinks, unsupported extensions, and folders already inside
+    drops/. Logs missing watched folders and continues with the rest.
 
     Parameters
     ----------
@@ -139,6 +142,10 @@ def stage_watched_folders(config: PipelineConfig, manifest: Manifest) -> None:
         Source folders, their enabled state, and accepted extensions.
     manifest: Manifest
         Captured source versions.
+
+    Returns
+    -------
+    None
     """
     for name, source in config.sources.items():
         if not source.enabled:

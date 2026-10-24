@@ -9,6 +9,19 @@ from second_brain.pipeline_config import ConfigError
 
 
 def register_exception_handlers(api: NinjaAPI) -> None:
+    """Register JSON error responses for service and configuration exceptions.
+
+    Parameters
+    ----------
+    api: NinjaAPI
+        API instance to modify. Service errors use their declared status; configuration
+        errors return HTTP 500.
+
+    Returns
+    -------
+    None
+    """
+
     @api.exception_handler(ServiceError)
     def service_error(request: HttpRequest, exc: ServiceError) -> HttpResponse:
         """Serialize the public reason with the service exception's declared HTTP status."""

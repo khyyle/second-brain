@@ -34,6 +34,10 @@ class BuildStore:
         source_hashes: dict[str, str]
             Raw file path (relative to the raw directory) mapped to the
             content hash of the version the build read.
+
+        Returns
+        -------
+        None
         """
         now = timezone.now()
         CompiledSource.objects.bulk_create(
@@ -90,6 +94,10 @@ class BuildStore:
             Human-readable cause.
         retryable: bool
             Whether building the same source again could succeed.
+
+        Returns
+        -------
+        None
         """
         now = timezone.now()
         DeferredRecord.objects.bulk_create(

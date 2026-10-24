@@ -69,8 +69,19 @@ def search_wiki(
       The searchable fields are title, content, tags, domains, content_type, stem.
 
     A query that is not valid syntax is treated as plain AND-ed terms rather than
-    failing, so a malformed query still returns results. For fuzzy or conceptual
-    lookup where you do not know the wording, use `semantic_search`.
+    failing with a syntax error. A valid query may still have no matches.
+
+    Parameters
+    ----------
+    query: str
+        An FTS5 match expression or plain text.
+    limit: int
+        Maximum number of pages to return.
+
+    Returns
+    -------
+    str
+        Ranked page titles, snippets, and scores, or a no-results message.
     """
     return _get_tools().search_wiki(query, limit)
 
@@ -85,29 +96,29 @@ def semantic_search(
         int, Field(ge=1, le=50, description="Maximum number of pages to return.")
     ] = DEFAULT_SEARCH_LIMIT,
 ) -> str:
-    """Search wiki pages by meaning using embeddings, for fuzzy or conceptual lookup.
+    """Search wiki pages by embedding similarity to a natural-language query.
 
-    Give a natural-language description of what you want, not just keywords: a
-    phrase, topic, or question like `how variance affects model error`. It is embedded
-    and checked against the wiki's vector database, matching on conceptual similarity,
-    so it surfaces relevant pages even when they do not contain your exact words.
-    Prefer this when you do not know the wording or want conceptually-related pages,
-    and `search_wiki` when you have exact terms or names. Falls back with a notice
-    when the semantic layer is unavailable.
+    Matches can differ in wording from the query. Similarity scores measure vector
+    closeness and do not establish factual relevance. Reports unavailable semantic
+    search or its keyword fallback explicitly.
 
-    Stay aware of the pitfalls of semantic search: cosine similarity is not always
-    relevance, exact matches are less reliable, it can lack differentiating nuance,
-    relevant pages may be missed entirely, and contextual meaning can be lost. Use it
-    as a supplementary tool and reason over graph structure, not as an authoritative
-    search tool.
+    Parameters
+    ----------
+    query: str
+        A natural-language description of what you want, matched by meaning.
+    limit: int
+        Maximum number of pages to return.
+
+    Returns
+    -------
+    str
+        Ranked page matches or a message describing unavailable semantic search.
     """
     try:
         return _get_tools().semantic_search(query, limit)
     except BackendRequestError as error:
         if error.status_code != 503:
             raise
-        # The person asking can't see this tool's output, so the agent has
-        # to relay it or the degraded answer looks like a complete one.
         return (
             "Ollama isn't responding, so search by meaning is unavailable. Tell the "
             "user, and use search_wiki for keyword search instead."
@@ -120,9 +131,15 @@ def read_page(
 ) -> str:
     """Read one wiki page in full by its title or slug.
 
-    Use to pull a page's complete content (frontmatter + body) once you've
-    located it, e.g. via `search_wiki`, `semantic_search`, `list_pages`, or a graph
-    tool. Returns a not-found message when no page matches.
+    Parameters
+    ----------
+    title: str
+        Page title or slug to read.
+
+    Returns
+    -------
+    str
+        Complete Markdown including frontmatter, or a not-found message.
     """
     return _get_tools().read_page(title)
 
@@ -144,13 +161,25 @@ def list_pages(
         int, Field(ge=0, description="Number of leading matches to skip, for paging.")
     ] = 0,
 ) -> str:
-    """List wiki pages by structured filter: domain, tag, and/or content type.
+    """List wiki pages matching all supplied domain, tag, and content-type filters.
 
-    Use this to browse a known slice of the wiki (e.g. every concept in a domain)
-    when you have a filter rather than a search query; for free-text lookup use
-    `search_wiki` or `semantic_search`, and to see which domains exist first use
-    `list_domains`. Filters combine with AND. Returns at most `limit` pages from
-    `offset`, with a note giving the total and next offset when more match.
+    Parameters
+    ----------
+    domain: str | None
+        Keep only pages declaring this knowledge domain.
+    tag: str | None
+        Keep only pages carrying this tag.
+    content_type: str | None
+        Keep only pages of this type (concept, problem, project, insight).
+    limit: int
+        Maximum pages to return in this call.
+    offset: int
+        Number of leading matches to skip, for paging.
+
+    Returns
+    -------
+    str
+        Page summaries with total count and pagination details when more matches remain.
     """
     return _get_tools().list_pages(
         domain=domain, tag=tag, content_type=content_type, limit=limit, offset=offset
@@ -164,12 +193,17 @@ def read_index(
         Field(ge=1, le=50, description="Max pages to show per domain before linking onward."),
     ] = INDEX_PAGES_PER_DOMAIN,
 ) -> str:
-    """Get a one-shot overview of the whole wiki: pages grouped under each domain.
+    """Summarize current wiki pages by domain, limiting the pages listed in each domain.
 
-    Built live from the current wiki. Each domain lists its first several pages as
-    wikilinks plus a pointer to `list_pages(domain=...)` for the rest, so the
-    overview stays a fixed size at any scale. Good for orienting before you search
-    or drill in. Use `list_domains` for the lighter domains-and-counts map.
+    Parameters
+    ----------
+    pages_per_domain: int
+        Max pages to show per domain before linking onward.
+
+    Returns
+    -------
+    str
+        Domain overview with wikilinks and a query for any remaining pages.
     """
     return _get_tools().read_index(pages_per_domain=pages_per_domain)
 
@@ -194,14 +228,26 @@ def capture_note(
         Field(description="Optional topic hint recorded in frontmatter to guide compilation."),
     ] = None,
 ) -> str:
-    """Capture a freeform insight from this conversation into the knowledge base.
+    """Save a freeform note as an ingestion source and trigger ingestion when available.
 
-    Use this to save something worth keeping. Dump the insight as detailed,
-    freeform notes--capture relevant substance and context, keeping it detailed. Do
-    NOT write a finished wiki page or YAML frontmatter. The note is saved as a
-    source document. Compilation will later title/place/link/synthesize this into the graph.
-    It does NOT author a page directly, so don't pre-summarize or structure it. Richer
-    raw detail compiles into a better page. Optionally pass a short `title` and a `topic` hint.
+    The content should contain the original detail and context, without wiki-page
+    formatting or YAML frontmatter. The note remains a source for a later build;
+    this operation does not write a compiled wiki page.
+
+    Parameters
+    ----------
+    content: str
+        Freeform insight text to capture. Write all relevant detail and context. Do not
+        format it as a finished page or add frontmatter.
+    title: str | None
+        Optional short title, else the first line of content is used.
+    topic: str | None
+        Optional topic hint recorded in frontmatter to guide compilation.
+
+    Returns
+    -------
+    str
+        Saved source path and ingestion-submission status.
     """
     return _get_tools().capture_note(content, title=title, topic=topic)
 
@@ -216,13 +262,22 @@ def get_sources(
         int, Field(ge=0, description="Number of leading sources to skip, for paging.")
     ] = 0,
 ) -> str:
-    """Retrieve the full raw source documents a wiki page was compiled from.
+    """Read excerpts of the raw documents listed in a wiki page's provenance.
 
-    Use this to read the original material behind a page, e.g. to verify a claim
-    or expand the page. Each source is truncated to its first 2000 characters; to
-    judge which sources are worth pulling in full first, use `get_sources_summary`.
-    Returns at most `limit` sources from `offset`, with a note giving the total
-    and next offset.
+    Parameters
+    ----------
+    title: str
+        Page title or slug whose sources to retrieve.
+    limit: int
+        Maximum number of sources to return in this call.
+    offset: int
+        Number of leading sources to skip, for paging.
+
+    Returns
+    -------
+    str
+        Up to limit source excerpts, each capped at 2,000 characters, with pagination
+        details. Missing pages or source files are reported in the text.
     """
     return _get_tools().get_sources(title, limit=limit, offset=offset)
 
@@ -231,11 +286,17 @@ def get_sources(
 def get_sources_summary(
     title: Annotated[str, Field(description="Page title or slug whose sources to preview.")],
 ) -> str:
-    """Preview a page's sources cheaply: each source's frontmatter and first paragraph.
+    """Read frontmatter and the first paragraph of each source listed by a wiki page.
 
-    Use this first to judge which of a page's sources are relevant before pulling
-    any in full with `get_sources`, especially when a page has many sources. Returns
-    the lightweight preview only, never the full source text.
+    Parameters
+    ----------
+    title: str
+        Page title or slug whose sources to preview.
+
+    Returns
+    -------
+    str
+        Source previews, including a notice for missing files or a missing page.
     """
     return _get_tools().get_sources_summary(title)
 
@@ -250,13 +311,21 @@ def find_related(
         int, Field(ge=1, le=200, description="Maximum number of pages to return.")
     ] = DEFAULT_RELATED_LIMIT,
 ) -> str:
-    """Find pages loosely connected to a concept, in any direction across all link types.
+    """Walk wiki links and backlinks across all relationship types.
 
-    Walks the link graph outward over every relationship (prerequisites, related,
-    mentions, and their backlinks) up to `depth` hops, answering the open-ended
-    "what touches this?" without imposing order. For the ordered chain a concept
-    builds on, use `prerequisite_closure`; for what builds on it, use `dependents`.
-    Returns at most `limit` pages, with a note giving the total found.
+    Parameters
+    ----------
+    title: str
+        Page title or slug to start from.
+    depth: int
+        How many link hops to walk outward.
+    limit: int
+        Maximum number of pages to return.
+
+    Returns
+    -------
+    str
+        Related pages within depth hops, limited to limit entries, with the total found.
     """
     return _get_tools().find_related(title, depth, limit=limit)
 
@@ -270,13 +339,19 @@ def prerequisite_closure(
         int, Field(ge=1, le=10, description="Maximum number of prerequisite hops to follow.")
     ] = DEFAULT_PREREQUISITE_DEPTH,
 ) -> str:
-    """Lay out what a concept builds on, from fundamentals up to the concept itself.
+    """Follow prerequisites transitively and order them from fundamentals to the topic.
 
-    Use this to explain or derive a topic from first principles. It walks the
-    page's prerequisites transitively and returns them in learning order
-    (fundamentals first, the topic last), flags any prerequisite that has no
-    page yet, and notes concepts that several branches share. Then read the
-    listed pages with `read_page` to pull the ones you actually need.
+    Parameters
+    ----------
+    title: str
+        Page title or slug to derive from its fundamentals.
+    max_depth: int
+        Maximum number of prerequisite hops to follow.
+
+    Returns
+    -------
+    str
+        Ordered prerequisite tree with missing-page markers and shared-concept references.
     """
     return _get_tools().prerequisite_closure(title, max_depth=max_depth)
 
@@ -288,21 +363,31 @@ def dependents(
         int, Field(ge=1, le=200, description="Maximum number of pages to return.")
     ] = DEFAULT_RELATED_LIMIT,
 ) -> str:
-    """List the pages that build on a concept by declaring it a prerequisite.
+    """Find pages that directly declare the selected concept as a prerequisite.
 
-    Walks prerequisites in the reverse direction from `prerequisite_closure`, but
-    only one hop — the pages that directly require this one. Use it to see where a
-    concept leads next. Returns at most `limit` pages, with a note giving the total.
+    Parameters
+    ----------
+    title: str
+        Page title or slug to find dependents of.
+    limit: int
+        Maximum number of pages to return.
+
+    Returns
+    -------
+    str
+        Direct dependent pages, limited to limit entries, with the total found.
     """
     return _get_tools().dependents(title, limit=limit)
 
 
 @mcp.tool()
 def list_domains() -> str:
-    """List the knowledge domains in the wiki, with how many pages each holds.
+    """List wiki domains and the number of pages assigned to each.
 
-    The cheapest map of what this knowledge base covers. Start here when you
-    don't yet know the vault, then narrow with `list_pages(domain=...)` or search.
+    Returns
+    -------
+    str
+        Domain names and counts, or a message that no domains exist.
     """
     return _get_tools().list_domains()
 
@@ -316,18 +401,35 @@ def list_gaps(
         int, Field(ge=0, description="Number of leading gaps to skip, for paging.")
     ] = 0,
 ) -> str:
-    """List concepts that pages reference but that have no page yet.
+    """List referenced concepts that have no wiki page, most referenced first.
 
-    These are the wiki's known holes, ranked by how many pages point at them
-    (most-wanted first) — useful for deciding what to learn or write next, and
-    for avoiding `read_page` calls on concepts that don't exist. Returns at most
-    `limit` starting at `offset`, with a note giving the total and next offset.
+    Parameters
+    ----------
+    limit: int
+        Maximum number of gaps to return in this call.
+    offset: int
+        Number of leading gaps to skip, for paging.
+
+    Returns
+    -------
+    str
+        Gap names and reference counts with total and pagination details.
     """
     return _get_tools().list_gaps(limit=limit, offset=offset)
 
 
 def serve(client: BackendClient | None = None) -> None:
-    """Start the stdio adapter with no database or filesystem mutations."""
+    """Run the MCP stdio server using a local HTTP backend client.
+
+    Parameters
+    ----------
+    client: BackendClient | None
+        Backend client to bind for tool requests, or None to keep the existing client.
+
+    Returns
+    -------
+    None
+    """
     global _client
     if client is not None:
         _client = client

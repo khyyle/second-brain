@@ -33,7 +33,13 @@ class PipelineStatus:
 
 
 def now_iso() -> str:
-    """Current UTC time as an ISO string (run-start marker for elapsed)."""
+    """Read the current UTC time.
+
+    Returns
+    -------
+    str
+        Timezone-aware ISO 8601 timestamp.
+    """
     return datetime.now(UTC).isoformat()
 
 
@@ -49,19 +55,20 @@ def update_progress(
     current_activity: str = "",
     queued_sources: tuple[str, ...] = (),
 ) -> None:
-    """
-    Write a running heartbeat snapshot.
+    """Replace progress and refresh the heartbeat of the bound running job.
+
+    Does nothing when no job is bound or the job is no longer running.
 
     Parameters
     ----------
     phase: str
-        Current stage label (``"ingest"``, ``"triage"``, ``"compile"``).
+        Current stage label (`"ingest"`, `"triage"`, `"compile"`).
     current: int
         Items processed so far.
     total: int
         Total items in this run (0 when not a per-item stage).
     started_at: str
-        ISO timestamp when this run began (for elapsed display).
+        ISO timestamp when this run began.
     current_sources: tuple[str, ...]
         Raw paths of the sources being compiled; empty outside a build.
     cost_usd: float
@@ -74,6 +81,10 @@ def update_progress(
         What the build agent is doing for them, as a short phrase.
     queued_sources: tuple[str, ...]
         Raw paths still waiting in this stage after the current ones.
+
+    Returns
+    -------
+    None
     """
     status = PipelineStatus(
         running=True,
@@ -96,7 +107,12 @@ def update_progress(
 
 
 def touch_heartbeat() -> None:
-    """Refresh the active attempt's liveness without overwriting its progress."""
+    """Refresh the active attempt's liveness without overwriting its progress.
+
+    Returns
+    -------
+    None
+    """
     if _job_id is not None:
         Job.objects.filter(pk=_job_id, status=Job.Status.RUNNING).update(
             heartbeat_at=timezone.now()
@@ -104,7 +120,12 @@ def touch_heartbeat() -> None:
 
 
 def finish_progress() -> None:
-    """Mark the current stage idle while retaining its final counters and cost."""
+    """Mark bound-job progress as not running, retaining its counters and cost.
+
+    Returns
+    -------
+    None
+    """
     if _job_id is not None:
         job = Job.objects.filter(pk=_job_id).first()
         if job is not None:
@@ -113,19 +134,40 @@ def finish_progress() -> None:
 
 
 def stop_requested() -> bool:
-    """Check cooperative cancellation for this process's bound attempt."""
+    """Check cooperative cancellation for this process's bound attempt.
+
+    Returns
+    -------
+    bool
+        True if process shutdown or cancellation of the bound job was requested.
+    """
     return _shutdown or (
         _job_id is not None and Job.objects.filter(pk=_job_id, cancel_requested=True).exists()
     )
 
 
 def bind_job(job_id: UUID | None) -> None:
-    """Bind one worker attempt; heartbeat threads share this process-local identity."""
+    """Set the active job identity shared by this process and its heartbeat thread.
+
+    Parameters
+    ----------
+    job_id: UUID | None
+        Running job to update, or None to clear the binding.
+
+    Returns
+    -------
+    None
+    """
     global _job_id
     _job_id = job_id
 
 
 def request_shutdown() -> None:
-    """Signal a cooperative stop without doing database I/O inside a signal handler."""
+    """Signal a cooperative stop without doing database I/O inside a signal handler.
+
+    Returns
+    -------
+    None
+    """
     global _shutdown
     _shutdown = True

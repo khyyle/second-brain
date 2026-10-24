@@ -6,7 +6,14 @@ from second_brain.pipeline_config import _CLUSTERING_ALGORITHMS, _TRIAGE_PROFILE
 
 
 def get_catalog() -> dict:
-    """Return model pricing and supported parser, triage, and grouping choices."""
+    """Return model pricing and supported parser, triage, and grouping choices.
+
+    Returns
+    -------
+    dict
+        Providers and models with prices and context limits, accepted file types,
+        triage profiles, and clustering algorithms.
+    """
     providers = []
     for provider, models in SUPPORTED_MODELS.items():
         entries = []

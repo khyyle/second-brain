@@ -22,6 +22,11 @@ def vault_lock(name: str, *, blocking: bool = True) -> Iterator[None]:
     blocking: bool
         Wait for the owner, or raise ConflictError immediately if busy.
 
+    Yields
+    ------
+    None
+        Exclusive ownership of the named vault lock until context exit.
+
     Notes
     -----
     The OS releases the lock after process death. The lock file is never unlinked:
@@ -43,7 +48,19 @@ def vault_lock(name: str, *, blocking: bool = True) -> Iterator[None]:
 
 
 def atomic_write(path: Path, content: str) -> None:
-    """Replace a UTF-8 file with owner-only permissions after flushing its contents."""
+    """Replace a UTF-8 file with owner-only permissions after flushing its contents.
+
+    Parameters
+    ----------
+    path: Path
+        Destination file; missing parent directories are created.
+    content: str
+        UTF-8 text to publish.
+
+    Returns
+    -------
+    None
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
     descriptor, temporary = tempfile.mkstemp(prefix=f".{path.name}-", dir=path.parent)
     try:

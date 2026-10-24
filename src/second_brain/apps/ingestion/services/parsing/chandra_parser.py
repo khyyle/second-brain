@@ -45,7 +45,18 @@ MAX_OUTPUT_TOKENS = 6144
 
 
 def mlx_model_dir(precision: str = "4bit") -> Path:
-    """Local path of the converted MLX model for a given precision."""
+    """Local path of the converted MLX model for a given precision.
+
+    Parameters
+    ----------
+    precision: str
+        Model precision used in the local cache directory name.
+
+    Returns
+    -------
+    Path
+        Converted model cache location; the directory is not created.
+    """
     return Path.home() / ".cache" / "second-brain" / f"chandra-ocr-2-mlx-{precision}"
 
 
@@ -175,10 +186,10 @@ class ChandraParser(DocumentParser):
 
     @staticmethod
     def render_pdf_pages(file_path: Path) -> list[RenderedPage]:
-        """Rasterize every page of a PDF to PNG bytes at ``RENDER_DPI``.
+        """Rasterize every page of a PDF to PNG bytes at `RENDER_DPI`.
 
-        Returning raw PNG bytes lets the caller SHA-256 each page for the
-        page cache without re-encoding.
+        Returns the original PNG bytes without re-encoding, preserving their hashes
+        for page-cache lookups.
 
         Parameters
         ----------

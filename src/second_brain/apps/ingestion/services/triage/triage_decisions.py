@@ -22,11 +22,15 @@ class TriageStore:
         raw_path: str
             Raw source path (relative to the raw directory).
         decision: str
-            One of ``"worthwhile"``, ``"review"``, ``"skip"``.
+            One of `"worthwhile"`, `"review"`, `"skip"`.
         confidence: float
             Triage model confidence for the decision.
         reason: str
             Short human-readable rationale for logs/digests.
+
+        Returns
+        -------
+        None
         """
         TriageDecision.objects.update_or_create(
             pk=raw_path,

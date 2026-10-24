@@ -213,7 +213,13 @@ class SearchIndex:
 
     @property
     def semantic_enabled(self) -> bool:
-        """Whether the embedding-backed semantic layer is active."""
+        """Whether the embedding-backed semantic layer is active.
+
+        Returns
+        -------
+        bool
+            Whether semantic indexing is enabled for this index.
+        """
         return self._semantic
 
     def index_page(
@@ -228,11 +234,10 @@ class SearchIndex:
         path: str,
         mtime: float | None = None,
     ) -> None:
-        """
-        Add or replace a page in both the FTS and metadata tables.
+        """Add or replace a page in both the FTS and metadata tables.
 
         Does not compute embeddings: the page is left marked as pending
-        (its ``embedded_hash`` is cleared) so the semantic layer is
+        (its `embedded_hash` is cleared) so the semantic layer is
         refreshed off the request path by :meth:`embed_pending`.
 
         Parameters
@@ -244,7 +249,7 @@ class SearchIndex:
         content: str
             Full markdown body indexed for search.
         content_type: str
-            Page type (e.g. ``"concept"``, ``"problem"``).
+            Page type (e.g. `"concept"`, `"problem"`).
         domains: list[str]
             Knowledge domains the page belongs to.
         tags: list[str]
@@ -252,10 +257,14 @@ class SearchIndex:
         word_count: int
             Pre-computed word count of *content*.
         path: str
-            Relative path from the wiki root to the ``.md`` file.
+            Relative path from the wiki root to the `.md` file.
         mtime: float | None
             Filesystem modification time of the source file, stored so
             :meth:`sync_from_wiki` can skip unchanged files cheaply.
+
+        Returns
+        -------
+        None
         """
         domains_str = ",".join(domains)
         tags_str = ",".join(tags)
@@ -429,11 +438,10 @@ class SearchIndex:
         ]
 
     def semantic_search(self, query: str, limit: int = 10) -> list[SearchHit]:
-        """Embedding-based nearest-neighbor search over wiki pages.
+        """Find wiki pages by embedding similarity to a natural-language query.
 
-        Finds pages by meaning rather than keyword overlap. Returns an
-        empty list when the semantic layer is disabled or the query has no
-        usable embedding, so callers can fall back to keyword search.
+        Returns an empty list when semantic search is disabled or the query has no
+        usable embedding.
 
         Parameters
         ----------
@@ -450,8 +458,7 @@ class SearchIndex:
         Raises
         ------
         OllamaUnavailableError
-            When Ollama cannot embed the query, so the caller can say so
-            instead of reporting that nothing matched.
+            When Ollama cannot embed the query.
         """
         if not self._semantic or self._search_config is None:
             return []
@@ -489,13 +496,10 @@ class SearchIndex:
         return hits
 
     def rank_by_similarity(self, source: str, candidates: set[str]) -> list[str]:
-        """
-        Order ``candidates`` by embedding similarity to ``source``, closest first.
+        """Order candidate stems by embedding similarity to the source, closest first.
 
-        Only candidates that already have an embedding are returned, so the
-        caller can fall back to its own ordering for the rest. Returns an empty
-        list when Ollama is off or ``source`` itself is unembedded
-        (e.g. compiled but not yet embedded), in which case no ranking is possible.
+        Omits candidates without an embedding. Returns an empty list when semantic
+        search is disabled or the source has no embedding.
 
         Parameters
         ----------
@@ -507,8 +511,8 @@ class SearchIndex:
         Returns
         -------
         list[str]
-            The embedded subset of ``candidates``, ascending by cosine distance
-            to ``source``.
+            The embedded subset of `candidates`, ascending by cosine distance
+            to `source`.
         """
         if not self._semantic or not candidates:
             return []
@@ -705,11 +709,7 @@ class SearchIndex:
     def edges_from(
         self, stems: set[str], kinds: tuple[str, ...] | None = None
     ) -> list[tuple[str, str]]:
-        """
-        Read the edges that originate at any of ``stems``.
-
-        Unlike :meth:`neighbors`, this keeps each edge's endpoints paired, so a
-        caller can rebuild the local subgraph rather than a flat neighbor set.
+        """Read outgoing edges from the supplied stems, retaining source and target pairs.
 
         Parameters
         ----------
@@ -717,18 +717,18 @@ class SearchIndex:
             Stems to read outgoing edges from; each is matched as an edge source.
         kinds: tuple[str, ...] | None
             Edge kinds to include; each must be one of
-            ``second_brain.apps.wiki.services.wiki_structure.LINK_KINDS``. ``None`` includes every
+            `second_brain.apps.wiki.services.wiki_structure.LINK_KINDS`. `None` includes every
             kind.
 
         Returns
         -------
         list[tuple[str, str]]
-            ``(source, target)`` pairs, where the target may be a gap (no page).
+            `(source, target)` pairs, where the target may be a gap (no page).
 
         Raises
         ------
         ValueError
-            If ``kinds`` contains a value that is not a known edge kind.
+            If `kinds` contains a value that is not a known edge kind.
         """
         if not stems:
             return []

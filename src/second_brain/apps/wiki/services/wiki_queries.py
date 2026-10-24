@@ -24,7 +24,18 @@ def _page_info(path: str, frontmatter: dict) -> dict:
 
 
 def list_pages(domain: str | None = None) -> list[dict]:
-    """List content pages, optionally filtered by domain; omit generated metadata pages."""
+    """List content pages, optionally filtered by domain; omit generated metadata pages.
+
+    Parameters
+    ----------
+    domain: str | None
+        Optional domain name to require in page metadata.
+
+    Returns
+    -------
+    list[dict]
+        Page paths, titles, content types, and domains, ordered by relative path.
+    """
     pages = wiki_structure.discover_all_pages(get_vault_paths().wiki_dir)
     items = [_page_info(page.rel_path, page.frontmatter) for page in pages.values()]
     return sorted(
@@ -67,7 +78,19 @@ def read_page(relative: str) -> dict:
 
 
 def search_pages(query: str) -> list[dict]:
-    """Search the existing keyword index without embedding or rebuilding in the request."""
+    """Search the existing keyword index without rebuilding it or requesting embeddings.
+
+    Parameters
+    ----------
+    query: str
+        Keyword search text.
+
+    Returns
+    -------
+    list[dict]
+        Matching page metadata and snippets. Missing indexes return an empty list; stale
+        hits without a wiki page are omitted.
+    """
     paths = get_vault_paths()
     if not paths.search_db_path.exists():
         return []
@@ -84,7 +107,14 @@ def search_pages(query: str) -> list[dict]:
 
 
 def wiki_health() -> dict:
-    """Compute content checks and filter duplicate suggestions dismissed by the user."""
+    """Compute content checks and filter duplicate suggestions dismissed by the user.
+
+    Returns
+    -------
+    dict
+        Health findings, including undismissed near-duplicate pairs when a search index
+        exists.
+    """
     config = get_pipeline_config()
     duplicates = []
     if config.search_db_path.exists():
@@ -98,7 +128,19 @@ def wiki_health() -> dict:
 
 
 def refresh_index(config: PipelineConfig) -> None:
-    """Reconcile derived keyword/link data after a wiki writer finishes; no LLM calls."""
+    """Reconcile keyword and link indexes, then queue missing embedding work if enabled.
+
+    Does not request embeddings directly. Leaves an existing queued index job in place.
+
+    Parameters
+    ----------
+    config: PipelineConfig
+        Wiki and index locations plus search settings.
+
+    Returns
+    -------
+    None
+    """
     SearchIndex(config.search_db_path, config.search).sync_from_wiki(config.wiki_dir)
     from second_brain.apps.jobs.models import Job
     from second_brain.apps.jobs.services.job_queue import enqueue_job

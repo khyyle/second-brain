@@ -83,17 +83,27 @@ def list_commits(wiki_dir: Path, limit: int) -> list[WikiCommit]:
 
 
 def count_commits(wiki_dir: Path) -> int:
-    """Return how many commits the wiki repository currently has."""
+    """Return how many commits the wiki repository currently has.
+
+    Parameters
+    ----------
+    wiki_dir: Path
+        Root of the wiki Git repository.
+
+    Returns
+    -------
+    int
+        Number of commits reachable from HEAD.
+    """
     return int(_git(wiki_dir, "rev-list", "--count", "HEAD").strip())
 
 
 def commit_all(wiki_dir: Path, message: str) -> bool:
-    """
-    Checkpoint the wiki tree before recording a completed build version.
+    """Checkpoint the wiki tree before recording a completed build version.
 
     Initializes the repository on first use, stages everything, and commits
-    with `message`. A clean tree is a quiet no-op. Git failures propagate so
-    the caller cannot mark source versions built without a durable checkpoint.
+    with `message`. A clean tree is a no-op. Git failures propagate; successful
+    return guarantees a durable checkpoint or an unchanged working tree.
     Commits use the application identity without requiring global Git configuration.
 
     Parameters

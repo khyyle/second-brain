@@ -22,7 +22,22 @@ logger = logging.getLogger(__name__)
 
 
 def run_attempt(job: Job) -> None:
-    """Execute a claimed attempt, retain progress, and publish exactly one terminal state."""
+    """Execute one claimed job and persist its terminal state.
+
+    Maintains the heartbeat during execution. Expected failures retain their public
+    reason; unexpected failures are logged with a generic public error. Shutdown
+    marks unfinished work interrupted. Always clears the process job binding and
+    closes database connections.
+
+    Parameters
+    ----------
+    job: Job
+        Job already claimed as running under its lane worker lock.
+
+    Returns
+    -------
+    None
+    """
     from second_brain.apps.jobs.models import Job
     from second_brain.apps.jobs.services import job_progress
     from second_brain.apps.jobs.services.job_execution import execute_job
@@ -87,6 +102,15 @@ def run_attempt(job: Job) -> None:
 
 
 def main() -> None:
+    """Run the command-line-selected worker lane until shutdown or parent exit.
+
+    Acquires the lane lock, marks abandoned attempts interrupted, and executes queued
+    jobs one at a time. Signal handlers request cooperative shutdown.
+
+    Returns
+    -------
+    None
+    """
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("lane", choices=["ingest", "build"])
     args = parser.parse_args()

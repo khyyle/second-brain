@@ -39,6 +39,22 @@ class BackendClient:
 
         The token is read from this vault's private runtime directory. Redirects are
         disabled and URLs are restricted to the selected loopback backend.
+
+        Parameters
+        ----------
+        method: str
+            HTTP method.
+        path: str
+            API path relative to the backend base URL.
+        payload: dict[str, Any] | None
+            Optional JSON request body.
+        params: dict[str, str | int] | None
+            Optional URL query parameters.
+
+        Returns
+        -------
+        Any
+            Decoded JSON response, or None for HTTP 204.
         """
         if not path.startswith("/") or path.startswith("//") or ".." in path.split("/"):
             raise ValueError("Use an API path beginning with /.")

@@ -29,7 +29,19 @@ def _command() -> tuple[str, list[str]]:
 
 
 def status(target: str) -> dict:
-    """Inspect the target's server entry without changing external client files."""
+    """Inspect the target's server entry without changing external client files.
+
+    Parameters
+    ----------
+    target: str
+        Supported MCP client identifier.
+
+    Returns
+    -------
+    dict
+        Target, installed and configured flags, and a status message. Configured is true
+        only when command and arguments match this vault.
+    """
     try:
         client = resolve_mcp_client(target)
     except click.ClickException as exc:
@@ -56,7 +68,18 @@ def status(target: str) -> dict:
 
 
 def install(target: str) -> dict:
-    """Write this vault's entry after an explicit Connect request, preserving other entries."""
+    """Write this vault's MCP server entry while preserving other client entries.
+
+    Parameters
+    ----------
+    target: str
+        Supported MCP client whose configuration file should be updated.
+
+    Returns
+    -------
+    dict
+        Installation and configuration status after writing the entry.
+    """
     try:
         with vault_lock("mcp-install"):
             client = resolve_mcp_client(target)

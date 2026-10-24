@@ -98,15 +98,14 @@ def slugify(text: str) -> str:
 
 
 def normalize_link_target(target: str) -> str:
-    """
-    Reduce any wikilink target, title, or page path to its bare stem slug.
+    """Reduce any wikilink target, title, or page path to its bare stem slug.
 
     Accepts the many forms a reference takes:
-    — wrapped ``[[target]]``
-    - ``[[target|display]]``
-    - folder-prefixed ``concepts/target``
-    - ``.md`` suffix
-    - ``#anchor``
+    - wrapped `[[target]]`
+    - `[[target|display]]`
+    - folder-prefixed `concepts/target`
+    - `.md` suffix
+    - `#anchor`
 
     This function strips each down to the bare name, then applies
     `slugify` so the result matches the stem pages are keyed by. Already-bare

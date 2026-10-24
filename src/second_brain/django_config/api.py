@@ -34,11 +34,21 @@ class HealthResponse(Schema):
 
 @api.get("/health", response=HealthResponse, tags=["System"], auth=None)
 def health(request: HttpRequest) -> HealthResponse:
-    """Confirm the API process responds"""
+    """Report that the API process can answer requests.
+
+    Parameters
+    ----------
+    request: HttpRequest
+        Incoming HTTP request; this endpoint does not require authentication.
+
+    Returns
+    -------
+    HealthResponse
+        A response whose status is `ok`.
+    """
     return HealthResponse(status="ok")
 
 
-# Each app owns its endpoint paths
 api.add_router("", library_router)
 api.add_router("", ingestion_router)
 api.add_router("", compilation_router)

@@ -42,7 +42,22 @@ class ToolRequest(RequestSchema):
     "/assistant-tools/{name}", response={200: str, 400: ErrorResponse, 503: ErrorResponse}
 )
 def invoke_tool(request: HttpRequest, name: ToolName, payload: ToolRequest) -> str:
-    """Invoke only the public tool allowlist; clients cannot select arbitrary Python methods."""
+    """Validate arguments and invoke an allowlisted assistant tool.
+
+    Parameters
+    ----------
+    request: HttpRequest
+        Incoming authenticated HTTP request.
+    name: ToolName
+        Allowlisted assistant tool name.
+    payload: ToolRequest
+        Positional and keyword arguments to validate against the tool signature.
+
+    Returns
+    -------
+    str
+        Tool output formatted as text.
+    """
     config = get_pipeline_config()
     tools = WikiTools(
         config.wiki_dir,

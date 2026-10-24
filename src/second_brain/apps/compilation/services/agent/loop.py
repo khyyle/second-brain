@@ -75,6 +75,18 @@ class _AgentRequest(NamedTuple):
 
 
 def too_large_reason(estimated_tokens: int) -> str:
+    """Describe why a source exceeds the model input limit.
+
+    Parameters
+    ----------
+    estimated_tokens: int
+        Estimated input size in tokens.
+
+    Returns
+    -------
+    str
+        Error reason with the approximate size and advice to split the source.
+    """
     return (
         f"Too large to build in one run (about {estimated_tokens // 1000}k tokens). "
         "Split it into smaller files and add them again."
@@ -82,7 +94,20 @@ def too_large_reason(estimated_tokens: int) -> str:
 
 
 def estimate_source_tokens(raw_dir: Path, sources: list[str]) -> int:
-    """Estimate inline source tokens from file sizes, allowing four bytes per token."""
+    """Estimate inline source tokens from file sizes, allowing four bytes per token.
+
+    Parameters
+    ----------
+    raw_dir: Path
+        Root containing raw Markdown sources.
+    sources: list[str]
+        Paths relative to raw_dir; missing files contribute no tokens.
+
+    Returns
+    -------
+    int
+        Sum of existing file sizes divided by four, rounded down to whole tokens.
+    """
     total_bytes = sum(
         (raw_dir / rel).stat().st_size for rel in sources if (raw_dir / rel).exists()
     )
@@ -221,8 +246,8 @@ def run_agent(
     Returns
     -------
     RunResult
-        Accumulated cost, outcome, reason, and wiki changes. The caller decides
-        whether to commit or roll back the conversation's edits.
+        Accumulated cost, outcome, reason, and wiki changes. Edits remain uncommitted
+        in the working tree.
     """
     from second_brain.apps.jobs.services.job_progress import stop_requested, update_progress
 

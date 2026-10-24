@@ -117,10 +117,24 @@ class TopicSchema:
 
     @property
     def valid_types(self) -> set[str]:
+        """Read registered content-type keys.
+
+        Returns
+        -------
+        set[str]
+            Registered content-type keys.
+        """
         return set(self.content_types.keys())
 
     @property
     def valid_domains(self) -> set[str]:
+        """Read registered domain names.
+
+        Returns
+        -------
+        set[str]
+            Registered domain names.
+        """
         return set(self.domains.keys())
 
     def directory_for_type(self, content_type: str) -> str:
@@ -206,12 +220,9 @@ def write_default_schema(wiki_dir: Path) -> Path:
 
 
 def register_domains(wiki_dir: Path, domains: set[str]) -> list[str]:
-    """Add domains the agent has used to the schema's vocabulary.
+    """Add previously unknown domains to the topic schema vocabulary.
 
-    The agent creates domains as it compiles; recording the ones it used keeps
-    ``topic_schema.yaml`` the canonical list it reuses on later runs (and that
-    the GUI edits), so the vocabulary converges instead of fragmenting. Only
-    writes when there is something new to add.
+    Writes the schema only when at least one domain is new.
 
     Parameters
     ----------
@@ -247,7 +258,7 @@ def register_domains(wiki_dir: Path, domains: set[str]) -> list[str]:
 def remap_schema_domains(wiki_dir: Path, mapping: dict[str, str | None]) -> None:
     """Rename, merge, or delete domain keys in the schema vocabulary.
 
-    ``mapping`` maps an existing domain name to its new name, or to ``None`` to
+    `mapping` maps an existing domain name to its new name, or to `None` to
     delete it; several sources mapping to one target express a merge. A target
     that does not yet exist is created so the vocabulary stays in sync with page
     frontmatter after a bulk edit. A renamed/merged source keeps the target's
@@ -258,7 +269,11 @@ def remap_schema_domains(wiki_dir: Path, mapping: dict[str, str | None]) -> None
     wiki_dir: Path
         Root directory of the wiki.
     mapping: dict[str, str | None]
-        Old domain name to new name, or ``None`` to delete.
+        Old domain name to new name, or `None` to delete.
+
+    Returns
+    -------
+    None
     """
     schema_path = wiki_dir / "_meta" / "topic_schema.yaml"
     if not schema_path.exists():

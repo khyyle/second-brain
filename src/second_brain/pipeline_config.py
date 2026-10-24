@@ -289,31 +289,77 @@ class PipelineConfig(Preferences):
 
     @property
     def drops_dir(self) -> Path:
+        """Locate imported files awaiting ingestion.
+
+        Returns
+        -------
+        Path
+            Vault drops/ directory.
+        """
         return self.data_dir / "drops"
 
     @property
     def raw_dir(self) -> Path:
+        """Locate raw Markdown inputs.
+
+        Returns
+        -------
+        Path
+            Captured build-input directory when configured; otherwise the vault raw/ directory.
+        """
         return self.raw_input_dir or self.data_dir / "raw"
 
     @property
     def wiki_dir(self) -> Path:
+        """Locate compiled wiki content.
+
+        Returns
+        -------
+        Path
+            Vault wiki/ directory.
+        """
         return self.data_dir / "wiki"
 
     @property
     def search_db_path(self) -> Path:
+        """Locate the derived search database.
+
+        Returns
+        -------
+        Path
+            Vault search.db path.
+        """
         return self.data_dir / "search.db"
 
     @property
     def logs_dir(self) -> Path:
+        """Locate pipeline log files.
+
+        Returns
+        -------
+        Path
+            Vault logs/ directory.
+        """
         return self.data_dir / "logs"
 
     @property
     def inbox_dir(self) -> Path:
-        """Holds triage 'review'-tier sources awaiting a manual decision."""
+        """Locate the capture-note inbox.
+
+        Returns
+        -------
+        Path
+            Vault inbox/ directory.
+        """
         return self.data_dir / "inbox"
 
     def ensure_directories(self) -> None:
-        """Create all required data directories if they don't exist."""
+        """Create all required data directories if they don't exist.
+
+        Returns
+        -------
+        None
+        """
         for directory in (
             self.drops_dir / "chatgpt",
             self.drops_dir / "documents",

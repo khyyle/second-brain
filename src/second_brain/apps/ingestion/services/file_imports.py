@@ -37,7 +37,14 @@ class ImportSubmission:
 
 
 def list_imports() -> list[ImportedFile]:
-    """Read queued copies and durable outcomes for the import screen."""
+    """Read source records and supported files awaiting ingestion in drops/.
+
+    Returns
+    -------
+    list[ImportedFile]
+        Import paths, statuses, timestamps, and errors, ordered newest first. Dropped files
+        without records receive pending status.
+    """
     paths = get_vault_paths()
     records = {
         row.file_path: ImportedFile(row.file_path, row.status, row.updated_at, row.error)
@@ -124,7 +131,21 @@ def import_files(paths: list[str], source_type: str) -> ImportSubmission:
 
 
 def request_ingestion(*, drops_only: bool, file_path: str | None = None) -> Job:
-    """Queue a scan or explicit retry of a vault-owned dropped file."""
+    """Queue a scan or explicit retry of a vault-owned dropped file.
+
+    Parameters
+    ----------
+    drops_only: bool
+        Limit a scan to dropped copies instead of also staging watched folders.
+    file_path: str | None
+        Optional absolute path inside drops/ to retry explicitly. This forces drops_only
+        regardless of its supplied value.
+
+    Returns
+    -------
+    Job
+        Queued ingestion job.
+    """
     if file_path is not None:
         path = drop_path(file_path)
         if not path.is_file():
@@ -134,7 +155,18 @@ def request_ingestion(*, drops_only: bool, file_path: str | None = None) -> Job:
 
 
 def drop_path(file_path: str) -> Path:
-    """Resolve only regular files beneath drops/, rejecting traversal and symlinks."""
+    """Validate and resolve a visible file path beneath the active vault's drops/.
+
+    Parameters
+    ----------
+    file_path: str
+        Absolute dropped-file path. Traversal, hidden components, and symlinks are rejected.
+
+    Returns
+    -------
+    Path
+        Contained path, which may refer to a file that no longer exists.
+    """
     paths = get_vault_paths()
     supplied = Path(file_path)
     if not supplied.is_absolute() or ".." in supplied.parts:
@@ -149,7 +181,18 @@ def drop_path(file_path: str) -> Path:
 
 
 def delete_import(file_path: str) -> None:
-    """Trash a queued copy and remove its record; reject deletion while ingest work is active."""
+    """Trash a queued copy and remove its record; reject deletion while ingest work is active.
+
+    Parameters
+    ----------
+    file_path: str
+        Absolute dropped-file path to trash. Missing copies are allowed; the database record
+        is still removed.
+
+    Returns
+    -------
+    None
+    """
     path = drop_path(file_path)
     paths = get_vault_paths()
     with (

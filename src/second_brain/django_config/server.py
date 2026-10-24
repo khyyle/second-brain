@@ -19,6 +19,16 @@ from second_brain.django_config.identity import private_token
 
 
 def main() -> None:
+    """Migrate the active vault and run its API server with supervised workers.
+
+    Reads command-line reload options and Django startup settings. Holds the backend
+    lock for the server lifetime, validates preferences before serving, and stops
+    workers when the server exits. Binds one Uvicorn process to loopback.
+
+    Returns
+    -------
+    None
+    """
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--reload",

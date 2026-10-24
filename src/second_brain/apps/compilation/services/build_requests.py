@@ -107,7 +107,13 @@ def request_build(*, full: bool = False, dry_run: bool = False, preview: bool = 
 
 
 def get_grouping() -> dict | None:
-    """Return the last preview and its current user corrections, or None."""
+    """Return the last preview and its current user corrections, or None.
+
+    Returns
+    -------
+    dict | None
+        Saved grouping preview with current overrides, or None if no valid preview exists.
+    """
     root = get_vault_paths().data_dir
     with vault_lock("grouping"):
         plan = clustering.load_preview(root)
@@ -115,7 +121,19 @@ def get_grouping() -> dict | None:
 
 
 def update_grouping(overrides: dict) -> dict:
-    """Validate member/group IDs against the current preview and atomically save corrections."""
+    """Validate member/group IDs against the current preview and atomically save corrections.
+
+    Parameters
+    ----------
+    overrides: dict
+        Excluded source paths and split-group IDs under the excluded and split_groups keys.
+        All members and IDs must belong to the saved preview.
+
+    Returns
+    -------
+    dict
+        The validated overrides written to disk.
+    """
     root = get_vault_paths().data_dir
     with vault_lock("grouping"):
         plan = clustering.load_preview(root)
@@ -130,6 +148,11 @@ def update_grouping(overrides: dict) -> dict:
 
 
 def clear_grouping() -> None:
-    """Discard the preview and corrections without changing source eligibility."""
+    """Discard the preview and corrections without changing source eligibility.
+
+    Returns
+    -------
+    None
+    """
     with vault_lock("grouping"):
         clustering.clear_preview(get_vault_paths().data_dir)

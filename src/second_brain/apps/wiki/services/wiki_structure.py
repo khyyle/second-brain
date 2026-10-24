@@ -176,19 +176,18 @@ def _count_words(content: str) -> int:
 
 
 def extract_typed_edges(content: str) -> list[tuple[str, str]]:
-    """Return ``(target_stem, kind)`` edges a page declares.
+    """Read outgoing edges declared in page frontmatter and body wikilinks.
 
-    Typed edges come from the frontmatter relationship fields; body
-    ``[[wikilinks]]`` become ``mention`` edges. A target may be a gap (no page
-    of that stem exists yet) — resolving target to page is left to the caller.
+    Frontmatter fields supply typed relationships; body wikilinks supply mention
+    edges. Targets are stems, and their pages need not exist.
 
-    Parameters:
-    -----------
+    Parameters
+    ----------
     content: str
         a full compiled markdown page
 
-    Returns:
-    --------
+    Returns
+    -------
     edges: list[tuple[str, str]]
         An array of edges outgoing from `content`, formatted as (`target`, `type`)
     """

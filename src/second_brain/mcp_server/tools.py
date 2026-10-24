@@ -199,9 +199,13 @@ class WikiTools:
         Lets newly compiled or edited pages become searchable mid-session
         without restarting the server. The keyword/metadata sync is fast
         and runs inline (rate-limited by a directory-stat check), so
-        ``search_wiki`` and ``list_pages`` stay correct and responsive.
+        `search_wiki` and `list_pages` stay correct and responsive.
         Embeddings are refreshed on a background thread so Ollama latency
         never blocks a tool call.
+
+        Returns
+        -------
+        None
         """
         now = time.monotonic()
         if now - self._last_sync_check < SYNC_MIN_INTERVAL_SECONDS:
@@ -451,14 +455,10 @@ class WikiTools:
         title: str | None = None,
         topic: str | None = None,
     ) -> str:
-        """
-        Capture freeform chat content as a source document for the pipeline.
+        """Write a freeform note into drops/documents/ and invoke the ingestion callback.
 
-        Writes a markdown file into the ``drops/documents`` intake queue so
-        the content flows through the normal ingest -> triage -> compile
-        path, gaining a real source entry and quality gating, rather than
-        authoring a finished wiki page directly. The wiki stays a single
-        compiled artifact with one source of truth.
+        Strips supplied frontmatter, creates source metadata, and writes the note
+        atomically. Empty content returns a message without writing a file.
 
         Parameters
         ----------
@@ -579,11 +579,7 @@ class WikiTools:
         return "\n\n".join(results) + _more_note(len(window), len(sources), offset=offset)
 
     def get_sources_summary(self, title: str) -> str:
-        """
-        Summarize a page's sources with frontmatter and opening text only.
-
-        A cheap way to judge each source's relevance before pulling its full body
-        with ``get_sources``.
+        """Summarize a page's sources with frontmatter and opening text only.
 
         Parameters
         ----------
@@ -818,11 +814,10 @@ class WikiTools:
         return "\n".join(lines) + _more_note(len(window), len(ordered), pageable=False)
 
     def list_domains(self) -> str:
-        """
-        List the knowledge domains in the wiki with their page counts.
+        """List the knowledge domains in the wiki with their page counts.
 
-        Returns:
-        --------
+        Returns
+        -------
         str
             One line per domain with its name and page count, ordered by descending
             count then name, or an empty-wiki notice.
@@ -834,18 +829,17 @@ class WikiTools:
         return "\n".join(f"- {domain} ({count} pages)" for domain, count in ordered)
 
     def list_gaps(self, limit: int = DEFAULT_GAPS_LIMIT, offset: int = 0) -> str:
-        """
-        List referenced-but-unwritten concepts, most-referenced first.
+        """List referenced-but-unwritten concepts, most-referenced first.
 
-        Parameters:
-        -----------
+        Parameters
+        ----------
         limit: int
             Maximum number of gaps to return in this call.
         offset: int
             Number of leading gaps to skip, for paging.
 
-        Returns:
-        --------
+        Returns
+        -------
         str
             One line per gap with its wikilink and how many pages reference it,
             ordered by descending reference count, followed by a coverage note

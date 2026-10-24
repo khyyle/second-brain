@@ -10,13 +10,13 @@ KEYCHAIN_SERVICE = "com.second-brain.providers"
 
 
 def read_api_key(provider: str) -> str | None:
-    """Read the generic-password item shared with the native application's Keychain UI.
+    """Read a provider credential from the macOS Keychain generic-password store.
 
     Parameters
     ----------
     provider: str
-        Supported provider ID, used as the Keychain account. The service is the
-        constant KEYCHAIN_SERVICE. The GUI writes this item using Security.framework.
+        Supported provider ID, used as the account under the
+        com.second-brain.providers Keychain service.
 
     Returns
     -------

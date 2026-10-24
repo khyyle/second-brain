@@ -68,6 +68,13 @@ class CacheStats:
 
     @property
     def pages_ocrd(self) -> int:
+        """Count pages that required OCR rather than a cached result.
+
+        Returns
+        -------
+        int
+            Total pages minus cached pages.
+        """
         return self.pages_total - self.pages_from_cache
 
 
@@ -89,6 +96,10 @@ def check_parser_available(lane: ParseLane) -> None:
     ----------
     lane: ParseLane
         The parse lane whose dependency should be checked.
+
+    Returns
+    -------
+    None
 
     Raises
     ------
@@ -424,11 +435,11 @@ async def process_pdf(
     """Process a PDF through the appropriate parse lane with caching.
 
     Classifies each page (Docling for typed, Chandra for
-    handwritten/scanned) and parses accordingly, unless ``force_lane``
-    pins the whole document to one lane. When ``manifest`` is supplied,
+    handwritten/scanned) and parses accordingly, unless `force_lane`
+    pins the whole document to one lane. When `manifest` is supplied,
     Chandra pages reuse the per-page cache and the function reports
     whether the assembled markdown is identical to a previously stored
-    run (so callers can skip downstream compilation work).
+    run.
 
     Parameters
     ----------
@@ -439,28 +450,26 @@ async def process_pdf(
     config: PipelineConfig
         Application config (parser choices).
     force_lane: str | None
-        If ``"chandra"`` or ``"docling"``, skip per-page routing and use
+        If `"chandra"` or `"docling"`, skip per-page routing and use
         this parser for the whole document. Comes from
-        ``SourceConfig.force_parse_lane``.
+        `SourceConfig.force_parse_lane`.
     manifest: Manifest | None
         Manifest for page-cache lookups and content-hash comparison.
-        When ``None``, behaves like the legacy whole-file parser with
-        no caching.
+        When None, page caching and prior-content comparison are disabled.
 
     Returns
     -------
     PdfIngestResult
         Parse result, output path, the assembled-markdown hash, a
         flag indicating whether the content was unchanged from a prior
-        run, and Chandra cache stats (or ``None`` for the Docling lane).
+        run, and Chandra cache stats (or `None` for the Docling lane).
 
     Raises
     ------
     ParserNotAvailableError
         If a required parser package is not installed.
     PageParseError
-        If any page fails to parse, so the document is marked failed and
-        retried on the next ingest rather than stored with a gap.
+        If any page fails to parse. No partial document is published.
     """
     cache_stats: CacheStats | None = None
     forced_lane: ParseLane | None = None

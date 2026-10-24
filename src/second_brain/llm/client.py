@@ -26,18 +26,22 @@ def create_client(profile: ProviderProfile) -> anthropic.Anthropic:
 
 
 def require_api_key(profile: ProviderProfile) -> str:
-    """
-    Raise when the provider has no accessible Keychain credential.
+    """Read the provider credential from Keychain, raising when it is absent or empty.
 
     Parameters
     ----------
     profile: ProviderProfile
         Provider whose Keychain item is checked.
 
+    Returns
+    -------
+    str
+        Provider API key held in process memory.
+
     Raises
     ------
     ModelError
-        Kind ``ACCOUNT`` when the Keychain item is absent or empty.
+        Kind `ACCOUNT` when the Keychain item is absent or empty.
     """
     from second_brain.apps.preferences.services.provider_credentials import read_api_key
 

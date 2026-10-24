@@ -26,11 +26,10 @@ _MAX_PROMPT_GAPS = 30
 def build_compilation_prompt(
     new_sources: list[str], gaps: list[tuple[str, int]], domains: list[str]
 ) -> str:
-    """
-    Build the per-run task message, detailing sources and start sequence.
+    """Build the per-run task message, detailing sources and start sequence.
 
-    Parameters:
-    -----------
+    Parameters
+    ----------
     new_sources: list[str]
         Relative paths of raw source documents to compile.
     gaps: list[tuple[str, int]]
@@ -38,12 +37,11 @@ def build_compilation_prompt(
     domains: list[str]
         Existing domain names, including registered names and those in use.
 
-    Returns:
-    --------
+    Returns
+    -------
     str
         The per-run task message for the compilation agent.
     """
-    # sources are presented separately, see :func:`build_source_block`
     source_list = "\n".join(f"- raw/{s}" for s in new_sources)
     domain_guidance = (
         "Existing domains:\n"
@@ -80,10 +78,7 @@ passage; their full text is already provided.{gap_guidance}"""
 
 
 def build_source_block(sources: list[str], raw_dir: Path) -> str:
-    """Concatenate the raw source documents for inline presentation.
-
-    Each source is read in full and labeled with its raw/ path so the agent
-    can attribute and cite it.
+    """Concatenate complete raw source text, labeling each document with its raw/ path.
 
     Parameters
     ----------
@@ -123,17 +118,12 @@ EXPLORE_TOOL_NAMES = (
 
 
 def explore_tool_schemas() -> list[dict]:
-    """
-    Return Anthropic-format schemas for the wiki-exploration tools.
-
-    Derived from the MCP server's tool registry so the descriptions and parameter
-    schemas have a single source of truth shared with the MCP client, rather than
-    being duplicated here.
+    """Read wiki-exploration tool schemas from the MCP registry and convert to Anthropic format.
 
     Returns
     -------
     list[dict]
-        ``{name, description, input_schema}`` dicts in ``EXPLORE_TOOL_NAMES`` order.
+        `{name, description, input_schema}` dicts in `EXPLORE_TOOL_NAMES` order.
     """
     import asyncio
 
@@ -301,6 +291,13 @@ class WikiToolExecutor:
 
     @property
     def changes(self) -> list[dict]:
+        """Read the page changes recorded by this executor.
+
+        Returns
+        -------
+        list[dict]
+            The mutable action log in execution order, with action and path per entry.
+        """
         return self._changes
 
     def _record(self, action: str, rel_path: str) -> None:
@@ -524,14 +521,14 @@ class WikiToolExecutor:
         return f"Updated frontmatter of {rel_path}"
 
     def finalize_provenance(self) -> None:
-        """
-        Stamp the build unit's sources onto every page touched this run.
+        """Merge build-source provenance into every content page touched by this executor.
 
-        A page created via ``write_page`` already carries them; a page updated
-        via ``edit_file`` or ``set_page_meta`` gets them merged in (union,
-        order-preserving), so a page's sources accumulate every source it was
-        compiled from and never regress. No-op without a build unit or in
-        dry-run.
+        Retains existing source order and adds only missing paths. Missing pages are
+        skipped. Does nothing in dry-run mode or when no build sources are bound.
+
+        Returns
+        -------
+        None
         """
         if self._dry_run or not self._sources:
             return
@@ -751,13 +748,11 @@ def _protected_source_read_ids(messages: list[dict], max_chars: int) -> set[str]
 
 
 def compact_history(messages: list[dict], keep_last: int = 2, max_chars: int = 600) -> None:
-    """Shrink large tool outputs in older turns to keep each request small.
+    """Shrink older tool outputs in place while retaining recent source context.
 
-    The whole conversation is re-sent every turn, so an early full-file read
-    would inflate every later request. The most recent ``keep_last`` user turns
-    are left intact, as are the newest raw-source reads up to a character budget
-    so the agent retains recently-fetched material; other oversized tool results
-    are replaced with a placeholder and can be re-read on demand.
+    Preserves the most recent user turns and the newest raw-source reads within a
+    character budget. Replaces other oversized results with a placeholder. This
+    bounds repeated input when a conversation is sent on successive model turns.
 
     Parameters
     ----------
@@ -767,6 +762,10 @@ def compact_history(messages: list[dict], keep_last: int = 2, max_chars: int = 6
         Number of most-recent user turns to leave untouched.
     max_chars: int
         Tool-result size above which an old result is collapsed.
+
+    Returns
+    -------
+    None
     """
     placeholder = "[earlier output omitted to save context — re-read if needed]"
     protected_ids = _protected_source_read_ids(messages, _PROTECTED_SOURCE_CHARS)

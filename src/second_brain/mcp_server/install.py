@@ -154,8 +154,7 @@ def write_json_mcp_config(
     command: str,
     arguments: list[str],
 ) -> None:
-    """
-    Add the server to a Claude or Cursor JSON configuration.
+    """Add the server to a Claude or Cursor JSON configuration.
 
     Existing settings and other MCP servers are retained. Invalid files and
     symbolic links are rejected without modification.
@@ -168,6 +167,10 @@ def write_json_mcp_config(
         Absolute executable used to start the server.
     arguments: list[str]
         Arguments passed to the server executable.
+
+    Returns
+    -------
+    None
     """
     _validate_config_path(config_file)
     document: dict[str, object] = {}
@@ -199,8 +202,7 @@ def write_codex_mcp_config(
     command: str,
     arguments: list[str],
 ) -> None:
-    """
-    Add the server to the TOML configuration shared by ChatGPT and Codex.
+    """Add the server to the TOML configuration shared by ChatGPT and Codex.
 
     Existing formatting, comments, settings, and other MCP servers are
     retained. Invalid files and symbolic links are rejected without modification.
@@ -213,6 +215,10 @@ def write_codex_mcp_config(
         Absolute executable used to start the server.
     arguments: list[str]
         Arguments passed to the server executable.
+
+    Returns
+    -------
+    None
     """
     _validate_config_path(config_file)
     if config_file.exists():

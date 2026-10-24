@@ -73,6 +73,15 @@ def list_domains(wiki_dir: Path) -> list[DomainInfo]:
 def rename_domain(wiki_dir: Path, old: str, new: str) -> int:
     """Rename a domain everywhere it appears.
 
+    Parameters
+    ----------
+    wiki_dir: Path
+        Wiki root containing pages and the topic schema.
+    old: str
+        Existing domain name.
+    new: str
+        Replacement domain name.
+
     Returns
     -------
     int
@@ -82,7 +91,16 @@ def rename_domain(wiki_dir: Path, old: str, new: str) -> int:
 
 
 def merge_domains(wiki_dir: Path, sources: list[str], dest: str) -> int:
-    """Merge each domain in ``sources`` into ``dest``.
+    """Merge each domain in `sources` into `dest`.
+
+    Parameters
+    ----------
+    wiki_dir: Path
+        Wiki root containing pages and the topic schema.
+    sources: list[str]
+        Domain names to merge.
+    dest: str
+        Destination domain name.
 
     Returns
     -------
@@ -99,8 +117,15 @@ def merge_domains(wiki_dir: Path, sources: list[str], dest: str) -> int:
 def delete_domain(wiki_dir: Path, name: str) -> int:
     """Remove a domain from every page and the schema.
 
-    A page left with no domains keeps its ``domains`` key as an empty list and
+    A page left with no domains keeps its `domains` key as an empty list and
     is surfaced under "Uncategorized" in the index.
+
+    Parameters
+    ----------
+    wiki_dir: Path
+        Wiki root containing pages and the topic schema.
+    name: str
+        Domain name to remove.
 
     Returns
     -------

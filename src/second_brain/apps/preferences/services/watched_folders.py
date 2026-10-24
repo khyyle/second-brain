@@ -12,7 +12,14 @@ from second_brain.django_config.paths import get_vault_paths
 
 
 def list_folders() -> list[dict]:
-    """Return named external source folders, with no implicit built-in drop lanes."""
+    """Return named external source folders, with no implicit built-in drop lanes.
+
+    Returns
+    -------
+    list[dict]
+        Saved source-folder definitions with their names, paths, enabled state, and file
+        types.
+    """
     return [
         {"name": name, **source.model_dump(mode="json")}
         for name, source in get_preferences().sources.items()

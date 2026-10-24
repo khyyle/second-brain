@@ -23,7 +23,19 @@ logger = logging.getLogger(__name__)
 
 
 def input_fingerprint(config: PipelineConfig) -> tuple[tuple[str, int, int], ...]:
-    """Return supported input paths, sizes, and modification times without reading bytes."""
+    """Return supported input paths, sizes, and modification times without reading bytes.
+
+    Parameters
+    ----------
+    config: PipelineConfig
+        Vault locations, watched folders, and supported source settings.
+
+    Returns
+    -------
+    tuple[tuple[str, int, int], ...]
+        Sorted (path, modification time in nanoseconds, byte size) entries for supported
+        files in drops and enabled watched folders. File contents are not read.
+    """
     roots = [(config.drops_dir, None)] + [
         (source.path, set(source.file_types))
         for source in config.sources.values()
@@ -58,6 +70,12 @@ def supervised_workers() -> Iterator[None]:
     fingerprint before queueing an ingest scan. No builds are scheduled automatically.
     Updated preferences are noticed by the same loop. Worker crashes cause a restart;
     the new worker marks its old running attempt interrupted before claiming more work.
+
+    Yields
+    ------
+    None
+        Keeps lane workers and the folder watcher running until context exit, then stops
+        them.
     """
     stop = threading.Event()
     processes = {}

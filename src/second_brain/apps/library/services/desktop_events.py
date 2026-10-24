@@ -1,9 +1,4 @@
-"""Stream desktop snapshots when vault data changes, including worker-process writes.
-
-Watchdog uses OS filesystem notifications. It observes the database/WAL and the
-screen's file inputs across processes. Notifications are hints: coalesce bursts, reread
-authoritative state, and always send a fresh snapshot on connection/reconnection.
-"""
+"""Watch vault changes and stream complete desktop snapshots over SSE."""
 
 import asyncio
 import json
@@ -25,13 +20,40 @@ COALESCE_SECONDS = 0.5
 
 
 class VaultChangeHandler(FileSystemEventHandler):
-    """Wake the async stream for relevant writes; reads and lock files do not count."""
+    """Notify on writes to vault state; ignore reads and unrelated paths."""
 
     def __init__(self, vault: Path, notify: Callable[[], None]) -> None:
+        """Observe writes that can change the desktop snapshot.
+
+        Parameters
+        ----------
+        vault: Path
+            Vault root used to interpret filesystem event paths.
+        notify: Callable[[], None]
+            Callback invoked on the watchdog observer thread when a relevant path changes. It
+            must be safe to call from that thread.
+
+        Returns
+        -------
+        None
+        """
         self.vault = vault
         self.notify = notify
 
     def relevant(self, path: str) -> bool:
+        """Check whether a path belongs to the snapshot inputs.
+
+        Parameters
+        ----------
+        path: str
+            Filesystem path reported by watchdog; the path need not still exist.
+
+        Returns
+        -------
+        bool
+            True for source, import, wiki, database, or settings paths inside the vault. Git
+            internals and unrelated paths return False.
+        """
         try:
             parts = Path(path).relative_to(self.vault).parts
         except ValueError:
@@ -50,6 +72,18 @@ class VaultChangeHandler(FileSystemEventHandler):
         }
 
     def on_any_event(self, event: FileSystemEvent) -> None:
+        """Notify once when a create, write, delete, or move affects snapshot inputs.
+
+        Parameters
+        ----------
+        event: FileSystemEvent
+            Filesystem notification. Moves check both the original and destination paths.
+            Read events are ignored.
+
+        Returns
+        -------
+        None
+        """
         if event.event_type not in {"created", "modified", "deleted", "moved"}:
             return
         if self.relevant(event.src_path) or self.relevant(getattr(event, "dest_path", "")):
@@ -57,11 +91,22 @@ class VaultChangeHandler(FileSystemEventHandler):
 
 
 def read_snapshot() -> tuple[str, str]:
-    """Serialize in a sync ORM context and release DB connections between events."""
+    """Validate and serialize the current desktop state.
+
+    Closes this thread's database connections on success or failure.
+
+    Returns
+    -------
+    payload: str
+        Complete snapshot encoded as compact JSON.
+    signature: str
+        Sorted JSON with generation and heartbeat timestamps removed, so timestamp-only
+        changes compare equal. This is a comparison value, not a hash.
+    """
     try:
         snapshot = DesktopState.model_validate(get_desktop_state()).model_dump(mode="json")
         payload = json.dumps(snapshot, separators=(",", ":"))
-        # Clock-only differences should not repaint the screen or send another event.
+        # Timestamp-only changes do not count as state changes.
         snapshot["state"].pop("generated_at", None)
         for entry in snapshot["jobs"]:
             entry["job"].pop("heartbeat_at", None)
@@ -73,13 +118,34 @@ def read_snapshot() -> tuple[str, str]:
 
 
 async def stream_desktop_state(vault: Path) -> AsyncIterator[str]:
-    """Send SSE snapshots, keepalives, and recoverable errors until disconnected.
+    """Stream state changes and idle connection checks as Server-Sent Events.
 
-    The queue is a single dirty flag, so slow clients cannot accumulate events.
-    Every keepalive also reconciles state: filesystem notifications can be merged
-    or lost, or arrive before a SQLite transaction commits. This low-frequency
-    safety check sends no snapshot unless visible data changed. Each snapshot
-    replaces the whole desktop read model, including after reconnection.
+    Reads an initial snapshot, then rereads after filesystem changes or an idle
+    interval. Repeated snapshots are suppressed unless their comparison value
+    changes or a previous read failed. Read failures are logged and produce one
+    `unavailable` event until a read succeeds. Closing or cancelling the generator
+    stops and joins its filesystem observer.
+
+    Parameters
+    ----------
+    vault: Path
+        Existing vault root to watch. It must match the vault selected in Django
+        settings, which supplies the database and files read for each snapshot.
+
+    Yields
+    ------
+    str
+        A complete SSE frame: a `snapshot` event with JSON state, an `unavailable`
+        event with an error detail, or `: keepalive` followed by a blank line.
+        The colon marks an SSE comment: a line with no application data, sent after
+        15 seconds without a filesystem notification to keep the connection active.
+
+    Notes
+    -----
+    Filesystem notifications may be merged, lost, or delivered before a database
+    commit. The idle check rereads state to catch these changes. One pending-change
+    flag bounds memory use; a short delay combines bursts without waiting for all
+    writes to stop.
     """
     loop = asyncio.get_running_loop()
     changed = asyncio.Event()

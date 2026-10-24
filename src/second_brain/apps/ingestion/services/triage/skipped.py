@@ -18,15 +18,17 @@ SKIPPED_DIRNAME = ".skipped"
 def purge_skipped(raw_dir: Path) -> None:
     """Permanently remove the skipped-source holding folder.
 
-    Skip moves a source into ``raw/.skipped/`` so it can be un-skipped; a
-    fully successful build finalizes those decisions, so the folder is
-    cleared to reclaim disk. The skip verdicts stay in the manifest, so a later
-    re-import of the same export is still recognized as skipped.
+    Leaves triage decisions intact. Missing folders are a no-op; filesystem failures
+    are logged and do not propagate.
 
     Parameters
     ----------
     raw_dir: Path
         The raw output directory containing the holding folder.
+
+    Returns
+    -------
+    None
     """
     skipped_dir = raw_dir / SKIPPED_DIRNAME
     if not skipped_dir.exists():

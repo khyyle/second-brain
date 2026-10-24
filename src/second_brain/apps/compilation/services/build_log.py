@@ -26,8 +26,12 @@ def append_build_actions(data_dir: Path, actions: list[dict]) -> None:
     data_dir: Path
         Vault root containing the log file.
     actions: list[dict]
-        Each dict has ``action`` ("created" | "updated") and ``path``.
+        Each dict has `action` ("created" | "updated") and `path`.
         A timestamp is added here.
+
+    Returns
+    -------
+    None
     """
     if not actions:
         return
@@ -48,8 +52,7 @@ def append_build_actions(data_dir: Path, actions: list[dict]) -> None:
 
 
 def record_built_pages(data_dir: Path, changes: list[dict], sources: list[str]) -> None:
-    """
-    Log the pages one committed group of sources produced, one line per page.
+    """Log the pages one committed group of sources produced, one line per page.
 
     A page created and then edited in the same run is logged once, as created.
 
@@ -59,9 +62,13 @@ def record_built_pages(data_dir: Path, changes: list[dict], sources: list[str]) 
         Vault root containing the log file.
     changes: list[dict]
         The group's page changes in the order they were made, each with
-        ``action`` and ``path``.
+        `action` and `path`.
     sources: list[str]
         Raw paths of the group's sources, recorded on every line.
+
+    Returns
+    -------
+    None
     """
     first_action_by_path: dict[str, str] = {}
     for change in changes:
@@ -76,7 +83,14 @@ def record_built_pages(data_dir: Path, changes: list[dict], sources: list[str]) 
 
 
 def list_build_actions() -> list[dict]:
-    """Return the bounded build log, newest first, skipping incomplete trailing writes."""
+    """Return the bounded build log, newest first, skipping incomplete trailing writes.
+
+    Returns
+    -------
+    list[dict]
+        Valid created/updated page records, newest first, limited to the retained log
+        entries. Missing logs return an empty list; invalid rows are skipped.
+    """
     from second_brain.django_config.paths import get_vault_paths
 
     path = get_vault_paths().data_dir / BUILD_LOG_FILENAME

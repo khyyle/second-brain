@@ -124,10 +124,26 @@ class ProviderProfile:
     ) -> float:
         """Return a USD cost estimate from per-class token counts.
 
-        ``input_tokens`` is the uncached input (the provider reports cached
+        `input_tokens` is the uncached input (the provider reports cached
         tokens separately), billed at full rate. Cache reads and writes are
         billed at their per-provider multiples of the input price. With no
         cache tokens this reduces to plain input+output pricing.
+
+        Parameters
+        ----------
+        input_tokens: int
+            Uncached input token count, excluding cache reads and writes.
+        output_tokens: int
+            Generated output token count.
+        cache_read_tokens: int
+            Cached input tokens read at this provider's cache-read rate.
+        cache_write_tokens: int
+            Input tokens written to cache at this provider's cache-write rate.
+
+        Returns
+        -------
+        float
+            Estimated USD cost for all four token categories.
         """
         base = self.input_price_per_mtok
         return (
@@ -138,7 +154,18 @@ class ProviderProfile:
         )
 
     def client_kwargs(self, api_key: str) -> dict:
-        """Build SDK transport arguments from an explicitly supplied in-memory secret."""
+        """Build SDK transport arguments from an explicitly supplied in-memory secret.
+
+        Parameters
+        ----------
+        api_key: str
+            Provider secret to pass directly to the SDK.
+
+        Returns
+        -------
+        dict
+            SDK arguments containing api_key and, when configured, base_url.
+        """
         kwargs = {"api_key": api_key}
         if self.base_url:
             kwargs["base_url"] = self.base_url

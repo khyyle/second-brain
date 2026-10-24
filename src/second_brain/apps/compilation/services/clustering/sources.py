@@ -22,13 +22,12 @@ def embed_sources(
     signature_chars: int,
     progress: ProgressCallback | None = None,
 ) -> tuple[list[str], list[list[float]]]:
-    """
-    Embed each source's opening as a topical fingerprint.
+    """Embed each source's opening as a topical fingerprint.
 
     Parameters
     ----------
     raw_paths: list[str]
-        Source paths relative to ``raw_dir``.
+        Source paths relative to `raw_dir`.
     raw_dir: Path
         Root of the raw parsed sources.
     search_config: SearchConfig
@@ -36,14 +35,13 @@ def embed_sources(
     signature_chars: int
         How much of each source's opening to embed.
     progress: ProgressCallback | None
-        Called with ``(index, total)`` — the 0-based index of the source
-        being embedded — as each is processed, matching the pipeline's
-        status-heartbeat convention for a live progress readout.
+        Called before each source with its zero-based index and the total source
+        count, including sources later skipped because reading or embedding failed.
 
     Returns
     -------
     embedded: list[str]
-        Paths that embedded successfully, aligned with ``vectors``.
+        Paths that embedded successfully, aligned with `vectors`.
     vectors: list[list[float]]
         Their embedding vectors.
 
@@ -89,14 +87,14 @@ def cluster_scoped_sources(
 ) -> list[list[str]]:
     """Cluster only sources in the configured lanes; pass others through.
 
-    Sources whose lane is outside ``in_scope_lanes`` become singletons, so
+    Sources whose lane is outside `in_scope_lanes` become singletons, so
     deliberately dropped material compiles one source per run while bulk
     imports are grouped.
 
     Parameters
     ----------
     raw_paths: list[str]
-        Source paths relative to ``raw_dir``.
+        Source paths relative to `raw_dir`.
     raw_dir: Path
         Root of the raw parsed sources.
     search_config: SearchConfig
@@ -107,6 +105,9 @@ def cluster_scoped_sources(
         Lanes eligible for clustering.
     signature_chars: int
         How much of each source to embed as its fingerprint.
+    progress: ProgressCallback | None
+        Optional callback receiving the zero-based index and total count of the
+        sources selected for embedding, before each source is processed.
 
     Returns
     -------
@@ -133,8 +134,7 @@ def cluster_sources(
     signature_chars: int = 8000,
     progress: ProgressCallback | None = None,
 ) -> list[list[str]]:
-    """
-    Group related sources into clusters, preserving every source.
+    """Group related sources into clusters, preserving every source.
 
     Sources that return no embedding are kept as their own singleton
     clusters, so one unreadable or oversized source is not dropped. An
@@ -144,7 +144,7 @@ def cluster_sources(
     Parameters
     ----------
     raw_paths: list[str]
-        Source paths relative to ``raw_dir``.
+        Source paths relative to `raw_dir`.
     raw_dir: Path
         Root of the raw parsed sources.
     search_config: SearchConfig
@@ -153,6 +153,9 @@ def cluster_sources(
         Strategy that partitions embedding vectors into groups.
     signature_chars: int
         How much of each source to embed as its fingerprint.
+    progress: ProgressCallback | None
+        Optional callback receiving the zero-based index and total count of the
+        sources selected for embedding, before each source is processed.
 
     Returns
     -------

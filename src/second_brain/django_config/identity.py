@@ -9,11 +9,37 @@ from django.core.exceptions import ImproperlyConfigured
 
 
 def signing_key(vault: Path) -> str:
+    """Read or create the vault's persistent Django signing key.
+
+    Parameters
+    ----------
+    vault: Path
+        Vault root whose .backend directory stores the key.
+
+    Returns
+    -------
+    str
+        Existing or newly generated private signing key.
+    """
     return private_token(vault, "django-secret-key")
 
 
 def private_token(vault: Path, name: str) -> str:
-    """Create a private token once, including when two processes start together."""
+    """Create a private token once, including when two processes start together.
+
+    Parameters
+    ----------
+    vault: Path
+        Vault root whose .backend directory stores private identity files.
+    name: str
+        Trusted filename inside .backend; this function does not validate path components.
+
+    Returns
+    -------
+    str
+        Nonempty stored token. Concurrent creators reuse the first fully published file. An
+        empty file raises ImproperlyConfigured.
+    """
     directory = vault / ".backend"
     key_file = directory / name
     if not key_file.exists():

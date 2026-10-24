@@ -50,7 +50,18 @@ def enqueue_job(
 
 
 def get_job(job_id: UUID) -> Job:
-    """Return an attempt or raise NotFoundError if its ID is unknown."""
+    """Return an attempt or raise NotFoundError if its ID is unknown.
+
+    Parameters
+    ----------
+    job_id: UUID
+        Primary key of the job to read.
+
+    Returns
+    -------
+    Job
+        Stored job; raises NotFoundError if it does not exist.
+    """
     try:
         return Job.objects.get(pk=job_id)
     except Job.DoesNotExist as exc:
@@ -58,7 +69,25 @@ def get_job(job_id: UUID) -> Job:
 
 
 def list_jobs(*, lane: str | None, status: str | None, limit: int, offset: int) -> dict:
-    """Filter and paginate attempts, newest first."""
+    """Filter and paginate attempts, newest first.
+
+    Parameters
+    ----------
+    lane: str | None
+        Optional ingest or build lane filter.
+    status: str | None
+        Optional job-status filter.
+    limit: int
+        Maximum number of rows to return.
+    offset: int
+        Number of matching rows to skip.
+
+    Returns
+    -------
+    dict
+        Matching jobs under items, ordered newest first, plus total count, limit,
+        and offset.
+    """
     if lane is not None and lane not in set(KINDS.values()):
         raise ServiceError("Unknown worker lane.")
     if status is not None and status not in Job.Status.values:
@@ -78,6 +107,11 @@ def list_jobs(*, lane: str | None, status: str | None, limit: int, offset: int) 
 
 def claim_next_job(lane: str) -> Job | None:
     """Claim the oldest queued attempt in one short IMMEDIATE SQLite transaction.
+
+    Parameters
+    ----------
+    lane: str
+        Worker lane whose oldest queued job should be claimed.
 
     Returns
     -------
@@ -105,6 +139,17 @@ def cancel(job_id: UUID) -> Job:
 
     Completed attempts remain unchanged. A model/OCR call already in progress may
     finish before cancellation is observed; completed work remains recorded.
+
+    Parameters
+    ----------
+    job_id: UUID
+        Job to cancel.
+
+    Returns
+    -------
+    Job
+        Updated job. Queued jobs become cancelled immediately; running jobs receive a
+        cancellation flag. Terminal jobs stay unchanged.
     """
     with transaction.atomic():
         job = get_job(job_id)
@@ -122,6 +167,16 @@ def retry(job_id: UUID) -> Job:
 
     The old attempt and its snapshot remain intact. Already built source versions
     are skipped unless the original request explicitly asked for a full rebuild.
+
+    Parameters
+    ----------
+    job_id: UUID
+        Failed, cancelled, or interrupted job to retry.
+
+    Returns
+    -------
+    Job
+        New queued attempt. Build inputs and preferences are captured again.
     """
     old = get_job(job_id)
     if old.status not in {Job.Status.FAILED, Job.Status.CANCELLED, Job.Status.INTERRUPTED}:
@@ -147,6 +202,16 @@ def recover_lane(lane: str) -> int:
     The caller must hold the exclusive lane OS lock, proving the previous worker
     has released ownership. Queued attempts remain queued; interrupted work requires
     an explicit retry.
+
+    Parameters
+    ----------
+    lane: str
+        Lane whose worker lock is already held exclusively by this process.
+
+    Returns
+    -------
+    int
+        Number of running jobs marked interrupted; queued jobs are unchanged.
     """
     return Job.objects.filter(lane=lane, status=Job.Status.RUNNING).update(
         status=Job.Status.INTERRUPTED,

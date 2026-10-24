@@ -71,11 +71,14 @@ class DoclingParser(DocumentParser):
         return self._converter
 
     def load_models(self) -> None:
-        """
-        Download and load the layout, table, and formula models.
+        """Download and load the layout, table, and formula models.
 
         Docling otherwise fetches them on the first typed PDF, which then
         needs a network connection and takes noticeably longer.
+
+        Returns
+        -------
+        None
         """
         from docling.datamodel.base_models import InputFormat
 
