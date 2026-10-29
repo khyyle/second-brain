@@ -1,6 +1,6 @@
 # Querying over MCP
 
-Second Brain ships an MCP server that connects the compiled wiki to Claude Desktop, ChatGPT Desktop, or Cursor, so you can ask questions of your notes in plain language instead of opening and searching files yourself. The server runs on your machine and reads only your local vault.
+Second Brain ships an MCP server that connects the compiled wiki to Claude Desktop, ChatGPT Desktop, or Cursor, so you can ask questions of your notes in plain language instead of opening and searching files yourself. The server runs on your machine and accesses your vault through the local backend. Keep the app or a separately started backend running while using these tools.
 
 What makes this more than search is that the wiki is a *graph*, not a pile of pages (see [wiki structure](wiki-structure.md#pages-are-a-flat-relational-graph)). Pages are joined by typed links (ex: one concept is a prerequisite for another, two are related, a third is only mentioned) and the server lets an assistant walk those links, not just match words against them. The tools fall into four groups: finding pages, following the graph between them, tracing a page back to the sources it was built from, and capturing new material into the pipeline.
 
@@ -14,14 +14,14 @@ uv run second-brain mcp install --target chatgpt-desktop
 uv run second-brain mcp install --target cursor
 ```
 
-The installer requires the target application to be installed and will error otherwise. Installation of the Second Brain mcp will preserve the app's existing settings and only create a new configuration file for that app if one somehow doesn't exist. After adding the second-brain mcp to the desired target, restart it so that it picks up the new server.
+The installer requires the target application to be installed and will error otherwise. Installation preserves other client settings and records the selected vault and port. Restart the assistant after connecting it.
 
 ## Finding pages
 
 These are the entry points — how an assistant locates the page or pages a question is about.
 
 - **`search_wiki`** keyword-searches page text, ranked by relevance. It is the right tool for exact terms and names, and it understands query operators: phrases, `AND`/`OR`/`NOT`, and field filters like `domains:finance`.
-- **`semantic_search`** matches by meaning rather than words, so it surfaces the right pages even when your wording never appears in them — better for fuzzy or conceptual lookups. This layer needs Ollama running; without it the server falls back to keyword search.
+- **`semantic_search`** matches by meaning rather than words, so it can find relevant pages even when your wording never appears in them. This layer needs Ollama running; when unavailable, it returns a notice directing the assistant to use `search_wiki` instead.
 - **`list_domains`** and **`read_index`** map what the wiki covers — the domains with their page counts, or a one-shot overview of every domain and its pages. An assistant new to your vault usually starts here.
 - **`list_pages`** filters by domain, tag, or content type (`concept`, `problem`, `project`, `insight`) when there is a known slice to browse rather than a phrase to search.
 - **`read_page`** pulls a single page in full once it has been located.
@@ -39,12 +39,12 @@ This is the part a plain folder of Markdown cannot do. Having found a page, an a
 
 Every wiki page records the raw documents it was compiled from, so a claim can always be taken back to where it came from.
 
-- **`get_sources_summary`** previews a page's sources — each one's frontmatter and opening paragraph — which is usually enough to judge which are worth reading in full.
-- **`get_sources`** then returns the full text of those source documents, for verifying a claim or expanding a page from the original material.
+- **`get_sources_summary`** returns each source's frontmatter and opening paragraph.
+- **`get_sources`** returns the first 2,000 characters of each source document. Use `limit` and `offset` to page through the source list; they do not retrieve later portions of a document. Missing source files are reported in the response.
 
 ## Capturing new material
 
-- **`capture_note`** writes a freeform insight from the conversation into the drop queue, where it flows through the normal ingest, triage, and compile path like anything else you add. It does not author a finished page directly: the next build titles it, places it, and links it into the graph.
+- **`capture_note`** writes a freeform insight from the conversation into the drop queue and requests ingestion. The resulting source waits for a manual build. It does not author a finished page directly: the next build titles it, places it, and links it into the graph.
 
 
 ## Tool reference
@@ -63,7 +63,7 @@ Every wiki page records the raw documents it was compiled from, so a claim can a
 | `dependents`           | The pages that build on a page as a prerequisite           |
 | `list_gaps`            | Referenced-but-unwritten concepts, most-wanted first       |
 | `get_sources_summary`  | A light preview of the sources behind a page               |
-| `get_sources`          | The full source documents a page was compiled from         |
+| `get_sources`          | Source excerpts, capped at 2,000 characters per document   |
 | `capture_note`         | Save a freeform insight back into the pipeline             |
 
 

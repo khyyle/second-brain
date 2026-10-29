@@ -48,21 +48,24 @@ A new wiki is initialized with **no domains**. Over time, the compilation agent 
 | The page files (frontmatter + body) | `search.db` (keyword + embedding index)            |
 | `_meta/topic_schema.yaml`           | `_views/` (index, gaps, recently-updated, domains) |
 | `raw/` parsed sources               | the link graph the MCP traverses         |
-| `manifest.db` (ingestion state)     | —                                                  |
+| `manifest.db` (source, build, and job state)| — |
 
 
 Everything in the right column can be regenerated from the left. Deleting it costs only the time to rebuild.
 
 ## The two databases
 
-`manifest.db`: authoritative *source and ingestion* state
+`manifest.db` is the SQLite database for source records and job history. Django models read and write these tables, and migrations manage their schema.
 
 | Table | Holds |
 | --- | --- |
-| `manifest` | per-source ingestion status, content hash, parse lane |
-| `compiled` | which raw paths have been turned into pages |
+| `manifest` | per-source ingestion status, content hash, parsing method |
+| `compiled` | which parsed sources have been turned into wiki pages |
 | `triage` | the kept / review / skip verdicts |
 | `page_cache` | per-PDF-page OCR cache, keyed by image hash |
+| `deferred_sources` | sources set aside by a build, with reasons and version hashes |
+| `dismissed_duplicates` | wiki page pairs dismissed from duplicate findings |
+| `jobs_job` | one record per job attempt: status, captured settings, progress, results, and retry links |
 
 `search.db`: *wiki-derived index* that rebuilds from `wiki/` at any time
 

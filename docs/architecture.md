@@ -1,8 +1,8 @@
 # Architecture
 
-Second Brain is a local-first pipeline that turns scattered source material into one interlinked Markdown wiki. It runs as a short pipeline connected through the filesystem rather than a long-running service: each step reads what the previous one wrote under `~/second-brain/`, so any step can run on its own and the menu bar app is just a thin front end over the same files.
+A local Django backend manages vault files, database records, and background jobs. The macOS app, CLI, and MCP adapter call its Django Ninja API over localhost HTTP. The app receives state updates through server-sent events (SSE).
 
-Documents and chat history take different paths:
+The backend runs ingestion and compilation in separate worker processes. Documents and chat history follow different paths through these stages:
 
 - **Documents:** capture → ingest → stage → compile → access.
 - **Chats:** capture → ingest → triage → stage kept chats → optionally group → compile → access.
@@ -38,9 +38,7 @@ Grouping can be previewed before a build or performed when the build starts. Doc
 
 ### Capture
 
-Material enters either by being dropped onto the menu bar window or copied into `~/second-brain/drops/`. The drop zone copies files (never moves them) into a drop folder and validates as it goes. A real ChatGPT export is detected by its JSON shape and routed to the `chatgpt` lane, and everything else goes to `documents`. Watched folders listed in `sources.json` feed the same queue: new and changed files are copied into `drops/<source name>/` before parsing. The manifest remembers the original path and captured hash, keeping filenames stable across edits while preserving the originals.
-
-The app watches drops and enabled source folders while it runs. An optional launchd schedule scans them while the app is closed. Both paths only ingest and stage; building requires an explicit action. Failed copies remain in Ingest with Retry, and unchanged failures are not retried by each automatic scan. A changed original is captured again.
+Material enters either by being dropped onto the menu bar window or copied into `~/second-brain/drops/`. The backend validates the selection and copies inputs into a drop folder, preserving originals. A ChatGPT export is detected by its usual JSON shape and routed to `drops/chatgpt/`, while other supported files go to `drops/documents/`. Any enabled watched folders are periodically scanned, and new or modified files are copied into `drops/<source name>/` for ingestion. The manifest database remembers the original path and captured hash to avoid reingesting the same unmodified file.
 
 ### Ingest
 
@@ -50,21 +48,21 @@ Ingestion converts each source to Markdown under `~/second-brain/raw/`, mirrorin
 - Plain text (`.md`, `.txt`, `.tex`) passes through with light front-matter added.
 - A ChatGPT export is split into one Markdown file per conversation.
 
-A SQLite manifest records what has been ingested so unchanged files are skipped on the next run.
+A SQLite manifest records what has been ingested so unchanged files are skipped on the next run. Files that fail parsing stay in `drops/` with a recorded error. Automatic scans skip unchanged failed files until they are explicitly retried; changed files are eligible on the next scan.
 
 ### Triage
 
 Bulk chat history is noisy. Conversations can be small talk, one-off lookups, or abandoned tangents, so compilation might be wasted on pages worth nothing. During ingestion (before anything reaches the paid compilation step), a small local model (Gemma, via Ollama) reads each new chat and labels it kept, review, or skip.
 
-Triage only looks at the lanes named in `triage.sources`, which is just ChatGPT by default. A document you dropped yourself never goes through triage at all: dropping it is the curation, so it carries no verdict and flows straight to the build. Chats marked review are copied into `~/second-brain/inbox/` for a manual pass.
+By default, only imported ChatGPT conversations are triaged. Other documents are staged immediately after parsing. Chats marked review are copied into `~/second-brain/inbox/` and wait for a Keep or Skip decision.
 
-Triage never sends an untriaged chat to the build. If Ollama stops responding, triage stops and the remaining chats wait to be triaged on the next run, and a chat the model can't score goes to review for you to decide. If a source vanishes mid-run (you un-ingested it from the app while triage was working), that one source is skipped and the run keeps going.
+When triage is enabled, chats awaiting a decision are left out of builds. If Ollama stops responding, triage stops and the remaining chats wait to be triaged on the next run, and a chat the model can't score goes to review for you to decide.
 
 ### Compile
 
 Building the wiki is the only stage that calls a hosted model and thus costs money. Two things happen here: planning, then synthesis.
 
-Planning is optional and exists to fight redundancy. Years of chats might circle the same topics (e.g. multiple conversations talking about gradient descent); compiling each of these on their own is likely to be wasteful and result in overlapping pages that would hinder the quality of the wiki. Thus, a clustering step groups related chats first so a topic can become one page instead of many. It embeds each staged chat locally and groups them. Like triage, clustering only touches the lanes in `clustering.sources` (ChatGPT by default). You can preview a grouping before spending anything, adjust it in the app, and the build honors the plan you reviewed (see [using the app](using-the-app.md#building-the-wiki)). With `clustering.enabled`, a build can also group sources when no reviewed plan exists.
+Planning is optional and exists to fight redundancy. Years of chats might circle the same topics (e.g. multiple conversations talking about gradient descent); compiling each of these on their own is likely to be wasteful and result in overlapping pages that would hinder the quality of the wiki. Thus, a clustering step groups related chats first so a topic can become one page instead of many. It embeds each staged chat locally and groups similar conversations. Documents compile individually by default. You can preview a grouping before spending anything, adjust it in the app, and the build honors the plan you reviewed (see [using the app](using-the-app.md#building-the-wiki)). If automatic grouping is enabled, a build can also group chats when no reviewed plan exists.
 
 Synthesis is done by a compilation agent: the configured model requests tools, and the compiler runs those tools and returns their results. Each agent conversation handles one document, one chat, or a group of related chats. It writes or updates wiki pages with YAML front matter (page metadata), `[[wikilinks]]`, LaTeX math, and source citations.
 
@@ -88,7 +86,7 @@ flowchart TD
 
 After the agent conversation for one document, chat, or chat group ends with `stop_reason: "end_turn"`, the compiler records source hashes, saves a Git checkpoint (see [how the wiki is versioned](lifecycle.md#how-the-wiki-is-versioned)), and adds the changed pages to the "recently updated" list. The build repeats this loop for the next group.
 
-At the end of the build attempt, a deterministic step rebuilds the index, gap list, domain views, and recently-updated list from the saved wiki pages. This happens once per build attempt, including a partial or stopped build.
+At the end of the build attempt, the backend rebuilds the index, gap list, domain views, and recently-updated list from the saved wiki pages. This happens once per build attempt, including a partial or stopped build.
 
 ### Access
 
@@ -114,21 +112,25 @@ Everything sits under the vault root, `~/second-brain/`:
 ```
 ~/second-brain/
 ├── drops/          capture queue. Files land here and are removed once ingested
-├── raw/            parsed Markdown, one tree per source lane and read during compilation
+├── raw/            parsed Markdown, organized by source and read during compilation
 ├── wiki/           the compiled knowledge base (plain Markdown, git-tracked)
-├── inbox/          copies of review-tier sources awaiting a manual decision
-├── logs/           run logs, including pipeline.log for detached runs
-├── manifest.db     ingestion state, page cache, and triage decisions
+├── inbox/          copies of sources marked for review, awaiting a manual decision
+├── logs/           application log directory
+├── manifest.db     source records, triage decisions, build records, and jobs
 ├── search.db       keyword + embedding index, rebuilt from the wiki
-├── sources.json    GUI-managed list of watched folders
-└── (dotfiles)      run coordination with the menu bar app — see below
+├── config.yaml     validated user preferences, including watched folders
+└── .backend/       backend keys, locks, backups, and captured build inputs
 ```
 
 `manifest.db` and `search.db` are detailed in [wiki structure](wiki-structure.md#the-two-databases).
 
-A few dotfiles coordinate a run with the menu bar app: `.status.json` (a progress heartbeat), `.build-log.jsonl` (a created/updated history), `.stop` (a cooperative stop flag), and, once you preview clustering, `.clusters.json` plus `.cluster-overrides.json` (the proposed grouping and your tweaks to it, described in [the lifecycle document](lifecycle.md#what-gets-recorded)).
+Long-running operations, including ingestion and builds, are saved as jobs in `manifest.db`. Each job records the requested work, settings, status, progress, and result or error. Workers claim queued jobs and update these records while they run. The records survive a backend restart--unfinished running jobs are marked interrupted and retrying creates a new attempt linked to the original.
 
-Configuration lives in the repository: `config/config.yaml` holds the pipeline settings and `.env` holds the compilation provider's API key (owner-only, never committed).
+Before queueing a build, the backend copies its selected Markdown into `.backend/jobs/<job-id>/raw/` and saves the current preferences with the job. Later file and settings changes cannot alter that attempt's inputs. `.clusters.json` stores the grouping preview; `.cluster-overrides.json` stores excluded sources and groups chosen for splitting.
+
+Saving settings creates (when absent) or updates `<vault>/config.yaml`, which the backend reads preferences from. These preferences default to the values in `pipeline_config.py`. The vault location can optionally be changed via the environment variable `SECOND_BRAIN_VAULT` (see [development](development.md#start-it)).
+
+Provider API keys are managed via macOS Keychain. The token used to authenticate local API requests and Django's signing key are private files under `.backend/`.
 
 ## Hashing and caching
 
