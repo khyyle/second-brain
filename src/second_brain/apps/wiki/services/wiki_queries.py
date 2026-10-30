@@ -7,9 +7,9 @@ from second_brain.apps.library.services.source_files import checked_path
 from second_brain.apps.preferences.services.user_settings import get_pipeline_config
 from second_brain.apps.wiki.services import health, wiki_structure
 from second_brain.apps.wiki.services.duplicate_dismissals import DuplicateStore
+from second_brain.apps.wiki.services.search_index import SearchIndex
 from second_brain.django_config.errors import NotFoundError, ServiceError
 from second_brain.django_config.paths import get_vault_paths
-from second_brain.mcp_server.search import SearchIndex
 from second_brain.pipeline_config import PipelineConfig
 
 

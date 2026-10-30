@@ -7,10 +7,10 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from second_brain.mcp_server.tools import _topological_order
+from second_brain.apps.wiki.services.assistant_tools import _topological_order
 
 if TYPE_CHECKING:
-    from tests.test_mcp.conftest import WikiToolsHarness
+    from second_brain.apps.wiki.tests.test_assistant_tools.conftest import WikiToolsHarness
 
 
 def _write_page(wiki: Path, stem: str, links: list[str], content_dir: str = "concepts") -> Path:

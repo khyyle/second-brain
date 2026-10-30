@@ -9,10 +9,10 @@ from pydantic import Field, ValidationError, validate_call
 
 from second_brain.apps.jobs.services.job_queue import enqueue_job
 from second_brain.apps.preferences.services.user_settings import get_pipeline_config
+from second_brain.apps.wiki.services.assistant_tools import WikiTools
+from second_brain.apps.wiki.services.search_index import SearchIndex
 from second_brain.django_config.errors import DependencyError, ServiceError
 from second_brain.django_config.schemas import ErrorResponse, RequestSchema
-from second_brain.mcp_server.search import SearchIndex
-from second_brain.mcp_server.tools import WikiTools
 from second_brain.ollama.client import OllamaUnavailableError
 
 router = Router(tags=["Assistant tools"])

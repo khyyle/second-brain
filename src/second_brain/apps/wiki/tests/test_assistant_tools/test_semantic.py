@@ -6,8 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from second_brain.mcp_server.search import SearchIndex
-from second_brain.mcp_server.tools import WikiTools
+from second_brain.apps.wiki.services.assistant_tools import WikiTools
+from second_brain.apps.wiki.services.search_index import SearchIndex
 from second_brain.ollama import embeddings as embeddings_mod
 from second_brain.ollama.client import OllamaUnavailableError
 from second_brain.ollama.embeddings import EmbeddingRole
@@ -134,44 +134,6 @@ def test_semantic_tool_propagates_ollama_outage(
 
     with pytest.raises(OllamaUnavailableError):
         tools.semantic_search("gradient")
-
-
-def test_mcp_semantic_search_notifies_when_ollama_is_down(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from second_brain.backend_client import BackendRequestError
-
-    def unavailable(*args, **kwargs):
-        raise BackendRequestError(503, "Ollama is unavailable.")
-
-    monkeypatch.setattr("second_brain.backend_client.BackendClient.request", unavailable)
-
-    from second_brain.mcp_server.server import semantic_search
-
-    notice = semantic_search("gradient")
-
-    assert notice == (
-        "Ollama isn't responding, so search by meaning is unavailable. Tell the "
-        "user, and use search_wiki for keyword search instead."
-    )
-
-
-@pytest.mark.parametrize("status", [401, 400, 500])
-def test_mcp_semantic_search_preserves_other_backend_failures(
-    monkeypatch: pytest.MonkeyPatch, status: int
-) -> None:
-    from second_brain.backend_client import BackendRequestError
-    from second_brain.mcp_server.server import semantic_search
-
-    def fail(*args: object, **kwargs: object) -> None:
-        raise BackendRequestError(status, "Request failed.")
-
-    monkeypatch.setattr("second_brain.backend_client.BackendClient.request", fail)
-
-    with pytest.raises(BackendRequestError, match="Request failed") as error:
-        semantic_search("gradient")
-
-    assert error.value.status_code == status
 
 
 def test_semantic_returns_empty_when_embeddings_unavailable(

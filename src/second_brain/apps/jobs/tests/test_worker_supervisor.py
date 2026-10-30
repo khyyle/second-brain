@@ -12,7 +12,7 @@ from second_brain.apps.jobs.services.job_execution import execute_job
 from second_brain.apps.jobs.services.job_queue import claim_next_job
 from second_brain.apps.jobs.services.worker_supervisor import input_fingerprint
 from second_brain.apps.preferences.services.user_settings import update_preferences
-from second_brain.mcp_server.search import SearchIndex
+from second_brain.apps.wiki.services.search_index import SearchIndex
 from second_brain.pipeline_config import SourceConfig
 
 

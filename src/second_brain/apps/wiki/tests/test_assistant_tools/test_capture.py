@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from tests.test_mcp.conftest import WikiToolsHarness
+    from second_brain.apps.wiki.tests.test_assistant_tools.conftest import WikiToolsHarness
 
 
 def test_capture_writes_markdown_to_drops_documents(wiki_harness: WikiToolsHarness) -> None:

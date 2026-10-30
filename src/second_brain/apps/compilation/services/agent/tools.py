@@ -6,6 +6,8 @@ import fnmatch
 import re
 from pathlib import Path
 
+from second_brain.apps.mcp.tool_definitions import get_tool_schemas
+from second_brain.apps.wiki.services.assistant_tools import WikiTools
 from second_brain.apps.wiki.services.slugs import normalize_link_list, normalize_wikilinks, slugify
 from second_brain.apps.wiki.services.wiki_structure import (
     _FRONTMATTER_RE,
@@ -16,7 +18,6 @@ from second_brain.apps.wiki.services.wiki_structure import (
     serialize_page,
     update_frontmatter,
 )
-from second_brain.mcp_server.tools import WikiTools
 from second_brain.ollama.client import OllamaUnavailableError
 
 PAGE_TYPES = ("concept", "problem", "project", "paper", "insight")
@@ -118,30 +119,14 @@ EXPLORE_TOOL_NAMES = (
 
 
 def explore_tool_schemas() -> list[dict]:
-    """Read wiki-exploration tool schemas from the MCP registry and convert to Anthropic format.
+    """Return the enabled wiki-exploration tools in provider request format.
 
     Returns
     -------
     list[dict]
-        `{name, description, input_schema}` dicts in `EXPLORE_TOOL_NAMES` order.
+        Name, description, and input_schema in EXPLORE_TOOL_NAMES order.
     """
-    import asyncio
-
-    from second_brain.mcp_server.server import mcp
-
-    registered = {t.name: t for t in asyncio.run(mcp.list_tools())}
-    schemas: list[dict] = []
-    for name in EXPLORE_TOOL_NAMES:
-        tool = registered.get(name)
-        if tool is not None:
-            schemas.append(
-                {
-                    "name": tool.name,
-                    "description": tool.description,
-                    "input_schema": tool.inputSchema,
-                }
-            )
-    return schemas
+    return get_tool_schemas(EXPLORE_TOOL_NAMES)
 
 
 # Maximum characters returned by a single read. Longer files are paged via the

@@ -75,10 +75,3 @@ class Diagnostics(Schema):
     required_models: list[str]
     missing_models: list[str]
     message: str
-
-
-class IntegrationStatus(Schema):
-    target: str
-    installed: bool
-    configured: bool
-    message: str

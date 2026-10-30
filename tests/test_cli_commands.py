@@ -288,7 +288,7 @@ def test_mcp_install_retains_the_target_option(cli_backend, monkeypatch):
             "message": "Configured Cursor. Restart it to connect.",
         }
 
-    monkeypatch.setattr("second_brain.apps.preferences.services.mcp_integrations.install", install)
+    monkeypatch.setattr("second_brain.apps.mcp.services.integrations.install", install)
     result = cli_backend.invoke("mcp", "install", "--target", "cursor")
     assert result.exit_code == 0, result.output
     assert targets == ["cursor"]

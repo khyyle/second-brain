@@ -10,6 +10,7 @@ from second_brain.apps.compilation.views import router as compilation_router
 from second_brain.apps.ingestion.views import router as ingestion_router
 from second_brain.apps.jobs.views import router as jobs_router
 from second_brain.apps.library.views import router as library_router
+from second_brain.apps.mcp.views import router as mcp_router
 from second_brain.apps.preferences.views import router as preferences_router
 from second_brain.apps.wiki.assistant_views import router as assistant_router
 from second_brain.apps.wiki.views import router as wiki_router
@@ -55,4 +56,5 @@ api.add_router("", compilation_router)
 api.add_router("", wiki_router)
 api.add_router("", jobs_router)
 api.add_router("", preferences_router)
+api.add_router("", mcp_router)
 api.add_router("", assistant_router)

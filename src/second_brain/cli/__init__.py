@@ -207,7 +207,7 @@ def mcp() -> None:
 @click.pass_context
 def mcp_serve(context: click.Context) -> None:
     """Serve the stdio MCP adapter; all operations go through the HTTP backend."""
-    from second_brain.mcp_server import server
+    from second_brain.apps.mcp import server
 
     server.serve(context.obj)
 

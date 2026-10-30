@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from tests.test_mcp.conftest import WikiToolsHarness
+    from second_brain.apps.wiki.tests.test_assistant_tools.conftest import WikiToolsHarness
 
 
 def _write_page(wiki: Path, stem: str, source_ref: str) -> None:

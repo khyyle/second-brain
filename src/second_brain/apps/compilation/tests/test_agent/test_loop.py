@@ -16,10 +16,10 @@ from second_brain.apps.compilation.tests.fakes import (
     install_fake,
     status_error,
 )
+from second_brain.apps.wiki.services.assistant_tools import WikiTools
 from second_brain.apps.wiki.services.topic_schema import register_domains, write_default_schema
 from second_brain.apps.wiki.services.wiki_structure import serialize_page
 from second_brain.llm import resolve_profile
-from second_brain.mcp_server.tools import WikiTools
 from second_brain.ollama.client import OllamaUnavailableError
 from second_brain.pipeline_config import CompilationConfig, PipelineConfig
 

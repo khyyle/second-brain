@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from second_brain.mcp_server.search import SearchIndex, _sanitize_fts_query
+from second_brain.apps.wiki.services.search_index import SearchIndex, _sanitize_fts_query
 from second_brain.pipeline_config import SearchConfig
 
 

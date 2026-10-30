@@ -6,8 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from second_brain.mcp_server.search import SearchIndex
-from second_brain.mcp_server.tools import WikiTools
+from second_brain.apps.wiki.services.assistant_tools import WikiTools
+from second_brain.apps.wiki.services.search_index import SearchIndex
 from second_brain.pipeline_config import SearchConfig
 
 

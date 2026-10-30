@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 from click import ClickException
 
-from second_brain.mcp_server import install
+from second_brain.apps.mcp.services import client_configuration as install
 
 
 def test_resolve_mcp_client_requires_installed_application(

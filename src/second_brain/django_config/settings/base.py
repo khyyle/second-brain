@@ -13,6 +13,7 @@ INSTALLED_APPS = [
     "second_brain.apps.wiki.apps.WikiConfig",
     "second_brain.apps.jobs.apps.JobsConfig",
     "second_brain.apps.preferences.apps.PreferencesConfig",
+    "second_brain.apps.mcp.apps.MCPConfig",
 ]
 
 MIDDLEWARE = [

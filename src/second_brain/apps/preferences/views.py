@@ -1,6 +1,4 @@
-"""HTTP entry points for preferences, credentials, and assistant integrations."""
-
-from typing import Literal
+"""HTTP entry points for preferences, credentials, and local model diagnostics."""
 
 from django.http import HttpRequest
 from ninja import Router
@@ -9,13 +7,11 @@ from second_brain.apps.preferences.schemas import (
     Catalog,
     CredentialStatus,
     Diagnostics,
-    IntegrationStatus,
     SettingsUpdate,
     WatchedFolder,
 )
 from second_brain.apps.preferences.services import (
     catalog,
-    mcp_integrations,
     provider_credentials,
     user_settings,
 )
@@ -25,7 +21,6 @@ from second_brain.ollama.client import check_ollama
 from second_brain.pipeline_config import Preferences
 
 router = Router(tags=["Preferences"])
-MCPTarget = Literal["claude-desktop", "chatgpt-desktop", "cursor"]
 
 
 @router.get("/catalog", response={200: Catalog, 400: ErrorResponse, 503: ErrorResponse})
@@ -172,47 +167,3 @@ def diagnostics(request: HttpRequest) -> dict:
         "missing_models": list(probe.missing_models),
         "message": probe.message(),
     }
-
-
-@router.get(
-    "/integrations/mcp/{target}",
-    response={200: IntegrationStatus, 400: ErrorResponse, 503: ErrorResponse},
-)
-def integration_status(request: HttpRequest, target: MCPTarget) -> dict:
-    """Check whether the selected assistant has the MCP integration installed.
-
-    Parameters
-    ----------
-    request: HttpRequest
-        Incoming authenticated HTTP request.
-    target: MCPTarget
-        Supported MCP client identifier.
-
-    Returns
-    -------
-    dict
-        Client installation and configuration status for this vault.
-    """
-    return mcp_integrations.status(target)
-
-
-@router.put(
-    "/integrations/mcp/{target}",
-    response={200: IntegrationStatus, 400: ErrorResponse, 503: ErrorResponse},
-)
-def install_integration(request: HttpRequest, target: MCPTarget) -> dict:
-    """Configure the selected assistant while preserving other integrations.
-
-    Parameters
-    ----------
-    request: HttpRequest
-        Incoming authenticated HTTP request.
-    target: MCPTarget
-        Supported MCP client whose configuration should receive this vault entry.
-
-    Returns
-    -------
-    dict
-        Client status after saving the MCP server entry.
-    """
-    return mcp_integrations.install(target)

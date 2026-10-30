@@ -8,8 +8,8 @@ from pathlib import Path
 
 import pytest
 
-from second_brain.mcp_server.search import SearchIndex
-from second_brain.mcp_server.tools import WikiTools
+from second_brain.apps.wiki.services.assistant_tools import WikiTools
+from second_brain.apps.wiki.services.search_index import SearchIndex
 from second_brain.ollama import embeddings as embeddings_mod
 from second_brain.ollama.client import OllamaUnavailableError
 from second_brain.ollama.embeddings import EmbeddingRole
@@ -201,7 +201,9 @@ def test_embed_pending_stops_when_embedder_unavailable(
 def test_ensure_synced_picks_up_new_file_without_restart(
     tmp_path: Path, search_index: SearchIndex, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr("second_brain.mcp_server.tools.SYNC_MIN_INTERVAL_SECONDS", 0.0)
+    monkeypatch.setattr(
+        "second_brain.apps.wiki.services.assistant_tools.SYNC_MIN_INTERVAL_SECONDS", 0.0
+    )
 
     class SyncThread:
         def __init__(self, target: Callable[[], None], daemon: bool = True) -> None:
@@ -213,7 +215,9 @@ def test_ensure_synced_picks_up_new_file_without_restart(
         def is_alive(self) -> bool:
             return False
 
-    monkeypatch.setattr("second_brain.mcp_server.tools.threading.Thread", SyncThread)
+    monkeypatch.setattr(
+        "second_brain.apps.wiki.services.assistant_tools.threading.Thread", SyncThread
+    )
 
     wiki = tmp_path / "wiki"
     raw = tmp_path / "raw"

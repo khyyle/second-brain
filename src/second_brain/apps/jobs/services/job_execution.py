@@ -32,7 +32,7 @@ def execute_job(job: Job) -> dict:
         return run_ingestion(config, job.payload)
 
     if job.kind == "index":
-        from second_brain.mcp_server.search import SearchIndex
+        from second_brain.apps.wiki.services.search_index import SearchIndex
 
         index = SearchIndex(config.search_db_path, config.search)
         index.sync_from_wiki(config.wiki_dir)

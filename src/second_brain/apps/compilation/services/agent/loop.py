@@ -118,8 +118,8 @@ def _create_executor(config: PipelineConfig, sources: list[str]) -> WikiToolExec
     """Create wiki tools with an optional search snapshot for this conversation."""
     read_tools = None
     if config.compilation.explore_tools:
-        from second_brain.mcp_server.search import SearchIndex
-        from second_brain.mcp_server.tools import WikiTools
+        from second_brain.apps.wiki.services.assistant_tools import WikiTools
+        from second_brain.apps.wiki.services.search_index import SearchIndex
 
         # Search stays fixed to the wiki before this conversation; file tools
         # can still read pages written during it.

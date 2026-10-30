@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from tests.test_mcp.conftest import WikiToolsHarness
+from second_brain.apps.wiki.tests.test_assistant_tools.conftest import WikiToolsHarness
 
 
 def test_list_pages_pages_and_reports_total(wiki_harness: WikiToolsHarness) -> None:

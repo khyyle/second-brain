@@ -1,4 +1,4 @@
-"""MCP tool implementations for wiki access."""
+"""Wiki search, graph traversal, source reading, and note capture."""
 
 from __future__ import annotations
 
@@ -13,31 +13,29 @@ from pathlib import Path
 from uuid import uuid4
 
 from second_brain.apps.library.services.source_files import checked_path
+from second_brain.apps.wiki.services.search_index import SearchIndex
 from second_brain.apps.wiki.services.slugs import normalize_link_target, slugify
 from second_brain.apps.wiki.services.wiki_structure import (
     CONTENT_DIRS,
     _parse_frontmatter,
     strip_frontmatter,
 )
+from second_brain.apps.wiki.tool_limits import (
+    DEFAULT_GAPS_LIMIT,
+    DEFAULT_LIST_LIMIT,
+    DEFAULT_PREREQUISITE_DEPTH,
+    DEFAULT_RELATED_DEPTH,
+    DEFAULT_RELATED_LIMIT,
+    DEFAULT_SEARCH_LIMIT,
+    DEFAULT_SOURCES_LIMIT,
+    INDEX_PAGES_PER_DOMAIN,
+    MAX_SOURCE_LENGTH_CHARS,
+)
 from second_brain.django_config.vault_storage import atomic_write
-from second_brain.mcp_server.search import SearchIndex
 
 logger = logging.getLogger(__name__)
 
 SYNC_MIN_INTERVAL_SECONDS = 1.0
-
-# Default caps on how much a single tool returns, so a large wiki can't flood
-# the caller's context window. Each capped tool also reports the total and how
-# to fetch more, so a partial result is never silently mistaken for the whole.
-DEFAULT_SEARCH_LIMIT = 10
-DEFAULT_LIST_LIMIT = 50
-DEFAULT_RELATED_LIMIT = 50
-DEFAULT_RELATED_DEPTH = 2
-DEFAULT_SOURCES_LIMIT = 10
-DEFAULT_GAPS_LIMIT = 50
-DEFAULT_PREREQUISITE_DEPTH = 6
-INDEX_PAGES_PER_DOMAIN = 10
-MAX_SOURCE_LENGTH_CHARS = 2000
 
 
 def _queue_ingest(path: Path) -> None:
@@ -156,11 +154,7 @@ def _topological_order(
 
 
 class WikiTools:
-    """Implements the tool functions exposed via MCP.
-
-    Acts as the service layer between the MCP server endpoints and the
-    underlying search index, filesystem, and link graph.
-    """
+    """Read and search wiki content, traverse its links, and capture new source notes."""
 
     def __init__(
         self,
@@ -182,7 +176,7 @@ class WikiTools:
             Shared search index instance for FTS queries.
         ingest_trigger: Callable[[Path], None] | None
             Invoked with a freshly captured note's path to start its ingest.
-            defaults to spawning a detached ``ingest --path`` process.
+            Defaults to queueing an ingestion job.
         """
         self._wiki = wiki_dir
         self._raw = raw_dir

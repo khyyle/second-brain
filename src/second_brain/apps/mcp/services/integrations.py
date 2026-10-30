@@ -6,15 +6,15 @@ import tomllib
 import click
 from django.conf import settings
 
-from second_brain.django_config.errors import ServiceError
-from second_brain.django_config.vault_storage import vault_lock
-from second_brain.mcp_server.install import (
+from second_brain.apps.mcp.services.client_configuration import (
     MCP_SERVER_NAME,
     resolve_mcp_client,
     resolve_mcp_server_command,
     write_codex_mcp_config,
     write_json_mcp_config,
 )
+from second_brain.django_config.errors import ServiceError
+from second_brain.django_config.vault_storage import vault_lock
 
 
 def _command() -> tuple[str, list[str]]:
