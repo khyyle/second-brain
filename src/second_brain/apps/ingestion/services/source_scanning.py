@@ -75,6 +75,8 @@ def batch_scan(
     manifest: Manifest,
     process_callback: Callable[[Path, str], None],
     drops_only: bool = False,
+    *,
+    retry_failed: bool = False,
 ) -> int:
     """Walk source directories and process new or changed files.
 
@@ -89,6 +91,8 @@ def batch_scan(
     drops_only: bool, default=False
         When ``True``, scan only the drop-queue lanes and skip registered
         watched folders (used for interactive drops).
+    retry_failed: bool
+        Include unchanged failed copies in the scan.
 
     Returns
     -------
@@ -102,7 +106,7 @@ def batch_scan(
     )
 
     if not drops_only:
-        stage_watched_folders(config, manifest)
+        stage_watched_folders(config, manifest, retry_failed=retry_failed)
 
     work: list[tuple[Path, str]] = []
     for file_path in sorted(config.drops_dir.rglob("*")):
@@ -121,7 +125,7 @@ def batch_scan(
                 continue
             if file_path.suffix.lower().lstrip(".") not in source.file_types:
                 continue
-        if _prepare_queued_file(file_path, name, config, manifest):
+        if _prepare_queued_file(file_path, name, config, manifest, retry_failed=retry_failed):
             work.append((file_path, name))
 
     # Exports must be expanded before slow document parsers delay their chats.
@@ -154,12 +158,19 @@ def batch_scan(
 
 
 def _prepare_queued_file(
-    path: Path, name: str, config: PipelineConfig, manifest: Manifest
+    path: Path,
+    name: str,
+    config: PipelineConfig,
+    manifest: Manifest,
+    *,
+    retry_failed: bool = False,
 ) -> bool:
-    """Clear duplicate queue copies while leaving unchanged failures visible."""
+    """Select queued files for processing and remove redundant copies."""
+    entry = manifest.get_entry(path)
+    if retry_failed and entry is not None and entry.status == "failed":
+        return True
     if manifest.needs_processing(path, config.raw_dir):
         return True
-    entry = manifest.get_entry(path)
     if entry is None or entry.status in ("pending", "complete", "duplicate"):
         manifest.mark_duplicate(path, name)
         remove_drop_copy(path, config)

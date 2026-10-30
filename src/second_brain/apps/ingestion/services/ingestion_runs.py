@@ -27,6 +27,7 @@ def run_ingestion(config: PipelineConfig, payload: dict) -> dict:
         Fixed execution paths and preference snapshot.
     payload: dict
         Optional selected paths or a request to scan drops and watched folders.
+        retry forces selected files; retry_failed includes unchanged failures.
 
     Returns
     -------
@@ -48,8 +49,13 @@ def run_ingestion(config: PipelineConfig, payload: dict) -> dict:
         if "paths" in payload:
             for value in payload["paths"]:
                 path = drop_path(value)
-                if payload.get("retry"):
-                    entry = manifest.get_entry(path)
+                entry = manifest.get_entry(path)
+                should_retry = payload.get("retry") or (
+                    payload.get("retry_failed")
+                    and entry is not None
+                    and entry.status in {"failed", "processing"}
+                )
+                if should_retry:
                     if entry is not None and entry.origin_path:
                         original = Path(entry.origin_path)
                         if original.is_file() and (
@@ -67,10 +73,16 @@ def run_ingestion(config: PipelineConfig, payload: dict) -> dict:
                     if entry is None or entry.status not in {"complete", "duplicate"}:
                         counts["failed"] += 1
                     continue
-                if payload.get("retry") or manifest.needs_processing(path, config.raw_dir):
+                if should_retry or manifest.needs_processing(path, config.raw_dir):
                     process(path)
         else:
-            batch_scan(config, manifest, process, drops_only=payload.get("drops_only", False))
+            batch_scan(
+                config,
+                manifest,
+                process,
+                drops_only=payload.get("drops_only", False),
+                retry_failed=payload.get("retry_failed", False),
+            )
         if config.triage.enabled and not stop_requested():
             triage_pending(config)
     except SecondBrainError as exc:

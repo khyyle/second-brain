@@ -167,6 +167,7 @@ def retry(job_id: UUID) -> Job:
 
     The old attempt and its snapshot remain intact. Already built source versions
     are skipped unless the original request explicitly asked for a full rebuild.
+    Ingestion retries include unchanged failed files within the original request's scope.
 
     Parameters
     ----------
@@ -189,6 +190,8 @@ def retry(job_id: UUID) -> Job:
             dry_run=old.payload.get("dry_run", False),
             preview=old.kind == "preview",
         )
+    elif old.kind == "ingest":
+        new = enqueue_job(old.kind, {**old.payload, "retry_failed": True})
     else:
         new = enqueue_job(old.kind, old.payload)
     Job.objects.filter(pk=new.pk).update(retry_of=old)

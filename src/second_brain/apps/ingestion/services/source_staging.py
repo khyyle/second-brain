@@ -46,7 +46,13 @@ def source_name(file_path: Path, config: PipelineConfig) -> str:
 
 
 def stage_watched_file(
-    origin: Path, name: str, config: PipelineConfig, manifest: Manifest, *, force: bool = False
+    origin: Path,
+    name: str,
+    config: PipelineConfig,
+    manifest: Manifest,
+    *,
+    force: bool = False,
+    retry_failed: bool = False,
 ) -> Path | None:
     """Copy a new or changed source version into drops/.
 
@@ -62,6 +68,8 @@ def stage_watched_file(
         Ingestion records linking copies to their originals.
     force: bool
         Copy again for an explicit import or retry, even when unchanged.
+    retry_failed: bool
+        Restore a missing managed copy after a failed attempt.
 
     Returns
     -------
@@ -70,7 +78,7 @@ def stage_watched_file(
     """
     previous = manifest.get_origin_copy(origin)
     if previous is not None and not force and previous.origin_sha256 == hash_file(origin):
-        if previous.status == "failed" or Path(previous.file_path).exists():
+        if (previous.status == "failed" and not retry_failed) or Path(previous.file_path).exists():
             return None
         if previous.status in ("complete", "duplicate") and raw_output_exists(
             config.raw_dir, previous.raw_output_path
@@ -130,7 +138,9 @@ def _copy_destination(
     return candidate
 
 
-def stage_watched_folders(config: PipelineConfig, manifest: Manifest) -> None:
+def stage_watched_folders(
+    config: PipelineConfig, manifest: Manifest, *, retry_failed: bool = False
+) -> None:
     """Copy supported files from enabled watched folders into drops/.
 
     Skips hidden paths, symlinks, unsupported extensions, and folders already inside
@@ -142,6 +152,8 @@ def stage_watched_folders(config: PipelineConfig, manifest: Manifest) -> None:
         Source folders, their enabled state, and accepted extensions.
     manifest: Manifest
         Captured source versions.
+    retry_failed: bool
+        Restore missing managed copies of failed watched sources.
 
     Returns
     -------
@@ -163,4 +175,4 @@ def stage_watched_folders(config: PipelineConfig, manifest: Manifest) -> None:
                 continue
             if any(part.startswith(".") for part in origin.relative_to(source.path).parts):
                 continue
-            stage_watched_file(origin, name, config, manifest)
+            stage_watched_file(origin, name, config, manifest, retry_failed=retry_failed)
