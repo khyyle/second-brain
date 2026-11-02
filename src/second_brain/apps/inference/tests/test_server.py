@@ -1,0 +1,62 @@
+import json
+import os
+import socket
+from pathlib import Path
+from unittest.mock import Mock
+
+import pytest
+from llama_cpp.server.settings import ConfigFileSettings, ModelSettings
+
+from second_brain.apps.inference import server
+
+
+def test_inherited_socket_and_configuration_override_shell_defaults(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "config.json"
+    config = ConfigFileSettings(
+        host="127.0.0.1",
+        port=0,
+        api_key="test-token",
+        interrupt_requests=False,
+        models=[ModelSettings(model="/model.gguf", model_alias="test-model")],
+    )
+    path.write_text(config.model_dump_json())
+    for key, value in (("HOST", "0.0.0.0"), ("PORT", "8000"), ("CONFIG_FILE", "/other.json")):
+        monkeypatch.setenv(key, value)
+    app_factory = Mock(return_value=Mock())
+    monkeypatch.setattr(server, "create_app", app_factory)
+    runner = Mock()
+    monkeypatch.setattr(server.uvicorn, "Server", lambda config: runner)
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        address = listener.getsockname()
+
+        def run(*, sockets: list[socket.socket]) -> None:
+            assert sockets[0].getsockname() == address
+            assert "CONFIG_FILE" not in os.environ
+
+        runner.run.side_effect = run
+        server.serve(path, os.dup(listener.fileno()))
+
+    supplied = app_factory.call_args.kwargs
+    assert supplied["server_settings"].host == "127.0.0.1"
+    assert supplied["server_settings"].api_key == "test-token"
+    assert supplied["server_settings"].interrupt_requests is False
+    assert supplied["model_settings"] == config.models
+    runner.run.assert_called_once()
+
+
+@pytest.mark.parametrize("host,token", [("0.0.0.0", "token"), ("127.0.0.1", None)])
+def test_unsafe_configuration_is_rejected_before_loading_models(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, host: str, token: str | None
+) -> None:
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps({"host": host, "api_key": token, "models": []}))
+    app_factory = Mock()
+    monkeypatch.setattr(server, "create_app", app_factory)
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        with pytest.raises(ValueError, match="loopback address and authentication"):
+            server.serve(path, os.dup(listener.fileno()))
+    app_factory.assert_not_called()
