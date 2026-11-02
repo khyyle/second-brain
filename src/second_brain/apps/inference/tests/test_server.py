@@ -11,12 +11,12 @@ from llama_cpp.server.settings import ConfigFileSettings, ModelSettings
 from second_brain.apps.inference import server
 
 
-def test_inherited_socket_and_configuration_override_shell_defaults(
+def test_inherited_socket_controls_binding_and_private_config_overrides_environment(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     path = tmp_path / "config.json"
     config = ConfigFileSettings(
-        host="127.0.0.1",
+        host="0.0.0.0",
         port=0,
         api_key="test-token",
         interrupt_requests=False,
@@ -41,25 +41,36 @@ def test_inherited_socket_and_configuration_override_shell_defaults(
         server.serve(path, os.dup(listener.fileno()), os.getppid())
 
     supplied = app_factory.call_args.kwargs
-    assert supplied["server_settings"].host == "127.0.0.1"
     assert supplied["server_settings"].api_key == "test-token"
     assert supplied["server_settings"].interrupt_requests is False
     assert supplied["model_settings"] == config.models
     runner.run.assert_called_once()
 
 
-@pytest.mark.parametrize("host,token", [("0.0.0.0", "token"), ("127.0.0.1", None)])
-def test_unsafe_configuration_is_rejected_before_loading_models(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, host: str, token: str | None
+@pytest.mark.parametrize(
+    "listen_host,token,error",
+    [
+        ("0.0.0.0", "token", "Inference socket must be bound to 127.0.0.1."),
+        ("127.0.0.1", None, "Inference authentication token is missing."),
+        ("127.0.0.1", "", "Inference authentication token is missing."),
+    ],
+)
+def test_unsafe_server_is_rejected_before_loading_models(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    listen_host: str,
+    token: str | None,
+    error: str,
 ) -> None:
     path = tmp_path / "config.json"
-    path.write_text(json.dumps({"host": host, "api_key": token, "models": []}))
+    path.write_text(json.dumps({"host": "127.0.0.1", "api_key": token, "models": []}))
     app_factory = Mock()
     monkeypatch.setattr(server, "create_app", app_factory)
     with socket.socket() as listener:
-        listener.bind(("127.0.0.1", 0))
-        with pytest.raises(ValueError, match="loopback address and authentication"):
+        listener.bind((listen_host, 0))
+        with pytest.raises(ValueError) as caught:
             server.serve(path, os.dup(listener.fileno()), os.getppid())
+    assert str(caught.value) == error
     app_factory.assert_not_called()
 
 

@@ -215,8 +215,6 @@ def _run_server(
         The server did not become ready or returned an unexpected model list.
     """
     config = ConfigFileSettings.model_validate_json(config_path.read_text())
-    if config.host != "127.0.0.1" or not config.api_key:
-        raise ValueError("Inference requires a loopback address and authentication token.")
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
         listener.bind(("127.0.0.1", 0))
         port = listener.getsockname()[1]

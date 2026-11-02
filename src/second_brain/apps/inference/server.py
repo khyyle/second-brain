@@ -38,14 +38,12 @@ def serve(config_path: Path, socket_fd: int, parent_pid: int) -> None:
         The configuration does not contain exactly one model.
     """
     with socket.socket(fileno=socket_fd) as listener:
-        config = ConfigFileSettings.model_validate_json(config_path.read_text())
-        if (
-            listener.getsockname()[0] != "127.0.0.1"
-            or config.host != "127.0.0.1"
-            or not config.api_key
-        ):
-            raise ValueError("Inference requires a loopback address and authentication token.")
-        if len(config.models) != 1:
+        server_config = ConfigFileSettings.model_validate_json(config_path.read_text())
+        if listener.getsockname()[0] != "127.0.0.1":
+            raise ValueError("Inference socket must be bound to 127.0.0.1.")
+        if not server_config.api_key:
+            raise ValueError("Inference authentication token is missing.")
+        if len(server_config.models) != 1:
             raise ValueError("Each inference server requires exactly one model.")
         stop = threading.Event()
         watcher = threading.Thread(target=_watch_parent, args=(parent_pid, stop), daemon=True)
@@ -54,8 +52,8 @@ def serve(config_path: Path, socket_fd: int, parent_pid: int) -> None:
             # The library's app factory otherwise replaces even explicitly supplied settings.
             os.environ.pop("CONFIG_FILE", None)
             app = create_app(
-                server_settings=ServerSettings.model_validate(config),
-                model_settings=config.models,
+                server_settings=ServerSettings.model_validate(server_config),
+                model_settings=server_config.models,
             )
             uvicorn.Server(
                 uvicorn.Config(
