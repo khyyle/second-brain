@@ -1,6 +1,7 @@
 import json
 import os
 import socket
+import threading
 from pathlib import Path
 from unittest.mock import Mock
 
@@ -37,7 +38,7 @@ def test_inherited_socket_and_configuration_override_shell_defaults(
             assert "CONFIG_FILE" not in os.environ
 
         runner.run.side_effect = run
-        server.serve(path, os.dup(listener.fileno()))
+        server.serve(path, os.dup(listener.fileno()), os.getppid())
 
     supplied = app_factory.call_args.kwargs
     assert supplied["server_settings"].host == "127.0.0.1"
@@ -58,5 +59,51 @@ def test_unsafe_configuration_is_rejected_before_loading_models(
     with socket.socket() as listener:
         listener.bind(("127.0.0.1", 0))
         with pytest.raises(ValueError, match="loopback address and authentication"):
-            server.serve(path, os.dup(listener.fileno()))
+            server.serve(path, os.dup(listener.fileno()), os.getppid())
+    app_factory.assert_not_called()
+
+
+def test_parent_loss_exits_even_if_native_model_code_is_busy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(server.os, "getppid", lambda: 1)
+    exit_process = Mock(side_effect=SystemExit(1))
+    monkeypatch.setattr(server.os, "_exit", exit_process)
+    stop = Mock()
+    stop.wait.return_value = False
+
+    with pytest.raises(SystemExit):
+        server._watch_parent(123, stop)
+
+    exit_process.assert_called_once_with(1)
+
+
+def test_completed_server_does_not_exit_from_parent_watcher(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    exit_process = Mock()
+    monkeypatch.setattr(server.os, "_exit", exit_process)
+    stop = threading.Event()
+    stop.set()
+
+    server._watch_parent(123, stop)
+
+    exit_process.assert_not_called()
+
+
+def test_server_rejects_model_switching(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    path = tmp_path / "config.json"
+    path.write_text(
+        ConfigFileSettings(
+            host="127.0.0.1",
+            api_key="test-token",
+            models=[ModelSettings(model="/first.gguf"), ModelSettings(model="/second.gguf")],
+        ).model_dump_json()
+    )
+    app_factory = Mock()
+    monkeypatch.setattr(server, "create_app", app_factory)
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        with pytest.raises(ValueError, match="exactly one model"):
+            server.serve(path, os.dup(listener.fileno()), os.getppid())
     app_factory.assert_not_called()

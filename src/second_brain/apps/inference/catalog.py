@@ -5,6 +5,12 @@ from typing import Literal
 
 from second_brain.apps.inference.errors import InferenceUnavailableError
 
+ModelPurpose = Literal["generation", "embedding"]
+DEFAULT_MODELS: dict[ModelPurpose, str] = {
+    "generation": "gemma4:12b",
+    "embedding": "nomic-embed-text",
+}
+
 
 @dataclass(frozen=True)
 class LocalModel:
@@ -16,7 +22,7 @@ class LocalModel:
         Identifier stored in preferences and job snapshots.
     title: str
         Display name.
-    purpose: Literal["generation", "embedding"]
+    purpose: ModelPurpose
         Supported operation.
     repository: str
         Public Hugging Face repository.
@@ -36,7 +42,7 @@ class LocalModel:
 
     name: str
     title: str
-    purpose: Literal["generation", "embedding"]
+    purpose: ModelPurpose
     repository: str
     revision: str
     filename: str

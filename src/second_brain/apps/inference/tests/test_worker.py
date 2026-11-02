@@ -12,9 +12,10 @@ import httpx
 import pytest
 
 from second_brain.apps.inference import worker
+from second_brain.apps.inference.catalog import ModelPurpose
 from second_brain.apps.inference.errors import InferenceUnavailableError
 from second_brain.apps.inference.services import model_files
-from second_brain.apps.inference.services.worker_status import read_worker_status
+from second_brain.apps.inference.services.worker_status import WorkerStatus, read_worker_status
 
 
 @pytest.fixture
@@ -23,12 +24,19 @@ def server_config_path(tmp_path: Path) -> Path:
     path.write_text(
         worker.ConfigFileSettings(
             host="127.0.0.1",
-            port=8001,
+            port=0,
             api_key="test-inference-key",
             models=[worker.ModelSettings(model="/test.gguf", model_alias="test-model")],
         ).model_dump_json()
     )
     return path
+
+
+@pytest.fixture
+def starting_status() -> WorkerStatus:
+    return WorkerStatus(
+        purpose="generation", model="test-model", pid=os.getpid(), phase="starting"
+    )
 
 
 @pytest.fixture
@@ -41,9 +49,17 @@ def prepared_models(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, settings) -
     return files
 
 
+@pytest.mark.parametrize(
+    "purpose,model", [("generation", "gemma4:12b"), ("embedding", "nomic-embed-text")]
+)
 @pytest.mark.parametrize("exit_code", [0, 2, -signal.SIGABRT])
 def test_server_exit_is_propagated_and_configuration_is_removed(
-    prepared_models: Mock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, exit_code: int
+    prepared_models: Mock,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    exit_code: int,
+    purpose: ModelPurpose,
+    model: str,
 ) -> None:
     process = Mock(pid=os.getpid())
     process.poll.return_value = exit_code
@@ -58,30 +74,29 @@ def test_server_exit_is_propagated_and_configuration_is_removed(
         config = json.loads(config_path.read_text())
         assert config["host"] == "127.0.0.1"
         assert config["interrupt_requests"] is False
-        assert [model["model_alias"] for model in config["models"]] == [
-            "gemma4:12b",
-            "nomic-embed-text",
-        ]
-        assert all(Path(model["model"]).parent == tmp_path for model in config["models"])
-        embedding = config["models"][1]
-        assert embedding["embedding"] is True
-        assert embedding["n_batch"] == embedding["n_ctx"]
+        assert [entry["model_alias"] for entry in config["models"]] == [model]
+        settings = config["models"][0]
+        assert Path(settings["model"]).parent == tmp_path
+        assert settings["embedding"] == (purpose == "embedding")
+        assert settings["cache"] is False
+        if purpose == "embedding":
+            assert settings["n_batch"] == settings["n_ctx"]
         return process
 
     monkeypatch.setattr(worker.subprocess, "Popen", start)
     previous_handler = signal.getsignal(signal.SIGTERM)
     if exit_code:
         with pytest.raises(SystemExit) as error:
-            worker.main()
+            worker.main(purpose)
         assert error.value.code == (exit_code if exit_code > 0 else 1)
     else:
-        worker.main()
+        worker.main(purpose)
 
     assert signal.getsignal(signal.SIGTERM) == previous_handler
     assert configurations and not configurations[0].exists()
     process.terminate.assert_not_called()
     process.kill.assert_not_called()
-    status = read_worker_status(tmp_path / ".backend")
+    status = read_worker_status(tmp_path / ".backend", purpose)
     if exit_code:
         assert status.phase == "error"
         assert "stopped unexpectedly" in status.error
@@ -100,7 +115,7 @@ def test_shutdown_during_preparation_does_not_start_server(
     monkeypatch.setattr(worker.subprocess, "Popen", start)
 
     with pytest.raises(SystemExit) as error:
-        worker.main()
+        worker.main("generation")
     assert error.value.code == 0
     start.assert_not_called()
 
@@ -118,7 +133,7 @@ def test_shutdown_during_process_creation_still_reaps_server(
 
     monkeypatch.setattr(worker.subprocess, "Popen", start)
 
-    worker.main()
+    worker.main("generation")
 
     process.terminate.assert_called_once()
     process.wait.assert_called_once_with(timeout=worker.SHUTDOWN_TIMEOUT_SECONDS)
@@ -126,7 +141,10 @@ def test_shutdown_during_process_creation_still_reaps_server(
 
 
 def test_server_that_ignores_termination_is_killed_and_reaped(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, server_config_path: Path
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    server_config_path: Path,
+    starting_status: WorkerStatus,
 ) -> None:
     process = Mock(pid=os.getpid())
     process.poll.return_value = None
@@ -135,7 +153,9 @@ def test_server_that_ignores_termination_is_killed_and_reaped(
     stop = threading.Event()
     stop.set()
 
-    assert worker._run_server(server_config_path, stop, tmp_path) == -signal.SIGKILL
+    assert (
+        worker._run_server(server_config_path, stop, tmp_path, starting_status) == -signal.SIGKILL
+    )
 
     assert process.method_calls[-4:] == [
         call.terminate(),
@@ -146,7 +166,10 @@ def test_server_that_ignores_termination_is_killed_and_reaped(
 
 
 def test_real_child_is_stopped_before_run_server_returns(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, server_config_path: Path
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    server_config_path: Path,
+    starting_status: WorkerStatus,
 ) -> None:
     popen = subprocess.Popen
     children = []
@@ -160,7 +183,10 @@ def test_real_child_is_stopped_before_run_server_returns(
     stop = threading.Event()
     stop.set()
     try:
-        assert worker._run_server(server_config_path, stop, tmp_path) == -signal.SIGTERM
+        assert (
+            worker._run_server(server_config_path, stop, tmp_path, starting_status)
+            == -signal.SIGTERM
+        )
         assert children[0].returncode == -signal.SIGTERM
     finally:
         for child in children:
@@ -195,7 +221,10 @@ def test_stopped_parent_watcher_does_not_signal_worker(monkeypatch: pytest.Monke
 
 
 def test_port_is_reserved_until_child_inherits_socket(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, server_config_path: Path
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    server_config_path: Path,
+    starting_status: WorkerStatus,
 ) -> None:
     process = Mock(pid=os.getpid())
     process.poll.return_value = 0
@@ -215,19 +244,21 @@ def test_port_is_reserved_until_child_inherits_socket(
         return process
 
     monkeypatch.setattr(worker.subprocess, "Popen", start)
-    worker._run_server(server_config_path, threading.Event(), tmp_path)
+    worker._run_server(server_config_path, threading.Event(), tmp_path, starting_status)
 
-    assert read_worker_status(tmp_path).port == ports[0]
+    assert read_worker_status(tmp_path, "generation").port == ports[0]
     with socket.socket() as released:
         released.bind(("127.0.0.1", ports[0]))
 
 
-def test_model_preparation_progress_is_published(tmp_path: Path) -> None:
-    worker._publish_progress(tmp_path, "gemma4:12b", "downloading", 25, 100)
+def test_model_preparation_progress_is_published(
+    tmp_path: Path, starting_status: WorkerStatus
+) -> None:
+    worker._publish_progress(tmp_path, starting_status, "downloading", 25, 100)
 
-    status = read_worker_status(tmp_path)
+    status = read_worker_status(tmp_path, "generation")
     assert status.phase == "downloading"
-    assert status.model == "gemma4:12b"
+    assert status.model == "test-model"
     assert (status.completed, status.total) == (25, 100)
 
 
@@ -239,16 +270,19 @@ def test_preparation_failure_remains_available(
     monkeypatch.setattr(worker.subprocess, "Popen", start)
 
     with pytest.raises(InferenceUnavailableError, match="Model download failed"):
-        worker.main()
+        worker.main("generation")
 
-    status = read_worker_status(tmp_path / ".backend")
+    status = read_worker_status(tmp_path / ".backend", "generation")
     assert status.phase == "error"
     assert status.error == "Model download failed."
     start.assert_not_called()
 
 
 def test_readiness_requires_authenticated_model_response(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, server_config_path: Path
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    server_config_path: Path,
+    starting_status: WorkerStatus,
 ) -> None:
     process = Mock(pid=os.getpid())
     process.poll.side_effect = [None, None, 0, 0]
@@ -271,9 +305,9 @@ def test_readiness_requires_authenticated_model_response(
     stop = Mock()
     stop.wait.return_value = False
 
-    assert worker._run_server(server_config_path, stop, tmp_path) == 0
+    assert worker._run_server(server_config_path, stop, tmp_path, starting_status) == 0
 
-    status = read_worker_status(tmp_path)
+    status = read_worker_status(tmp_path, "generation")
     assert status.phase == "ready"
     assert status.port > 0
     assert client_factory.call_args.kwargs["base_url"] == f"http://127.0.0.1:{status.port}"
@@ -285,7 +319,11 @@ def test_readiness_requires_authenticated_model_response(
 
 @pytest.mark.parametrize("failure", ["timeout", "authentication", "models"])
 def test_failed_readiness_stops_server(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, server_config_path: Path, failure: str
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    server_config_path: Path,
+    starting_status: WorkerStatus,
+    failure: str,
 ) -> None:
     process = Mock(pid=os.getpid())
     process.poll.return_value = None
@@ -309,8 +347,8 @@ def test_failed_readiness_stops_server(
     stop.wait.return_value = False
 
     with pytest.raises(InferenceUnavailableError):
-        worker._run_server(server_config_path, stop, tmp_path)
+        worker._run_server(server_config_path, stop, tmp_path, starting_status)
 
-    assert read_worker_status(tmp_path).phase != "ready"
+    assert read_worker_status(tmp_path, "generation").phase != "ready"
     process.terminate.assert_called_once()
     process.wait.assert_called_once()

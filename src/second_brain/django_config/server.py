@@ -58,16 +58,17 @@ def main() -> None:
         finally:
             connections.close_all()
 
-        from second_brain.apps.jobs.services.worker_supervisor import supervised_workers
         from second_brain.apps.preferences.services.user_settings import (
             get_pipeline_config,
             get_preferences,
         )
+        from second_brain.django_config.file_watching import watch_vault_changes
+        from second_brain.django_config.process_supervisor import supervised_processes
 
         get_preferences()  # Fail startup on invalid settings before accepting work.
         get_pipeline_config().ensure_directories()
         reload = settings.DEBUG if args.reload is None else args.reload
-        with supervised_workers():
+        with supervised_processes(), watch_vault_changes():
             uvicorn.run(
                 "second_brain.django_config.asgi:application",
                 host="127.0.0.1",
