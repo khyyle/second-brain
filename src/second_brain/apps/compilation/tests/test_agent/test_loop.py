@@ -20,7 +20,7 @@ from second_brain.apps.inference.errors import InferenceUnavailableError
 from second_brain.apps.wiki.services.assistant_tools import WikiTools
 from second_brain.apps.wiki.services.topic_schema import register_domains, write_default_schema
 from second_brain.apps.wiki.services.wiki_structure import serialize_page
-from second_brain.llm import resolve_profile
+from second_brain.cloud_llm import resolve_profile
 from second_brain.pipeline_config import CompilationConfig, PipelineConfig
 
 

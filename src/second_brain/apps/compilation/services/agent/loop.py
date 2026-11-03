@@ -30,7 +30,7 @@ from second_brain.apps.wiki.services.wiki_structure import (
     discover_all_pages,
     rank_gaps,
 )
-from second_brain.llm import (
+from second_brain.cloud_llm import (
     ModelError,
     ModelErrorKind,
     ProviderProfile,

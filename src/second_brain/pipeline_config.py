@@ -12,8 +12,8 @@ from pydantic import (
     model_validator,
 )
 
+from second_brain.cloud_llm import SUPPORTED_MODELS
 from second_brain.errors import SecondBrainError
-from second_brain.llm import SUPPORTED_MODELS
 
 
 def _resolve_path(v: str | Path) -> Path:

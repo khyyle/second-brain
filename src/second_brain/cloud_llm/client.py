@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import anthropic
 
-from second_brain.llm.errors import ModelError, ModelErrorKind, classify_status
-from second_brain.llm.providers import ProviderProfile
+from second_brain.cloud_llm.errors import ModelError, ModelErrorKind, classify_status
+from second_brain.cloud_llm.providers import ProviderProfile
 
 
 def create_client(profile: ProviderProfile) -> anthropic.Anthropic:

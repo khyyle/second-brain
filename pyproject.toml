@@ -66,6 +66,6 @@ warn_unused_configs = true
 disallow_untyped_defs = true
 
 [tool.pytest.ini_options]
-testpaths = ["tests", "src/second_brain/apps", "src/second_brain/django_config/tests"]
+testpaths = ["src/second_brain"]
 DJANGO_SETTINGS_MODULE = "second_brain.django_config.settings.test"
 asyncio_mode = "auto"

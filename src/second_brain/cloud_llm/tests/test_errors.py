@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from second_brain.llm import ModelErrorKind, classify_status
+from second_brain.cloud_llm import ModelErrorKind, classify_status
 
 _UNREACHABLE_REASON = "Couldn't reach the model provider. Check your internet connection."
 _KEY_REJECTED_REASON = "Your API key was rejected. Check it in Settings."

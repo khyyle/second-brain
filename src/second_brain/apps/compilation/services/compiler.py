@@ -23,9 +23,9 @@ from second_brain.apps.compilation.services.staging import find_new_sources
 from second_brain.apps.ingestion.services.triage.skipped import purge_skipped
 from second_brain.apps.jobs.outcomes import CRASH_REASON, StageOutcome
 from second_brain.apps.wiki.services.wiki_structure import rebuild_structure
+from second_brain.cloud_llm import require_api_key, resolve_profile
 from second_brain.errors import SecondBrainError
 from second_brain.file_hashing import hash_file
-from second_brain.llm import require_api_key, resolve_profile
 from second_brain.pipeline_config import PipelineConfig
 
 logger = logging.getLogger(__name__)

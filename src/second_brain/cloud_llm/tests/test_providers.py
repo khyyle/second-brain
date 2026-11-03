@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from second_brain.llm import SUPPORTED_MODELS, resolve_profile
+from second_brain.cloud_llm import SUPPORTED_MODELS, resolve_profile
 from second_brain.pipeline_config import CompilationConfig
 
 

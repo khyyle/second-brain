@@ -3,8 +3,8 @@
 import subprocess
 import sys
 
+from second_brain.cloud_llm.providers import SUPPORTED_MODELS
 from second_brain.django_config.errors import DependencyError, ServiceError
-from second_brain.llm.providers import SUPPORTED_MODELS
 
 KEYCHAIN_SERVICE = "com.second-brain.providers"
 

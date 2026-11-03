@@ -11,7 +11,7 @@ from pathlib import Path
 
 from second_brain.apps.compilation.services.clustering import get_clusterer
 from second_brain.apps.compilation.services.clustering.sources import cluster_scoped_sources
-from second_brain.llm import SUPPORTED_MODELS, resolve_profile
+from second_brain.cloud_llm import SUPPORTED_MODELS, resolve_profile
 from second_brain.pipeline_config import PipelineConfig
 
 logger = logging.getLogger(__name__)

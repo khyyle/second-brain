@@ -6,7 +6,7 @@ import anthropic
 import httpx
 import pytest
 
-from second_brain.llm import (
+from second_brain.cloud_llm import (
     ModelError,
     ModelErrorKind,
     request_turn,

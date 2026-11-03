@@ -15,13 +15,13 @@ from second_brain.apps.preferences.services.user_settings import (
     get_pipeline_config,
     get_preferences,
 )
+from second_brain.cloud_llm.client import require_api_key
+from second_brain.cloud_llm.errors import ModelError
+from second_brain.cloud_llm.providers import resolve_profile
 from second_brain.django_config.errors import ConflictError, ServiceError
 from second_brain.django_config.paths import get_vault_paths
 from second_brain.django_config.vault_storage import atomic_write, vault_lock
 from second_brain.file_hashing import hash_file
-from second_brain.llm.client import require_api_key
-from second_brain.llm.errors import ModelError
-from second_brain.llm.providers import resolve_profile
 
 
 def request_build(*, full: bool = False, dry_run: bool = False, preview: bool = False) -> Job:

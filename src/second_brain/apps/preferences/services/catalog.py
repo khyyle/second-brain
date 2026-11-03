@@ -1,7 +1,7 @@
 """Application-owned choices, independent of editable preferences."""
 
 from second_brain.apps.ingestion.services.source_staging import SUPPORTED_EXTENSIONS
-from second_brain.llm import SUPPORTED_MODELS, resolve_profile
+from second_brain.cloud_llm import SUPPORTED_MODELS, resolve_profile
 from second_brain.pipeline_config import _CLUSTERING_ALGORITHMS, _TRIAGE_PROFILES
 
 
