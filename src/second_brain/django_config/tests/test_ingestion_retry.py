@@ -5,16 +5,15 @@ from pathlib import Path
 
 import pytest
 
+from second_brain.apps.inference.errors import InferenceUnavailableError
 from second_brain.apps.ingestion.services.parsing import text_handler
 from second_brain.apps.ingestion.services.source_manifest import Manifest
-from second_brain.apps.ingestion.services.triage.gemma import TriageDecision, TriageResult
 from second_brain.apps.jobs.models import Job
 from second_brain.apps.jobs.services import job_queue
 from second_brain.apps.jobs.worker import run_attempt
 from second_brain.apps.library.models import Source
 from second_brain.apps.library.models import TriageDecision as StoredTriageDecision
 from second_brain.errors import SecondBrainError
-from second_brain.ollama.client import OllamaUnavailableError
 
 
 def _run_next_ingestion() -> Job:
@@ -144,7 +143,9 @@ def test_triage_retry_does_not_reparse_completed_export(api_client, config, tmp_
                         "node": {
                             "message": {
                                 "author": {"role": "user"},
-                                "content": {"parts": ["A conversation about gradient descent."]},
+                                "content": {
+                                    "parts": ["A conversation about gradient descent. " * 100]
+                                },
                             }
                         }
                     },
@@ -154,13 +155,15 @@ def test_triage_retry_does_not_reparse_completed_export(api_client, config, tmp_
     )
     attempts = []
 
-    def triage(path, preferences):
-        attempts.append(path)
+    def generate(model, prompt, **options):
+        attempts.append(prompt)
         if len(attempts) == 1:
-            raise OllamaUnavailableError("Ollama isn't running.")
-        return TriageResult(decision=TriageDecision.WORTHWHILE, confidence=1.0)
+            raise InferenceUnavailableError("Local inference is still loading.")
+        return '{"decision": "worthwhile", "confidence": 1.0}'
 
-    monkeypatch.setattr("second_brain.apps.ingestion.services.triage.pipeline.triage_file", triage)
+    monkeypatch.setattr(
+        "second_brain.apps.ingestion.services.triage.classification.generate_json", generate
+    )
     response = api_client.post(
         "/v1/imports",
         data={"paths": [str(export)], "source_type": "chatgpt"},
@@ -170,6 +173,7 @@ def test_triage_retry_does_not_reparse_completed_export(api_client, config, tmp_
     failed = _run_next_ingestion()
     source = Source.objects.get()
     assert failed.status == "failed"
+    assert failed.error == "Local inference is still loading."
     assert source.status == "complete"
     assert not Path(source.file_path).exists()
     assert not StoredTriageDecision.objects.exists()

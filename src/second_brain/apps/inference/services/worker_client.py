@@ -31,7 +31,7 @@ def generate_json(
     model: str,
     prompt: str,
     *,
-    max_tokens: int,
+    max_tokens: int | None,
     timeout: float = GENERATION_TIMEOUT_SECONDS,
 ) -> str:
     """Request JSON-formatted generation from a supported generation model.
@@ -42,8 +42,8 @@ def generate_json(
         Model identifier to resolve through the catalog; must support generation.
     prompt: str
         Complete user prompt to send to `/v1/chat/completions` in JSON mode.
-    max_tokens: int
-        Positive maximum number of output tokens to request.
+    max_tokens: int | None
+        Positive output token limit, or None to use the remaining context window.
     timeout: float
         HTTPX network-operation timeout in seconds.
 
@@ -58,10 +58,10 @@ def generate_json(
     InferenceUnavailableError
         The model cannot serve the request or the response envelope is invalid.
     ValueError
-        max_tokens is not positive.
+        max_tokens is neither positive nor None.
     """
-    if max_tokens <= 0:
-        raise ValueError("max_tokens must be positive.")
+    if max_tokens is not None and max_tokens <= 0:
+        raise ValueError("max_tokens must be positive or None.")
     local_model = get_model(model)
     if local_model.purpose != "generation":
         raise InferenceUnavailableError(f"Local model '{model}' does not support generation.")

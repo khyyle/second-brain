@@ -152,6 +152,8 @@ def _prepare_server_config(
     )
     if model.purpose == "embedding":
         model_settings.n_batch = model.context_tokens
+        # The Nomic encoder needs the entire input in one physical token batch.
+        model_settings.n_ubatch = model.context_tokens
     return ConfigFileSettings(
         host="127.0.0.1",
         port=0,

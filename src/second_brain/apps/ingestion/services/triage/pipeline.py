@@ -1,52 +1,24 @@
-"""Triage orchestration shared by the ingest and compile stages.
-
-Triage runs during ingestion (it uses the local Gemma model, so it is
-free and does not need to wait for the paid compile step). Decisions are
-recorded in the triage triage_store, so by the time the user reviews or builds, every
-ingested source already has a worthwhile / review / skip verdict.
-"""
+"""Record triage decisions and route sources to staging, review, or holding."""
 
 from __future__ import annotations
 
 import logging
 import shutil
-import threading
 from collections.abc import Callable
 from pathlib import Path
 
-from second_brain.apps.ingestion.services.triage.gemma import TriageDecision, triage_file
+from second_brain.apps.ingestion.services.triage.classification import TriageDecision, triage_file
 from second_brain.apps.ingestion.services.triage.skipped import move_skips_to_holding
 from second_brain.apps.ingestion.services.triage.triage_decisions import TriageStore
 from second_brain.apps.jobs.services.job_progress import (
     finish_progress,
     now_iso,
-    touch_heartbeat,
+    stop_requested,
     update_progress,
 )
-from second_brain.ollama.client import OllamaUnavailableError
 from second_brain.pipeline_config import PipelineConfig
 
 logger = logging.getLogger(__name__)
-_HEARTBEAT_INTERVAL_SECONDS = 5.0
-
-
-class TriageInterruptedError(OllamaUnavailableError):
-    """
-    Ollama stopped answering partway through triaging chats.
-
-    Parameters
-    ----------
-    untriaged_count: int
-        Chats left without a decision
-    """
-
-    def __init__(self, untriaged_count: int) -> None:
-        noun = "chat" if untriaged_count == 1 else "chats"
-        super().__init__(
-            f"Couldn't triage {untriaged_count} {noun} because Ollama isn't responding. "
-            "Start Ollama and try again."
-        )
-        self.untriaged_count = untriaged_count
 
 
 def _source_of(rel_path: str) -> str:
@@ -98,10 +70,9 @@ def triage_pending(
 
     Review-tier sources are also copied into the inbox for a manual pass.
     Skipped sources are moved into the holding folder under ``raw/``.
-    Writes a status heartbeat so an external reader can show triage
-    progress. Safe to call repeatedly: already-decided files are skipped.
-    If Ollama stops answering, the pass stops at that chat. Decisions
-    already recorded still get their follow-up; the rest stay undecided.
+    Reports progress for the current job. Already-decided files are skipped.
+    An inference failure stops the pass and leaves unfinished sources undecided.
+    Completed decisions are saved and routed even when the pass stops early.
 
     Parameters
     ----------
@@ -118,8 +89,8 @@ def triage_pending(
 
     Raises
     ------
-    TriageInterruptedError
-        When Ollama stops answering.
+    InferenceUnavailableError
+        When the local model cannot serve a request.
     """
     if not config.triage.enabled:
         return {"worthwhile": 0, "review": 0, "skip": 0}
@@ -127,65 +98,45 @@ def triage_pending(
     triage_store = TriageStore()
     pending = find_untriaged_sources(config, triage_store)
     counts = {"worthwhile": 0, "review": 0, "skip": 0}
-    interruption: TriageInterruptedError | None = None
-    interruption_cause: OllamaUnavailableError | None = None
-    if pending:
-        total = len(pending)
-        started = now_iso()
-        review_paths: list[str] = []
-        stop_heartbeat = threading.Event()
-        heartbeat_lock = threading.Lock()
-
-        def keepalive() -> None:
-            while not stop_heartbeat.wait(_HEARTBEAT_INTERVAL_SECONDS):
-                with heartbeat_lock:
-                    touch_heartbeat()
-
-        heartbeat = threading.Thread(target=keepalive, daemon=True)
-        heartbeat.start()
-        try:
-            for idx, rel in enumerate(pending):
-                from second_brain.apps.jobs.services.job_progress import stop_requested
-
-                if stop_requested():
-                    break
-                with heartbeat_lock:
-                    update_progress(
-                        phase="triage",
-                        current=idx,
-                        total=total,
-                        started_at=started,
-                        current_sources=(rel,),
-                        current_started_at=now_iso(),
-                        queued_sources=tuple(pending[idx + 1 :]),
-                    )
-                try:
-                    result = triage_file(config.raw_dir / rel, config.triage)
-                except OSError as exc:
-                    # A source can vanish mid-run (e.g. un-ingested in the app),
-                    # so skip it rather than letting one missing file abort the
-                    # whole triage pass and stall every later source.
-                    logger.warning("Skipping triage for %s: %s", rel, exc)
-                    continue
-                except OllamaUnavailableError as exc:
-                    interruption = TriageInterruptedError(total - idx)
-                    interruption_cause = exc
-                    logger.warning("%s", interruption)
-                    break
-                triage_store.record(rel, result.decision.value, result.confidence, result.reason)
-                counts[result.decision.value] += 1
-                if result.decision == TriageDecision.SKIP:
-                    move_skips_to_holding(config.raw_dir, {rel: result.decision.value})
-                if on_decided is not None:
-                    on_decided()
-                if result.decision == TriageDecision.REVIEW:
-                    review_paths.append(rel)
-        finally:
-            stop_heartbeat.set()
-            heartbeat.join()
+    total = len(pending)
+    started = now_iso()
+    review_paths: list[str] = []
+    try:
+        for idx, rel in enumerate(pending):
+            if stop_requested():
+                break
+            update_progress(
+                phase="triage",
+                current=idx,
+                total=total,
+                started_at=started,
+                current_sources=(rel,),
+                current_started_at=now_iso(),
+                queued_sources=tuple(pending[idx + 1 :]),
+            )
+            try:
+                result = triage_file(config.raw_dir / rel, config.triage)
+            except OSError as exc:
+                # A missing or unreadable source must not block the remaining files.
+                logger.warning("Skipping triage for %s: %s", rel, exc)
+                continue
+            triage_store.record(rel, result.decision.value, result.confidence, result.reason)
+            counts[result.decision.value] += 1
+            if result.decision == TriageDecision.SKIP:
+                move_skips_to_holding(config.raw_dir, {rel: result.decision.value})
+            if result.decision == TriageDecision.REVIEW:
+                review_paths.append(rel)
+            if on_decided is not None:
+                on_decided()
+    finally:
+        if pending:
             finish_progress()
-
         _route_review_to_inbox(config, review_paths)
+        moved = move_skips_to_holding(config.raw_dir, triage_store.get_decisions())
+        if moved:
+            logger.info("Moved %d skipped source(s) into holding folder", moved)
+
+    if pending:
         logger.info(
             "Triage: %d worthwhile, %d review, %d skip (of %d)",
             counts["worthwhile"],
@@ -194,11 +145,6 @@ def triage_pending(
             total,
         )
 
-    moved = move_skips_to_holding(config.raw_dir, triage_store.get_decisions())
-    if moved:
-        logger.info("Moved %d skipped source(s) into holding folder", moved)
-    if interruption is not None and interruption_cause is not None:
-        raise interruption from interruption_cause
     return counts
 
 

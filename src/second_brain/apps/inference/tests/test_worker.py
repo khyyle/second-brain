@@ -81,6 +81,7 @@ def test_server_exit_is_propagated_and_configuration_is_removed(
         assert settings["cache"] is (purpose == "generation")
         if purpose == "embedding":
             assert settings["n_batch"] == settings["n_ctx"]
+            assert settings["n_ubatch"] == settings["n_ctx"]
         return process
 
     monkeypatch.setattr(worker.subprocess, "Popen", start)

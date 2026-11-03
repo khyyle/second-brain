@@ -1,8 +1,4 @@
-"""The one place that talks to the local Ollama server.
-
-Holds the health probe used before a run, the error raised when the
-server stops serving requests, and the request helper.
-"""
+"""Ollama diagnostics for the settings API."""
 
 from __future__ import annotations
 
@@ -10,16 +6,9 @@ from dataclasses import dataclass
 
 import httpx
 
-from second_brain.errors import SecondBrainError
 from second_brain.pipeline_config import PipelineConfig
 
 PROBE_TIMEOUT_SECONDS = 5.0
-
-
-class OllamaUnavailableError(SecondBrainError):
-    """Ollama could not serve a request (server unreachable, timed out, or the
-    model is not installed), so every later request in the run would fail the
-    same way."""
 
 
 @dataclass(frozen=True)
@@ -133,47 +122,3 @@ def check_ollama(config: PipelineConfig) -> OllamaStatus:
         )
     missing = tuple(model for model in needed if not _is_present(model, installed))
     return OllamaStatus(host=host, reachable=True, required_models=needed, missing_models=missing)
-
-
-def post_to_ollama(host: str, path: str, payload: dict, timeout: float) -> dict:
-    """POST JSON to the local Ollama server and decode its response.
-
-    Connection failures and HTTP 404 raise OllamaUnavailableError. Other error
-    statuses raise httpx.HTTPStatusError; invalid JSON raises ValueError.
-
-    Parameters
-    ----------
-    host: str
-        Server origin, including scheme and port.
-    path: str
-        Request path appended to `host`, starting with a slash.
-    payload: dict
-        JSON request body.
-    timeout: float
-        Seconds to wait for the response.
-
-    Returns
-    -------
-    dict
-        Parsed JSON response body.
-
-    Raises
-    ------
-    OllamaUnavailableError
-        When the connection fails, times out, or the server returns 404.
-        The original error is chained.
-    httpx.HTTPStatusError
-        When the server returns any other error status.
-    ValueError
-        When the response body is not JSON.
-    """
-    try:
-        response = httpx.post(f"{host}{path}", json=payload, timeout=timeout)
-        response.raise_for_status()
-    except httpx.TransportError as exc:
-        raise OllamaUnavailableError("Ollama could not serve a request") from exc
-    except httpx.HTTPStatusError as exc:
-        if exc.response.status_code == 404:
-            raise OllamaUnavailableError("Ollama could not serve a request") from exc
-        raise
-    return response.json()

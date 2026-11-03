@@ -7,6 +7,7 @@ from django.http import HttpRequest
 from ninja import NinjaAPI, Schema
 
 from second_brain.apps.compilation.views import router as compilation_router
+from second_brain.apps.inference.views import router as inference_router
 from second_brain.apps.ingestion.views import router as ingestion_router
 from second_brain.apps.jobs.views import router as jobs_router
 from second_brain.apps.library.views import router as library_router
@@ -53,6 +54,7 @@ def health(request: HttpRequest) -> HealthResponse:
 api.add_router("", library_router)
 api.add_router("", ingestion_router)
 api.add_router("", compilation_router)
+api.add_router("", inference_router)
 api.add_router("", wiki_router)
 api.add_router("", jobs_router)
 api.add_router("", preferences_router)

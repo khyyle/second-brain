@@ -1,6 +1,6 @@
 """Triage service — cheap local-model filtering before expensive compilation."""
 
-from second_brain.apps.ingestion.services.triage.gemma import (
+from second_brain.apps.ingestion.services.triage.classification import (
     TriageDecision,
     TriageResult,
     heuristic_skip,

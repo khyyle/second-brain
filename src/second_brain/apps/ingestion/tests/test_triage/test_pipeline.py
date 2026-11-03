@@ -2,15 +2,14 @@
 
 from __future__ import annotations
 
-import threading
 from pathlib import Path
 
 import pytest
 
+from second_brain.apps.inference.errors import InferenceUnavailableError
 from second_brain.apps.ingestion.services.triage import pipeline as pipeline_mod
-from second_brain.apps.ingestion.services.triage.gemma import TriageDecision, TriageResult
+from second_brain.apps.ingestion.services.triage.classification import TriageDecision, TriageResult
 from second_brain.apps.ingestion.services.triage.triage_decisions import TriageStore
-from second_brain.ollama.client import OllamaUnavailableError
 from second_brain.pipeline_config import PipelineConfig
 
 pytestmark = pytest.mark.django_db(transaction=True)
@@ -45,7 +44,7 @@ def test_triage_only_touches_scoped_lanes(
     assert counts["worthwhile"] == 1  # only the chat is counted
 
 
-def test_the_heartbeat_names_the_chat_being_triaged_and_those_waiting(
+def test_progress_names_the_chat_being_triaged_and_those_waiting(
     config: PipelineConfig, monkeypatch: pytest.MonkeyPatch, read_job_progress
 ) -> None:
     _write(config.raw_dir, "chatgpt/a.md", "chat body " * 100)
@@ -62,38 +61,6 @@ def test_the_heartbeat_names_the_chat_being_triaged_and_those_waiting(
     pipeline_mod.triage_pending(config)
 
     assert heartbeats == [(["chatgpt/a.md"], ["chatgpt/b.md"]), (["chatgpt/b.md"], [])]
-
-
-def test_a_blocking_triage_keeps_its_heartbeat_fresh(
-    config: PipelineConfig, monkeypatch: pytest.MonkeyPatch, read_job_progress
-) -> None:
-    _write(config.raw_dir, "chatgpt/slow.md", "chat body " * 100)
-    started = threading.Event()
-    refreshed = threading.Event()
-    touch_heartbeat = pipeline_mod.touch_heartbeat
-
-    def record_refresh() -> None:
-        touch_heartbeat()
-        if started.is_set():
-            refreshed.set()
-
-    def blocking_triage(_path: Path, _config: object) -> TriageResult:
-        before = read_job_progress()
-        started.set()
-        assert refreshed.wait(timeout=1)
-        after = read_job_progress()
-        assert after["updated_at"] > before["updated_at"]
-        assert after["current_started_at"] == before["current_started_at"]
-        assert after["current_sources"] == ["chatgpt/slow.md"]
-        return TriageResult(decision=TriageDecision.WORTHWHILE, confidence=0.9)
-
-    monkeypatch.setattr(pipeline_mod, "_HEARTBEAT_INTERVAL_SECONDS", 0.01)
-    monkeypatch.setattr(pipeline_mod, "touch_heartbeat", record_refresh)
-    monkeypatch.setattr(pipeline_mod, "triage_file", blocking_triage)
-
-    pipeline_mod.triage_pending(config)
-
-    assert read_job_progress()["running"] is False
 
 
 def test_each_decision_is_reported_and_a_skip_is_held_at_once(
@@ -144,34 +111,44 @@ def test_triage_skips_a_vanished_source(
     assert counts["worthwhile"] == 1
 
 
-def test_triage_stops_when_ollama_stops(
+@pytest.mark.parametrize("completed_decision", list(TriageDecision))
+def test_inference_failure_preserves_completed_work_and_leaves_rest_pending(
     config: PipelineConfig,
     triage_store: TriageStore,
     monkeypatch: pytest.MonkeyPatch,
     read_job_progress,
+    completed_decision: TriageDecision,
 ) -> None:
     for name in ("a.md", "b.md", "c.md"):
         _write(config.raw_dir, f"chatgpt/{name}", "body " * 100)
+    failure = InferenceUnavailableError("Local inference is still loading.")
+    attempted: list[str] = []
 
     def fake_triage(path: Path, cfg: object) -> TriageResult:
+        attempted.append(path.name)
         if path.name == "b.md":
-            raise OllamaUnavailableError("down")
-        return TriageResult(decision=TriageDecision.WORTHWHILE, confidence=0.9)
+            raise failure
+        return TriageResult(decision=completed_decision, confidence=0.9)
 
     monkeypatch.setattr(pipeline_mod, "triage_file", fake_triage)
 
-    with pytest.raises(pipeline_mod.TriageInterruptedError) as raised:
+    with pytest.raises(InferenceUnavailableError) as raised:
         pipeline_mod.triage_pending(config)
 
-    assert raised.value.untriaged_count == 2
-    assert isinstance(raised.value.__cause__, OllamaUnavailableError)
-
-    decisions = triage_store.get_decisions()
-    assert "chatgpt/a.md" in decisions
-    assert "chatgpt/b.md" not in decisions
-    assert "chatgpt/c.md" not in decisions
-    status = read_job_progress()
-    assert status["running"] is False
+    assert raised.value is failure
+    assert attempted == ["a.md", "b.md"]
+    assert triage_store.get_decisions() == {"chatgpt/a.md": completed_decision.value}
+    assert pipeline_mod.find_untriaged_sources(config, triage_store) == [
+        "chatgpt/b.md",
+        "chatgpt/c.md",
+    ]
+    assert pipeline_mod.worthwhile_sources(config, ["chatgpt/b.md", "chatgpt/c.md"]) == []
+    assert read_job_progress()["running"] is False
+    if completed_decision == TriageDecision.REVIEW:
+        assert (config.inbox_dir / "a.md").read_text() == "body " * 100
+    elif completed_decision == TriageDecision.SKIP:
+        assert (config.raw_dir / ".skipped/chatgpt/a.md").exists()
+        assert not (config.raw_dir / "chatgpt/a.md").exists()
 
 
 def test_worthwhile_sources_holds_undecided_chats(config: PipelineConfig) -> None:

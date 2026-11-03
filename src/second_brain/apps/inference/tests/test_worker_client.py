@@ -57,13 +57,14 @@ def _response(body: Any, status: int = 200) -> httpx.Response:
 
 
 @pytest.mark.parametrize("content", ['{"decision": "review"}', "malformed model output"])
+@pytest.mark.parametrize("max_tokens", [80, None])
 def test_generation_sends_chat_payload_and_leaves_content_parsing_to_caller(
-    worker_http: Mock, tmp_path: Path, content: str
+    worker_http: Mock, tmp_path: Path, content: str, max_tokens: int | None
 ) -> None:
     worker_http.post.return_value = _response({"choices": [{"message": {"content": content}}]})
 
     result = worker_client.generate_json(
-        "gemma4:12b", "Classify this source.", max_tokens=80, timeout=7
+        "gemma4:12b", "Classify this source.", max_tokens=max_tokens, timeout=7
     )
 
     assert result == content
@@ -74,7 +75,7 @@ def test_generation_sends_chat_payload_and_leaves_content_parsing_to_caller(
             "messages": [{"role": "user", "content": "Classify this source."}],
             "stream": False,
             "response_format": {"type": "json_object"},
-            "max_tokens": 80,
+            "max_tokens": max_tokens,
         },
         timeout=7,
         headers={"Authorization": f"Bearer {private_token(tmp_path, INFERENCE_TOKEN_NAME)}"},

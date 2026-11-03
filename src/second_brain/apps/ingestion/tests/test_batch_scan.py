@@ -10,7 +10,7 @@ import pytest
 from second_brain.apps.ingestion.services import file_ingestion
 from second_brain.apps.ingestion.services.source_manifest import Manifest
 from second_brain.apps.ingestion.services.source_scanning import batch_scan
-from second_brain.apps.ingestion.services.triage.gemma import TriageDecision, TriageResult
+from second_brain.apps.ingestion.services.triage.classification import TriageDecision, TriageResult
 from second_brain.pipeline_config import PipelineConfig, SourceConfig
 
 CONTENT = "# Notes\n\nSame bytes in every copy.\n"
