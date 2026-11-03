@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 import numpy as np
+from numpy.typing import ArrayLike
 
 from second_brain.apps.compilation.services.clustering.base import Clusterer
 
@@ -27,12 +30,12 @@ class ThresholdClusterer(Clusterer):
     def __init__(self, threshold: float = DEFAULT_SIMILARITY_THRESHOLD) -> None:
         self._threshold = threshold
 
-    def cluster(self, vectors: list[list[float]]) -> list[list[int]]:
+    def cluster(self, vectors: Sequence[ArrayLike]) -> list[list[int]]:
         """Group vectors by connected components of the similarity graph.
 
         Parameters
         ----------
-        vectors: list[list[float]]
+        vectors: Sequence[ArrayLike]
             One embedding per item.
 
         Returns

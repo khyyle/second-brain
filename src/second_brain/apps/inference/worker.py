@@ -9,6 +9,8 @@ import sys
 import tempfile
 import threading
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from functools import partial
 from pathlib import Path
 from types import FrameType
@@ -18,7 +20,8 @@ import django
 import httpx
 from llama_cpp.server.settings import ConfigFileSettings, ModelSettings
 
-from second_brain.apps.inference.catalog import DEFAULT_MODELS, ModelPurpose, get_model
+from second_brain.apps.inference import INFERENCE_TOKEN_NAME
+from second_brain.apps.inference.catalog import DEFAULT_MODELS, LocalModel, ModelPurpose, get_model
 from second_brain.apps.inference.errors import InferenceUnavailableError
 from second_brain.apps.inference.services.worker_status import (
     WorkerStatus,
@@ -26,7 +29,7 @@ from second_brain.apps.inference.services.worker_status import (
     write_worker_status,
 )
 from second_brain.django_config.identity import private_token
-from second_brain.django_config.paths import get_vault_paths
+from second_brain.django_config.paths import VaultPaths, get_vault_paths
 from second_brain.django_config.vault_storage import vault_lock
 
 PARENT_CHECK_SECONDS = 1
@@ -58,10 +61,6 @@ def main(purpose: ModelPurpose) -> None:
     os.environ.setdefault("DJANGO_SETTINGS_MODULE", "second_brain.django_config.settings.runtime")
     django.setup()
 
-    # Hugging Face reads cache settings at import time, after Django loads .env.
-    from second_brain.apps.inference.services.model_files import ModelFiles
-
-    files = ModelFiles()
     model = get_model(DEFAULT_MODELS[purpose])
     parent_pid = int(os.environ.get("SECOND_BRAIN_WORKER_PARENT_PID", os.getppid()))
     stop = threading.Event()
@@ -82,81 +81,27 @@ def main(purpose: ModelPurpose) -> None:
         for signum in previous_handlers:
             signal.signal(signum, request_shutdown)
         watcher.start()
-        directory = get_vault_paths().backend_dir
+        vault_paths: VaultPaths = get_vault_paths()
+        directory = vault_paths.backend_dir
         # A second worker for this purpose must not replace the active worker's status.
-        with vault_lock(f"inference-{purpose}", blocking=False):
-            failed = False
-            try:
-                status = WorkerStatus(
-                    purpose=purpose, model=model.name, pid=os.getpid(), phase="starting"
-                )
-                write_worker_status(directory, status)
-                with tempfile.TemporaryDirectory(
-                    prefix=f"inference-{purpose}-", dir=directory
-                ) as temporary:
-                    model_path = files.ensure(model, partial(_publish_progress, directory, status))
-                    model_settings = ModelSettings(
-                        model=str(model_path),
-                        model_alias=model.name,
-                        n_ctx=model.context_tokens,
-                        n_gpu_layers=-1,
-                        embedding=purpose == "embedding",
-                        # Avoid retaining prompt snapshots alongside two resident models.
-                        cache=False,
-                    )
-                    if purpose == "embedding":
-                        model_settings.n_batch = model.context_tokens
-                    server_config = ConfigFileSettings(
-                        host="127.0.0.1",
-                        port=0,
-                        api_key=private_token(get_vault_paths().data_dir, "inference-token"),
-                        # Pending requests wait instead of interrupting an active stream.
-                        interrupt_requests=False,
-                        models=[model_settings],
-                    )
-                    config_path = Path(temporary) / "server_config.json"
-                    config_path.write_text(server_config.model_dump_json(indent=2))
+        with (
+            vault_lock(f"inference-{purpose}", blocking=False),
+            _track_worker_status(model, directory) as status,
+            tempfile.TemporaryDirectory(
+                prefix=f"inference-{purpose}-", dir=directory
+            ) as temporary,
+        ):
+            server_config: ConfigFileSettings = _prepare_server_config(model, vault_paths, status)
+            config_path = Path(temporary) / "server_config.json"
+            config_path.write_text(server_config.model_dump_json(indent=2))
 
-                    # Defer signals during process creation until its handle can be cleaned up.
-                    preparing = False
-                    if stop.is_set():
-                        return
-                    return_code = _run_server(config_path, stop, directory, status)
-                    if return_code and not stop.is_set():
-                        failed = True
-                        write_worker_status(
-                            directory,
-                            WorkerStatus(
-                                purpose=purpose,
-                                model=model.name,
-                                pid=os.getpid(),
-                                phase="error",
-                                error="Local inference stopped unexpectedly. Check backend logs.",
-                            ),
-                        )
-                        raise SystemExit(return_code if return_code > 0 else 1)
-            except Exception as exc:
-                failed = True
-                reason = (
-                    exc.reason
-                    if isinstance(exc, InferenceUnavailableError)
-                    else "Local inference failed to start. Check backend logs."
-                )
-                write_worker_status(
-                    directory,
-                    WorkerStatus(
-                        purpose=purpose,
-                        model=model.name,
-                        pid=os.getpid(),
-                        phase="error",
-                        error=reason,
-                    ),
-                )
-                raise
-            finally:
-                if not failed:
-                    # Keep failures readable after exit, until the next launch replaces them.
-                    worker_status_path(directory, purpose).unlink(missing_ok=True)
+            # Defer signals during process creation until its handle can be cleaned up.
+            preparing = False
+            if stop.is_set():
+                return
+            return_code = _run_server(config_path, stop, directory, status)
+            if return_code and not stop.is_set():
+                raise SystemExit(return_code if return_code > 0 else 1)
     finally:
         stop.set()
         if watcher.ident is not None:
@@ -164,6 +109,103 @@ def main(purpose: ModelPurpose) -> None:
         # Signal handlers belong to the process, so restore them when this runner returns.
         for signum, handler in previous_handlers.items():
             signal.signal(signum, handler)
+
+
+def _prepare_server_config(
+    model: LocalModel, vault_paths: VaultPaths, status: WorkerStatus
+) -> ConfigFileSettings:
+    """Prepare the model file and configure its authenticated HTTP server.
+
+    Parameters
+    ----------
+    model: LocalModel
+        Catalog artifact and its generation or embedding settings.
+    vault_paths: VaultPaths
+        Vault containing the inference token and preparation status file.
+    status: WorkerStatus
+        Worker identity to preserve while publishing model preparation progress.
+
+    Returns
+    -------
+    ConfigFileSettings
+        Server settings containing the verified model path and authentication token.
+
+    Raises
+    ------
+    InferenceUnavailableError
+        The model file could not be downloaded or verified.
+    """
+    # Hugging Face reads cache settings at import time, after Django loads .env.
+    from second_brain.apps.inference.services.model_files import ModelFiles
+
+    model_path = ModelFiles().ensure(
+        model, partial(_publish_progress, vault_paths.backend_dir, status)
+    )
+    model_settings = ModelSettings(
+        model=str(model_path),
+        model_alias=model.name,
+        n_ctx=model.context_tokens,
+        n_gpu_layers=-1,
+        embedding=model.purpose == "embedding",
+        # NOTE: may not work on machines with less RAM
+        cache=model.purpose == "generation",
+    )
+    if model.purpose == "embedding":
+        model_settings.n_batch = model.context_tokens
+    return ConfigFileSettings(
+        host="127.0.0.1",
+        port=0,
+        api_key=private_token(vault_paths.data_dir, INFERENCE_TOKEN_NAME),
+        # Pending requests wait instead of interrupting an active stream.
+        interrupt_requests=False,
+        models=[model_settings],
+    )
+
+
+@contextmanager
+def _track_worker_status(model: LocalModel, directory: Path) -> Iterator[WorkerStatus]:
+    """Publish startup status and retain failures after the worker exits.
+
+    Parameters
+    ----------
+    model: LocalModel
+        Model whose worker owns the status file.
+    directory: Path
+        Vault backend directory. The per-purpose worker lock must remain held
+        throughout this context so another worker cannot replace its status.
+
+    Yields
+    ------
+    WorkerStatus
+        Initial worker identity with phase starting. Normal exit and successful
+        SystemExit remove the status file; exceptions and nonzero SystemExit
+        retain an error record and propagate unchanged.
+    """
+    status = WorkerStatus(
+        purpose=model.purpose, model=model.name, pid=os.getpid(), phase="starting"
+    )
+    reason: str | None = None
+    try:
+        write_worker_status(directory, status)
+        yield status
+    except SystemExit as exc:
+        if exc.code:
+            reason = "Local inference stopped unexpectedly. Check backend logs."
+        raise
+    except Exception as exc:
+        reason = (
+            exc.reason
+            if isinstance(exc, InferenceUnavailableError)
+            else "Local inference failed to start. Check backend logs."
+        )
+        raise
+    finally:
+        if reason is None:
+            worker_status_path(directory, model.purpose).unlink(missing_ok=True)
+        else:
+            write_worker_status(
+                directory, status.model_copy(update={"phase": "error", "error": reason})
+            )
 
 
 def _watch_parent(parent_pid: int, stop: threading.Event) -> None:
@@ -181,7 +223,25 @@ def _publish_progress(
     completed: int,
     total: int,
 ) -> None:
-    """Publish byte counts for the model currently being prepared."""
+    """Publish byte counts for the model currently being prepared.
+
+    Parameters
+    ----------
+    directory: Path
+        Vault backend directory containing the worker's status file.
+    status: WorkerStatus
+        Worker identity to preserve in the progress snapshot.
+    phase: Literal["downloading", "verifying"]
+        Preparation step whose byte counts are being reported.
+    completed: int
+        Bytes completed within this step.
+    total: int
+        Expected model file size in bytes.
+
+    Returns
+    -------
+    None
+    """
     write_worker_status(
         directory,
         status.model_copy(update={"phase": phase, "completed": completed, "total": total}),
@@ -214,7 +274,9 @@ def _run_server(
     InferenceUnavailableError
         The server did not become ready or returned an unexpected model list.
     """
-    config = ConfigFileSettings.model_validate_json(config_path.read_text())
+    server_config: ConfigFileSettings = ConfigFileSettings.model_validate_json(
+        config_path.read_text()
+    )
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
         listener.bind(("127.0.0.1", 0))
         port = listener.getsockname()[1]
@@ -238,7 +300,7 @@ def _run_server(
         write_worker_status(directory, status)
         with httpx.Client(
             base_url=f"http://127.0.0.1:{port}",
-            headers={"Authorization": f"Bearer {config.api_key}"},
+            headers={"Authorization": f"Bearer {server_config.api_key}"},
             timeout=1,
             trust_env=False,
         ) as client:
@@ -253,7 +315,9 @@ def _run_server(
                     try:
                         response.raise_for_status()
                         available = {model["id"] for model in response.json()["data"]}
-                        expected = {model.model_alias or model.model for model in config.models}
+                        expected = {
+                            model.model_alias or model.model for model in server_config.models
+                        }
                         if available != expected:
                             raise ValueError("Unexpected model aliases")
                     except (httpx.HTTPStatusError, ValueError, KeyError, TypeError) as exc:

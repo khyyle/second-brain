@@ -6,6 +6,7 @@ import fnmatch
 import re
 from pathlib import Path
 
+from second_brain.apps.inference.errors import InferenceUnavailableError
 from second_brain.apps.mcp.tool_definitions import get_tool_schemas
 from second_brain.apps.wiki.services.assistant_tools import WikiTools
 from second_brain.apps.wiki.services.slugs import normalize_link_list, normalize_wikilinks, slugify
@@ -18,7 +19,6 @@ from second_brain.apps.wiki.services.wiki_structure import (
     serialize_page,
     update_frontmatter,
 )
-from second_brain.ollama.client import OllamaUnavailableError
 
 PAGE_TYPES = ("concept", "problem", "project", "paper", "insight")
 _MAX_PROMPT_GAPS = 30
@@ -268,7 +268,7 @@ class WikiToolExecutor:
                 return getattr(self._read_tools, tool_name)(**tool_input)
             else:
                 return f"Unknown tool: {tool_name}"
-        except OllamaUnavailableError:
+        except InferenceUnavailableError:
             # A build must not continue on degraded search.
             raise
         except Exception as e:

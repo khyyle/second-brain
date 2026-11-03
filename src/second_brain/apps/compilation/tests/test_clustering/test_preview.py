@@ -119,7 +119,7 @@ def test_build_preview_groups_and_costs(tmp_path: Path, monkeypatch: pytest.Monk
     ]:
         (raw / "chatgpt" / name).write_text(body, encoding="utf-8")
 
-    # Group a+b together, c alone, without touching Ollama.
+    # Group a+b together, c alone, without running inference.
     monkeypatch.setattr(
         preview_mod,
         "cluster_scoped_sources",

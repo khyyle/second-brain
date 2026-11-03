@@ -6,8 +6,11 @@ import logging
 from collections.abc import Callable
 from pathlib import Path
 
+import numpy as np
+from numpy.typing import NDArray
+
 from second_brain.apps.compilation.services.clustering.base import Clusterer
-from second_brain.ollama.embeddings import embed_text
+from second_brain.apps.inference.services.worker_client import embed_text
 from second_brain.pipeline_config import SearchConfig
 
 logger = logging.getLogger(__name__)
@@ -21,7 +24,7 @@ def embed_sources(
     search_config: SearchConfig,
     signature_chars: int,
     progress: ProgressCallback | None = None,
-) -> tuple[list[str], list[list[float]]]:
+) -> tuple[list[str], list[NDArray[np.float32]]]:
     """Embed each source's opening as a topical fingerprint.
 
     Parameters
@@ -31,7 +34,7 @@ def embed_sources(
     raw_dir: Path
         Root of the raw parsed sources.
     search_config: SearchConfig
-        Embedding model and Ollama settings.
+        Embedding model selection.
     signature_chars: int
         How much of each source's opening to embed.
     progress: ProgressCallback | None
@@ -42,17 +45,17 @@ def embed_sources(
     -------
     embedded: list[str]
         Paths that embedded successfully, aligned with `vectors`.
-    vectors: list[list[float]]
+    vectors: list[NDArray[np.float32]]
         Their embedding vectors.
 
     Raises
     ------
-    OllamaUnavailableError
+    InferenceUnavailableError
         When the embedder cannot serve a request. A partial set is not
         returned, because a grouping built from it would be wrong.
     """
     embedded: list[str] = []
-    vectors: list[list[float]] = []
+    vectors: list[NDArray[np.float32]] = []
     total = len(raw_paths)
     for index, rel in enumerate(raw_paths):
         if progress is not None:
@@ -62,7 +65,9 @@ def embed_sources(
         except OSError as exc:
             logger.warning("Could not read %s for clustering: %s", rel, exc)
             continue
-        vector = embed_text(text[:signature_chars], search_config, role="clustering")
+        vector = embed_text(
+            search_config.embedding_model, text[:signature_chars], role="clustering"
+        )
         if vector is None:
             continue
         embedded.append(rel)

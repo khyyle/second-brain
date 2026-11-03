@@ -17,6 +17,32 @@ class WorkerStatus(BaseModel):
     The port is published after the HTTP server is launched. Ready means its
     authenticated model-list endpoint responded during startup. Error records
     remain available after exit until the next launch replaces them.
+
+    Parameters
+    ----------
+    purpose: ModelPurpose
+        Generation or embedding worker whose status is recorded.
+    model: str
+        Catalog model identifier, also used as the HTTP server's model alias.
+    pid: int
+        Process ID of the worker that prepares the model and supervises its server.
+    server_pid: int | None
+        Process ID of the child HTTP server that loads the model. None before launch.
+    port: int | None
+        Automatically assigned loopback HTTP port, published during loading
+    phase: Literal["starting", "downloading", "verifying", "loading", "ready", "error"]
+        Starting initializes model preparation; downloading retrieves model bytes;
+        verifying checks their digest; loading waits for the launched server;
+        ready records successful startup; error records a preparation or runtime failure.
+    completed: int
+        Bytes downloaded or verified in the current preparation phase. Verification
+        reports zero and the final byte count. Zero outside preparation.
+    total: int
+        Expected model file size in bytes during preparation. Zero when no byte
+        progress is reported, including loading and ready phases.
+    error: str | None
+        User-facing failure reason for the error phase, or None when no failure
+        is reported. Does not contain a traceback.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -33,7 +59,8 @@ class WorkerStatus(BaseModel):
 
     @model_validator(mode="after")
     def validate_ready_endpoint(self) -> "WorkerStatus":
-        """Validate the endpoint information required by a ready worker.
+        """
+        Require endpoint fields on records that claim the worker is ready.
 
         Returns
         -------
@@ -111,7 +138,7 @@ def read_worker_status(directory: Path, purpose: ModelPurpose) -> WorkerStatus |
         HTTP request or guarantee the server can complete the next inference.
     """
     try:
-        status = WorkerStatus.model_validate_json(
+        status: WorkerStatus = WorkerStatus.model_validate_json(
             worker_status_path(directory, purpose).read_text()
         )
         if status.purpose != purpose:

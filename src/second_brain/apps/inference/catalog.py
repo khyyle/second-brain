@@ -19,7 +19,7 @@ class LocalModel:
     Parameters
     ----------
     name: str
-        Identifier stored in preferences and job snapshots.
+        Identifier stored in preferences and job snapshots, and the HTTP model alias.
     title: str
         Display name.
     purpose: ModelPurpose
@@ -31,13 +31,14 @@ class LocalModel:
     filename: str
         GGUF filename within the repository.
     sha256: str
-        Expected content digest.
+        Expected SHA-256 digest of the complete GGUF file.
     size: int
         Expected file size in bytes.
     context_tokens: int
-        Maximum context allocated by the runtime.
+        Token capacity allocated by the runtime. Generation shares this capacity
+        between prompt and output; embeddings use it for the input.
     dimensions: int | None
-        Expected embedding length, or None for generation.
+        Number of coordinates in each embedding vector, or None for generation.
     """
 
     name: str

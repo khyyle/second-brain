@@ -16,11 +16,11 @@ from second_brain.apps.compilation.tests.fakes import (
     install_fake,
     status_error,
 )
+from second_brain.apps.inference.errors import InferenceUnavailableError
 from second_brain.apps.wiki.services.assistant_tools import WikiTools
 from second_brain.apps.wiki.services.topic_schema import register_domains, write_default_schema
 from second_brain.apps.wiki.services.wiki_structure import serialize_page
 from second_brain.llm import resolve_profile
-from second_brain.ollama.client import OllamaUnavailableError
 from second_brain.pipeline_config import CompilationConfig, PipelineConfig
 
 
@@ -186,7 +186,7 @@ def test_iteration_cap_reports_runaway_stop(
     assert result.reason == "The model didn't finish within the 3-step limit."
 
 
-def test_ollama_outage_during_search_fails_the_unit(
+def test_inference_outage_during_search_fails_the_unit(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     config = _make_config(tmp_path, explore_tools=True)
@@ -197,7 +197,7 @@ def test_ollama_outage_during_search_fails_the_unit(
     )
 
     def _down(*_args: object, **_kwargs: object) -> str:
-        raise OllamaUnavailableError("down")
+        raise InferenceUnavailableError("Local inference timed out. Try again.")
 
     monkeypatch.setattr(WikiTools, "semantic_search", _down)
 
@@ -206,7 +206,7 @@ def test_ollama_outage_during_search_fails_the_unit(
     profile = resolve_profile(config.compilation.provider, config.compilation.model)
     assert client.messages.calls == 1
     assert result.outcome is RunOutcome.FAILED
-    assert result.reason == ("Ollama stopped responding. Start Ollama and build again.")
+    assert result.reason == "Local inference timed out. Try again."
     assert result.cost == profile.estimate_cost(usage.input_tokens, usage.output_tokens)
 
 

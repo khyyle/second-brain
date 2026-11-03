@@ -38,7 +38,9 @@ def serve(config_path: Path, socket_fd: int, parent_pid: int) -> None:
         The configuration does not contain exactly one model.
     """
     with socket.socket(fileno=socket_fd) as listener:
-        server_config = ConfigFileSettings.model_validate_json(config_path.read_text())
+        server_config: ConfigFileSettings = ConfigFileSettings.model_validate_json(
+            config_path.read_text()
+        )
         if listener.getsockname()[0] != "127.0.0.1":
             raise ValueError("Inference socket must be bound to 127.0.0.1.")
         if not server_config.api_key:

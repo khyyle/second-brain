@@ -194,7 +194,7 @@ class WikiTools:
         without restarting the server. The keyword/metadata sync is fast
         and runs inline (rate-limited by a directory-stat check), so
         `search_wiki` and `list_pages` stay correct and responsive.
-        Embeddings are refreshed on a background thread so Ollama latency
+        Embeddings are refreshed on a background thread so inference latency
         never blocks a tool call.
 
         Returns
@@ -217,7 +217,7 @@ class WikiTools:
     def _start_background_embed(self) -> None:
         """Embed pending pages on a daemon thread if one is not running.
 
-        Keeps embedding (and its Ollama round-trips) entirely off the
+        Keeps embedding requests entirely off the
         request path. At most one embed pass runs at a time; pages that
         change while a pass is in flight are picked up by the next call.
         """
@@ -300,13 +300,13 @@ class WikiTools:
 
         Raises
         ------
-        OllamaUnavailableError
+        InferenceUnavailableError
             When the embedding server stops answering a query.
         """
         if not self._search.semantic_enabled:
             return (
-                "Semantic search is unavailable (the embedding layer is off or "
-                "Ollama is not running). Use search_wiki for keyword search instead."
+                "Semantic search is unavailable (the embedding index is disabled or "
+                "could not be initialized). Use search_wiki for keyword search instead."
             )
 
         hits = self._search.semantic_search(query, limit=limit)

@@ -24,6 +24,21 @@ from second_brain.django_config.vault_storage import vault_lock
 
 @dataclass(frozen=True)
 class ImportedFile:
+    """Ingestion state of a source file or a pending dropped copy.
+
+    Parameters
+    ----------
+    file_path: str
+        Absolute source file path recorded in the manifest or found in drops/.
+    status: str
+        Recorded ingestion status; pending for dropped files without a source record.
+    updated_at: datetime
+        Source record's last update time, or the file's modification time when
+        no record exists. Timezone-aware in both cases.
+    error: str | None
+        Most recent recorded ingestion failure, or None when no error is recorded.
+    """
+
     file_path: str
     status: str
     updated_at: datetime
@@ -32,6 +47,17 @@ class ImportedFile:
 
 @dataclass(frozen=True)
 class ImportSubmission:
+    """Queued ingestion attempt and the staged files selected for import.
+
+    Parameters
+    ----------
+    job: Job
+        Ingestion job submitted for the staged paths.
+    files: list[ImportedFile]
+        Selected files with their vault-owned paths and current ingestion states.
+        These states do not report the outcome of the queued job.
+    """
+
     job: Job
     files: list[ImportedFile]
 

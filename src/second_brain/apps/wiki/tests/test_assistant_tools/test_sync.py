@@ -6,14 +6,15 @@ import os
 from collections.abc import Callable
 from pathlib import Path
 
+import numpy as np
 import pytest
+from numpy.typing import NDArray
 
+from second_brain.apps.inference.errors import InferenceUnavailableError
+from second_brain.apps.inference.services.worker_client import EmbeddingRole
+from second_brain.apps.wiki.services import search_index as search_index_mod
 from second_brain.apps.wiki.services.assistant_tools import WikiTools
 from second_brain.apps.wiki.services.search_index import SearchIndex
-from second_brain.ollama import embeddings as embeddings_mod
-from second_brain.ollama.client import OllamaUnavailableError
-from second_brain.ollama.embeddings import EmbeddingRole
-from second_brain.pipeline_config import SearchConfig
 
 # Each fresh sync sets file mtimes explicitly so change detection is
 # deterministic regardless of filesystem timestamp resolution.
@@ -25,11 +26,11 @@ def embed_calls(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     """Patch the embedder to record each call, proving when work happens."""
     calls: list[str] = []
 
-    def _record(text: str, config: SearchConfig, role: EmbeddingRole) -> list[float]:
+    def _record(model: str, text: str, role: EmbeddingRole) -> NDArray[np.float32]:
         calls.append(text)
-        return [0.1, 0.2, 0.3]
+        return np.array([0.1, 0.2, 0.3], dtype=np.float32)
 
-    monkeypatch.setattr(embeddings_mod, "embed_text", _record)
+    monkeypatch.setattr(search_index_mod, "embed_text", _record)
     return calls
 
 
@@ -37,10 +38,10 @@ def embed_calls(monkeypatch: pytest.MonkeyPatch) -> list[str]:
 def _mock_default_embeddings(monkeypatch: pytest.MonkeyPatch) -> None:
     """Ensure all tests in this module have a 3-d mock embedder by default."""
 
-    def _default_embed(text: str, config: SearchConfig, role: EmbeddingRole) -> list[float]:
-        return [0.1, 0.2, 0.3]
+    def _default_embed(model: str, text: str, role: EmbeddingRole) -> NDArray[np.float32]:
+        return np.array([0.1, 0.2, 0.3], dtype=np.float32)
 
-    monkeypatch.setattr(embeddings_mod, "embed_text", _default_embed)
+    monkeypatch.setattr(search_index_mod, "embed_text", _default_embed)
 
 
 def _write(wiki_dir: Path, stem: str, body: str, mtime: float) -> Path:
@@ -161,7 +162,7 @@ def test_embed_pending_reembeds_changed_page_only(
     assert len(embed_calls) == 1
 
 
-def test_embed_pending_stops_when_ollama_unavailable(
+def test_embed_pending_stops_when_inference_unavailable(
     tmp_path: Path, search_index: SearchIndex, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     wiki = tmp_path / "wiki"
@@ -171,25 +172,25 @@ def test_embed_pending_stops_when_ollama_unavailable(
 
     calls = {"n": 0}
 
-    def _embed(text: str, config: SearchConfig, role: EmbeddingRole) -> list[float]:
+    def _embed(model: str, text: str, role: EmbeddingRole) -> NDArray[np.float32]:
         calls["n"] += 1
         if calls["n"] > 1:
-            raise OllamaUnavailableError("down")
-        return [0.1, 0.2, 0.3]
+            raise InferenceUnavailableError("down")
+        return np.array([0.1, 0.2, 0.3], dtype=np.float32)
 
-    monkeypatch.setattr(embeddings_mod, "embed_text", _embed)
+    monkeypatch.setattr(search_index_mod, "embed_text", _embed)
     assert search_index.embed_pending() == 1
     assert any(hit.stem == "alpha" for hit in search_index.search("cats"))
 
 
-def test_embed_pending_stops_when_embedder_unavailable(
+def test_embed_pending_retains_pages_without_usable_embeddings(
     tmp_path: Path, search_index: SearchIndex, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     wiki = tmp_path / "wiki"
     _write(wiki, "alpha", "alpha about cats", _BASE_MTIME)
     search_index.sync_from_wiki(wiki)
 
-    monkeypatch.setattr(embeddings_mod, "embed_text", lambda text, config, role: None)
+    monkeypatch.setattr(search_index_mod, "embed_text", lambda model, text, role: None)
     assert search_index.embed_pending() == 0
     # Page stays pending; a later pass with a working embedder will retry.
     assert search_index.semantic_search("cats") == []

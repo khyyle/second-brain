@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 import numpy as np
+from numpy.typing import ArrayLike
 from sklearn.cluster import HDBSCAN
 
 from second_brain.apps.compilation.services.clustering.base import Clusterer
@@ -40,12 +43,12 @@ class HdbscanClusterer(Clusterer):
         self._min_cluster_size = min_cluster_size
         self._small_batch_clusterer = small_batch_clusterer
 
-    def cluster(self, vectors: list[list[float]]) -> list[list[int]]:
+    def cluster(self, vectors: Sequence[ArrayLike]) -> list[list[int]]:
         """Partition vectors into density-based clusters.
 
         Parameters
         ----------
-        vectors: list[list[float]]
+        vectors: Sequence[ArrayLike]
             One embedding per item.
 
         Returns

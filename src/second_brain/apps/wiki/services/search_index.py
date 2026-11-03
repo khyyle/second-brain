@@ -1,7 +1,7 @@
 """Hybrid search index — SQLite FTS5 for keyword search, sqlite-vec for semantic.
 
 The semantic (vector) layer is optional and isolated: if it can't be
-set up (no ``SearchConfig`` passed, sqlite-vec not loadable, or Ollama
+set up (no ``SearchConfig`` passed, sqlite-vec not loadable, or local inference
 unavailable for embeddings) the index still serves keyword search
 normally. Callers ask for semantic results explicitly via
 :meth:`SearchIndex.semantic_search`.
@@ -18,9 +18,9 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
+from second_brain.apps.inference.errors import InferenceUnavailableError
+from second_brain.apps.inference.services.worker_client import embed_text
 from second_brain.apps.wiki.services.wiki_structure import LINK_KINDS, extract_typed_edges
-from second_brain.ollama import embeddings
-from second_brain.ollama.client import OllamaUnavailableError
 from second_brain.pipeline_config import SearchConfig
 
 logger = logging.getLogger(__name__)
@@ -309,7 +309,7 @@ class SearchIndex:
         A page is pending when its ``embedded_hash`` differs from its
         current ``content_hash`` (cleared whenever the page is indexed).
         This is the only place embeddings are computed, and it is meant to
-        run off the request path (e.g. a background thread) so Ollama
+        run off the request path (e.g. a background thread) so inference
         latency never blocks tool calls. Best-effort: if the embedder is
         unavailable it stops early, leaving the rest pending for a later
         pass.
@@ -345,12 +345,12 @@ class SearchIndex:
         embedded_count = 0
         for row in pending:
             try:
-                vector = embeddings.embed_text(
+                vector = embed_text(
+                    self._search_config.embedding_model,
                     f"{row['title']}\n\n{row['content']}",
-                    self._search_config,
                     role="search_document",
                 )
-            except OllamaUnavailableError as exc:
+            except InferenceUnavailableError as exc:
                 # Every later page would fail the same way.
                 logger.debug("Embedding pass stopped: %s", exc)
                 break
@@ -457,15 +457,15 @@ class SearchIndex:
 
         Raises
         ------
-        OllamaUnavailableError
-            When Ollama cannot embed the query.
+        InferenceUnavailableError
+            When local inference cannot embed the query.
         """
         if not self._semantic or self._search_config is None:
             return []
 
         from sqlite_vec import serialize_float32
 
-        vector = embeddings.embed_text(query, self._search_config, role="search_query")
+        vector = embed_text(self._search_config.embedding_model, query, role="search_query")
         if vector is None:
             return []
 

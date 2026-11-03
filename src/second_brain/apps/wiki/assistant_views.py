@@ -7,13 +7,13 @@ from django.http import HttpRequest
 from ninja import Router
 from pydantic import Field, ValidationError, validate_call
 
+from second_brain.apps.inference.errors import InferenceUnavailableError
 from second_brain.apps.jobs.services.job_queue import enqueue_job
 from second_brain.apps.preferences.services.user_settings import get_pipeline_config
 from second_brain.apps.wiki.services.assistant_tools import WikiTools
 from second_brain.apps.wiki.services.search_index import SearchIndex
 from second_brain.django_config.errors import DependencyError, ServiceError
 from second_brain.django_config.schemas import ErrorResponse, RequestSchema
-from second_brain.ollama.client import OllamaUnavailableError
 
 router = Router(tags=["Assistant tools"])
 ToolName = Literal[
@@ -84,7 +84,7 @@ def invoke_tool(request: HttpRequest, name: ToolName, payload: ToolRequest) -> s
         return validate_call(method)(*payload.args, **payload.kwargs)
     except (ValidationError, TypeError) as exc:
         raise ServiceError("Invalid arguments for this assistant tool.") from exc
-    except OllamaUnavailableError as exc:
+    except InferenceUnavailableError as exc:
         raise DependencyError(
-            "Ollama is unavailable. Use keyword search until it is running."
+            f"{exc.reason} Use keyword search while local inference is unavailable."
         ) from exc

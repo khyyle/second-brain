@@ -86,7 +86,7 @@ def main() -> None:
                 if backend.poll() is not None or time.monotonic() >= deadline:
                     raise RuntimeError("The backend did not become ready. See its output above.")
                 time.sleep(0.2)
-        print(f"GUI → http://127.0.0.1:{client.port}/v1; vault: {client.vault}", flush=True)
+        print(f"GUI: http://127.0.0.1:{client.port}/v1 | vault: {client.vault}", flush=True)
         gui = subprocess.Popen([str(contents / "MacOS" / "SecondBrainBar")], env=environment)
         gui.wait()
     except KeyboardInterrupt:

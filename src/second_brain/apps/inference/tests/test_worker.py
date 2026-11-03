@@ -78,7 +78,7 @@ def test_server_exit_is_propagated_and_configuration_is_removed(
         settings = config["models"][0]
         assert Path(settings["model"]).parent == tmp_path
         assert settings["embedding"] == (purpose == "embedding")
-        assert settings["cache"] is False
+        assert settings["cache"] is (purpose == "generation")
         if purpose == "embedding":
             assert settings["n_batch"] == settings["n_ctx"]
         return process
@@ -105,7 +105,7 @@ def test_server_exit_is_propagated_and_configuration_is_removed(
 
 
 def test_shutdown_during_preparation_does_not_start_server(
-    prepared_models: Mock, monkeypatch: pytest.MonkeyPatch
+    prepared_models: Mock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     def interrupted_download(*args: object) -> None:
         signal.getsignal(signal.SIGTERM)(signal.SIGTERM, None)
@@ -113,11 +113,18 @@ def test_shutdown_during_preparation_does_not_start_server(
     prepared_models.ensure.side_effect = interrupted_download
     start = Mock()
     monkeypatch.setattr(worker.subprocess, "Popen", start)
+    previous_handlers = {
+        signum: signal.getsignal(signum) for signum in (signal.SIGTERM, signal.SIGINT)
+    }
 
     with pytest.raises(SystemExit) as error:
         worker.main("generation")
     assert error.value.code == 0
     start.assert_not_called()
+    assert not (tmp_path / ".backend" / "inference-generation.json").exists()
+    assert not list((tmp_path / ".backend").glob("inference-generation-*"))
+    for signum, handler in previous_handlers.items():
+        assert signal.getsignal(signum) == handler
 
 
 def test_shutdown_during_process_creation_still_reaps_server(
@@ -262,20 +269,41 @@ def test_model_preparation_progress_is_published(
     assert (status.completed, status.total) == (25, 100)
 
 
+@pytest.mark.parametrize(
+    "failure,reason",
+    [
+        (InferenceUnavailableError("Model download failed."), "Model download failed."),
+        (
+            RuntimeError("Private runtime details."),
+            "Local inference failed to start. Check backend logs.",
+        ),
+    ],
+)
 def test_preparation_failure_remains_available(
-    prepared_models: Mock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    prepared_models: Mock,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure: Exception,
+    reason: str,
 ) -> None:
-    prepared_models.ensure.side_effect = InferenceUnavailableError("Model download failed.")
+    prepared_models.ensure.side_effect = failure
     start = Mock()
     monkeypatch.setattr(worker.subprocess, "Popen", start)
+    previous_handlers = {
+        signum: signal.getsignal(signum) for signum in (signal.SIGTERM, signal.SIGINT)
+    }
 
-    with pytest.raises(InferenceUnavailableError, match="Model download failed"):
+    with pytest.raises(type(failure)) as error:
         worker.main("generation")
 
+    assert error.value is failure
     status = read_worker_status(tmp_path / ".backend", "generation")
     assert status.phase == "error"
-    assert status.error == "Model download failed."
+    assert status.error == reason
     start.assert_not_called()
+    assert not list((tmp_path / ".backend").glob("inference-generation-*"))
+    for signum, handler in previous_handlers.items():
+        assert signal.getsignal(signum) == handler
 
 
 def test_readiness_requires_authenticated_model_response(

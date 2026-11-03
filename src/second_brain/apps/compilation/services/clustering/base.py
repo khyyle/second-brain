@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import Sequence
+
+from numpy.typing import ArrayLike
 
 
 class Clusterer(ABC):
@@ -13,13 +16,13 @@ class Clusterer(ABC):
     """
 
     @abstractmethod
-    def cluster(self, vectors: list[list[float]]) -> list[list[int]]:
+    def cluster(self, vectors: Sequence[ArrayLike]) -> list[list[int]]:
         """
         Partition ``vectors`` into clusters of their row indices.
 
         Parameters
         ----------
-        vectors: list[list[float]]
+        vectors: Sequence[ArrayLike]
             One embedding per item, all of equal dimensionality.
 
         Returns

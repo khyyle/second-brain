@@ -16,15 +16,47 @@ _shutdown = False
 
 @dataclass(frozen=True)
 class PipelineStatus:
-    """A snapshot of pipeline progress stored on the active Job row."""
+    """A snapshot of pipeline progress stored on the active Job row.
+
+    Parameters
+    ----------
+    running: bool
+        Whether progress is active. False retains the last counters and costs;
+        it does not distinguish success, failure, and cancellation.
+    phase: str
+        Stage reporting progress, such as ingest, triage, compile, or grouping.
+    current: int
+        Work items accounted for in this phase, excluding the item in progress.
+        Ingestion counts successfully processed files.
+    total: int
+        Work items in the phase; zero for stages without per-item progress.
+    updated_at: str
+        UTC ISO 8601 timestamp of this progress snapshot.
+    started_at: str
+        ISO 8601 timestamp when this phase's run began.
+    cost_usd: float
+        Accumulated provider API cost in US dollars for this run.
+    current_sources: tuple[str, ...]
+        Paths relative to raw/ for the sources currently being processed;
+        empty when individual sources are not reported.
+    queued_sources: tuple[str, ...]
+        Paths relative to raw/ waiting after the current sources; empty when
+        the queue is exhausted or not reported.
+    current_started_at: str
+        ISO 8601 start time of the current sources, or an empty string if unreported.
+    current_cost_usd: float
+        Provider API cost for the current sources, already included in cost_usd.
+    current_activity: str
+        Short description of the current activity, or an empty string if unreported.
+    """
 
     running: bool
-    phase: str  # "ingest" | "triage" | "compile" | "idle"
+    phase: str
     current: int
     total: int
     updated_at: str
-    started_at: str  # run start, for elapsed display
-    cost_usd: float  # accumulated API cost this run (0 for free stages)
+    started_at: str
+    cost_usd: float
     current_sources: tuple[str, ...]
     queued_sources: tuple[str, ...]
     current_started_at: str
@@ -62,7 +94,7 @@ def update_progress(
     Parameters
     ----------
     phase: str
-        Current stage label (`"ingest"`, `"triage"`, `"compile"`).
+        Current stage label, such as ingest, triage, compile, or grouping.
     current: int
         Items processed so far.
     total: int
@@ -70,11 +102,11 @@ def update_progress(
     started_at: str
         ISO timestamp when this run began.
     current_sources: tuple[str, ...]
-        Raw paths of the sources being compiled; empty outside a build.
+        Paths relative to raw/ for the sources currently being processed.
     cost_usd: float
         Accumulated API cost so far this run.
     current_started_at: str
-        ISO timestamp when the sources being compiled were started.
+        ISO timestamp when processing of the current sources began.
     current_cost_usd: float
         API cost so far for the sources being compiled.
     current_activity: str

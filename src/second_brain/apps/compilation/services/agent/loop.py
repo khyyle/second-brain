@@ -23,6 +23,7 @@ from second_brain.apps.compilation.services.agent.tools import (
     describe_tool_call,
     explore_tool_schemas,
 )
+from second_brain.apps.inference.errors import InferenceUnavailableError
 from second_brain.apps.wiki.services.domain_actions import list_domains
 from second_brain.apps.wiki.services.wiki_structure import (
     build_link_graph,
@@ -37,7 +38,6 @@ from second_brain.llm import (
     request_turn,
     resolve_profile,
 )
-from second_brain.ollama.client import OllamaUnavailableError
 from second_brain.pipeline_config import PipelineConfig
 
 logger = logging.getLogger(__name__)
@@ -46,7 +46,6 @@ _MAX_OUTPUT_TOKENS_PER_TURN = 16384
 _SOURCE_TOKENS_PER_EXTRA_ITERATION = 4000
 _MODEL_CONTEXT_WINDOW_EXCEEDED = "model_context_window_exceeded"
 
-OLLAMA_BUILD_STOPPED_REASON = "Ollama stopped responding. Start Ollama and build again."
 READING_SOURCES_ACTIVITY = "Reading the sources"
 
 
@@ -346,10 +345,10 @@ def run_agent(
 
         try:
             tool_results = _execute_tools(executor, response.content, report)
-        except OllamaUnavailableError:
+        except InferenceUnavailableError as exc:
             outcome = RunOutcome.FAILED
-            reason = OLLAMA_BUILD_STOPPED_REASON
-            logger.warning("Ollama isn't responding for %s: %s", ", ".join(sources), reason)
+            reason = exc.reason
+            logger.warning("Local inference failed for %s: %s", ", ".join(sources), reason)
             break
         if not tool_results:
             reason = "The model stopped before finishing this source."

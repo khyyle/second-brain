@@ -4,13 +4,15 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import numpy as np
 import pytest
+from numpy.typing import NDArray
 
+from second_brain.apps.inference.errors import InferenceUnavailableError
+from second_brain.apps.inference.services.worker_client import EmbeddingRole
+from second_brain.apps.wiki.services import search_index as search_index_mod
 from second_brain.apps.wiki.services.assistant_tools import WikiTools
 from second_brain.apps.wiki.services.search_index import SearchIndex
-from second_brain.ollama import embeddings as embeddings_mod
-from second_brain.ollama.client import OllamaUnavailableError
-from second_brain.ollama.embeddings import EmbeddingRole
 from second_brain.pipeline_config import SearchConfig
 
 # Tiny deterministic "embeddings": map keywords to fixed 3-d vectors so
@@ -23,17 +25,17 @@ _VECTORS = {
 }
 
 
-def _fake_embed(text: str, config: SearchConfig, role: EmbeddingRole) -> list[float] | None:
+def _fake_embed(model: str, text: str, role: EmbeddingRole) -> NDArray[np.float32] | None:
     lowered = text.lower()
     for key, vec in _VECTORS.items():
         if key in lowered:
-            return vec
-    return [0.0, 0.0, 1.0]
+            return np.asarray(vec, dtype=np.float32)
+    return np.array([0.0, 0.0, 1.0], dtype=np.float32)
 
 
 @pytest.fixture(autouse=True)
 def _mock_embeddings(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(embeddings_mod, "embed_text", _fake_embed)
+    monkeypatch.setattr(search_index_mod, "embed_text", _fake_embed)
 
 
 def _index_sample(index: SearchIndex) -> None:
@@ -82,11 +84,12 @@ def test_semantic_search_uses_retrieval_roles(
 ) -> None:
     roles: list[EmbeddingRole] = []
 
-    def record_role(text: str, config: SearchConfig, role: EmbeddingRole) -> list[float] | None:
+    def record_role(model: str, text: str, role: EmbeddingRole) -> NDArray[np.float32] | None:
+        assert model == search_config.embedding_model
         roles.append(role)
-        return _fake_embed(text, config, role)
+        return _fake_embed(model, text, role)
 
-    monkeypatch.setattr(embeddings_mod, "embed_text", record_role)
+    monkeypatch.setattr(search_index_mod, "embed_text", record_role)
     index = SearchIndex(tmp_path / "s.db", search_config)
     _index_sample(index)
 
@@ -106,42 +109,41 @@ def test_semantic_disabled_without_config(tmp_path: Path) -> None:
     assert index.semantic_search("anything") == []
 
 
-def test_query_embedding_falls_back_to_keyword_search(
+def test_query_embedding_failure_preserves_keyword_search(
     search_index: SearchIndex, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _index_sample(search_index)
 
-    def _raise(text: str, config: SearchConfig, role: EmbeddingRole) -> list[float]:
-        raise OllamaUnavailableError("down")
+    def _raise(model: str, text: str, role: EmbeddingRole) -> NDArray[np.float32]:
+        raise InferenceUnavailableError("down")
 
-    monkeypatch.setattr(embeddings_mod, "embed_text", _raise)
-    with pytest.raises(OllamaUnavailableError):
+    monkeypatch.setattr(search_index_mod, "embed_text", _raise)
+    with pytest.raises(InferenceUnavailableError):
         search_index.semantic_search("gradient")
     hits = search_index.search("penguin")
     assert any(hit.stem == "penguins" for hit in hits)
 
 
-def test_semantic_tool_propagates_ollama_outage(
+def test_semantic_tool_propagates_inference_outage(
     tmp_path: Path, search_index: SearchIndex, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _index_sample(search_index)
     tools = WikiTools(tmp_path / "wiki", tmp_path / "raw", search_index)
 
-    def _raise(text: str, config: SearchConfig, role: EmbeddingRole) -> list[float]:
-        raise OllamaUnavailableError("down")
+    def _raise(model: str, text: str, role: EmbeddingRole) -> NDArray[np.float32]:
+        raise InferenceUnavailableError("down")
 
-    monkeypatch.setattr(embeddings_mod, "embed_text", _raise)
+    monkeypatch.setattr(search_index_mod, "embed_text", _raise)
 
-    with pytest.raises(OllamaUnavailableError):
+    with pytest.raises(InferenceUnavailableError):
         tools.semantic_search("gradient")
 
 
-def test_semantic_returns_empty_when_embeddings_unavailable(
+def test_semantic_returns_empty_when_query_has_no_usable_embedding(
     search_index: SearchIndex, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _index_sample(search_index)
-    # Simulate Ollama going away: embed_text now returns None.
-    monkeypatch.setattr(embeddings_mod, "embed_text", lambda text, config, role: None)
+    monkeypatch.setattr(search_index_mod, "embed_text", lambda model, text, role: None)
     assert search_index.semantic_search("gradient") == []
 
 
