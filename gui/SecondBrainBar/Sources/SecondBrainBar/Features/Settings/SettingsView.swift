@@ -5,6 +5,7 @@ import AppKit
 struct SettingsView: View {
     let config: AppConfig
     let onClose: () -> Void
+    @EnvironmentObject private var store: PipelineStore
 
     @State private var catalog: ApplicationCatalog?
     @State private var provider = ""
@@ -17,8 +18,7 @@ struct SettingsView: View {
     @State private var watched: [WatchedFolder] = []
     @State private var connectStatus: [String: ConnectStatus] = [:]
     @State private var connectError: String?
-    @State private var ollamaHealth: OllamaHealth?
-    @State private var checkingOllama = false
+    @State private var checkingInference = false
     @State private var loaded = false
     @State private var saving = false
     @State private var errorMessage: String?
@@ -146,12 +146,17 @@ struct SettingsView: View {
         }
 
         SettingsGroup(
-            title: "Ollama",
-            help: "Local models for triage and semantic search, spanning ingest and "
-                + "build. Ollama must be running with its models pulled, or ingest "
-                + "and build refuse to run."
+            title: "Local models",
+            help: "Second Brain downloads and starts these models automatically. "
+                + "Triage uses the generation model; semantic search and grouping "
+                + "use the embedding model."
         ) {
-            ollamaRow
+            InferenceStatusRow(title: "Generation", status: store.inferenceStatus?.worker_statuses["generation"] ?? nil,
+                               checking: checkingInference, receivedStatus: store.inferenceStatus != nil)
+            InferenceStatusRow(title: "Embedding", status: store.inferenceStatus?.worker_statuses["embedding"] ?? nil,
+                               checking: checkingInference, receivedStatus: store.inferenceStatus != nil)
+            TextAction(title: "Re-check", icon: "arrow.clockwise", restTint: Theme.Colors.accent, action: probeInference)
+                .disabled(checkingInference)
         }
 
         SettingsGroup(
@@ -246,49 +251,6 @@ struct SettingsView: View {
     }
 
     @ViewBuilder
-    private var ollamaRow: some View {
-        SettingsRow("Status") {
-            let (text, color): (String, Color) = {
-                if checkingOllama { return ("Checking…", Theme.Colors.textTertiary) }
-                guard let health = ollamaHealth else {
-                    return ("Unknown", Theme.Colors.textTertiary)
-                }
-                if health.healthy { return ("Ready", Theme.Colors.success) }
-                if !health.reachable { return ("Not running", Theme.Colors.danger) }
-                return ("Models missing", Theme.Colors.accentAmber)
-            }()
-            HStack(spacing: 8) {
-                Button(action: probeOllama) {
-                    Text("Re-check")
-                        .font(Theme.Font.body(10.5))
-                        .foregroundStyle(Theme.Colors.textPrimary)
-                        .padding(.horizontal, 9).padding(.vertical, 4)
-                        .background(
-                            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                                .fill(Theme.Colors.background)
-                        )
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                                .strokeBorder(Theme.Colors.stroke, lineWidth: 1)
-                        )
-                }
-                .buttonStyle(.plain)
-                .disabled(checkingOllama)
-
-                Text(text)
-                    .font(Theme.Font.meta(10))
-                    .foregroundStyle(color)
-            }
-        }
-        if let health = ollamaHealth, !health.healthy {
-            Text(health.message)
-                .font(Theme.Font.meta(10))
-                .foregroundStyle(Theme.Colors.textTertiary)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-    }
-
-    @ViewBuilder
     private func subhead(_ title: String, help: String? = nil) -> some View {
         HStack(spacing: 5) {
             Text(title)
@@ -348,18 +310,21 @@ struct SettingsView: View {
                     let status: IntegrationStatus = try await api.request("/integrations/mcp/\(target)")
                     connectStatus[target] = status.configured ? .done : .idle
                 }
-                probeOllama()
+                probeInference()
             } catch { errorMessage = error.localizedDescription }
         }
     }
 
-    private func probeOllama() {
-        guard !checkingOllama else { return }
-        checkingOllama = true
+    private func probeInference() {
+        guard !checkingInference else { return }
+        checkingInference = true
         Task {
-            defer { checkingOllama = false }
-            do { ollamaHealth = try await api.request("/diagnostics") }
-            catch { errorMessage = error.localizedDescription }
+            defer { checkingInference = false }
+            do { store.inferenceStatus = try await api.request("/inference/status") }
+            catch {
+                store.inferenceStatus = nil
+                errorMessage = error.localizedDescription
+            }
         }
     }
 

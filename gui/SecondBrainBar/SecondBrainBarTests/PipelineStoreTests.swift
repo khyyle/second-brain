@@ -3,6 +3,44 @@ import XCTest
 
 final class PipelineStoreTests: XCTestCase {
     @MainActor
+    func testInferenceProgressAndFailuresFollowSnapshotsAndClearOnDisconnect() async throws {
+        var phase = "downloading"
+        var online = true
+        let reason = "Model download failed."
+        let harness = try APITestHarness { _ in
+            if !online { return (503, ["detail": "Backend unavailable."]) }
+            return (200, APIFixtures.desktop(workers: [
+                "generation": NSNull(),
+                "embedding": ["model": "nomic-embed-text", "phase": phase,
+                              "completed": 3_000_000_000, "total": 6_000_000_000,
+                              "error": phase == "error" ? reason as Any : NSNull()],
+            ]))
+        }
+        let store = PipelineStore(config: harness.config, api: harness.client)
+        await store.refreshNow()
+        let downloading = try XCTUnwrap(store.inferenceStatus?.worker_statuses["embedding"] ?? nil)
+        XCTAssertEqual(downloading.phase, "downloading")
+        XCTAssertEqual(downloading.completed, 3_000_000_000)
+        XCTAssertEqual(downloading.total, 6_000_000_000)
+        XCTAssertNil(store.inferenceStatus?.worker_statuses["generation"] ?? nil)
+
+        phase = "ready"
+        await store.refreshNow()
+        XCTAssertEqual((store.inferenceStatus?.worker_statuses["embedding"] ?? nil)?.phase, "ready")
+        phase = "error"
+        await store.refreshNow()
+        XCTAssertEqual((store.inferenceStatus?.worker_statuses["embedding"] ?? nil)?.error, reason)
+        XCTAssertTrue(store.connected)
+        XCTAssertNil(store.actionError)
+
+        online = false
+        await store.refreshNow()
+        XCTAssertFalse(store.connected)
+        XCTAssertNil(store.inferenceStatus)
+        XCTAssertEqual(store.connectionError, "Backend unavailable.")
+    }
+
+    @MainActor
     func testBuildRejectionShowsRequestReasonWithoutInventingAFailedJobAndClearsOnRetry() async throws {
         var reject = true
         let reason = "No anthropic credential is available in Keychain. Add it in Settings, then build again."

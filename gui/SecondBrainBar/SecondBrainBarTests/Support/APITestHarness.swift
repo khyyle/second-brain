@@ -61,9 +61,11 @@ final class HTTPStub: URLProtocol {
 }
 
 enum APIFixtures {
-    static func desktop(staged: [String] = [], jobs: [[String: Any]] = []) -> [String: Any] {
+    static func desktop(staged: [String] = [], jobs: [[String: Any]] = [],
+                        workers: [String: Any] = ["generation": NSNull(), "embedding": NSNull()]) -> [String: Any] {
         ["state": state(staged: staged), "jobs": jobs, "imports": [], "triage": [],
-         "grouping_plan": NSNull(), "build_actions": [], "compilation_model": "test-model"]
+         "grouping_plan": NSNull(), "build_actions": [], "compilation_model": "test-model",
+         "inference": ["worker_statuses": workers]]
     }
     static let timestamp = "2026-10-23T12:00:00.000000Z"
     static func job(id: String = "build-1", kind: String = "build", status: String = "running",

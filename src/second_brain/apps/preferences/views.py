@@ -1,4 +1,4 @@
-"""HTTP entry points for preferences, credentials, and local model diagnostics."""
+"""HTTP entry points for preferences and credentials."""
 
 from django.http import HttpRequest
 from ninja import Router
@@ -6,7 +6,6 @@ from ninja import Router
 from second_brain.apps.preferences.schemas import (
     Catalog,
     CredentialStatus,
-    Diagnostics,
     SettingsUpdate,
     WatchedFolder,
 )
@@ -17,7 +16,6 @@ from second_brain.apps.preferences.services import (
 )
 from second_brain.apps.preferences.services import watched_folders as folders
 from second_brain.django_config.schemas import ErrorResponse
-from second_brain.ollama.client import check_ollama
 from second_brain.pipeline_config import Preferences
 
 router = Router(tags=["Preferences"])
@@ -141,29 +139,3 @@ def credential_status(request: HttpRequest, provider: str) -> dict:
         Provider name and configured flag; no credential value is returned.
     """
     return {"provider": provider, "configured": bool(provider_credentials.read_api_key(provider))}
-
-
-@router.get("/diagnostics", response={200: Diagnostics, 400: ErrorResponse, 503: ErrorResponse})
-def diagnostics(request: HttpRequest) -> dict:
-    """Check Ollama availability and required local models.
-
-    Parameters
-    ----------
-    request: HttpRequest
-        Incoming authenticated HTTP request.
-
-    Returns
-    -------
-    dict
-        Ollama reachability, required and missing models, overall health, and status
-        message.
-    """
-    probe = check_ollama(user_settings.get_pipeline_config())
-    return {
-        "healthy": probe.reachable and not probe.missing_models,
-        "reachable": probe.reachable,
-        "host": probe.host,
-        "required_models": list(probe.required_models),
-        "missing_models": list(probe.missing_models),
-        "message": probe.message(),
-    }

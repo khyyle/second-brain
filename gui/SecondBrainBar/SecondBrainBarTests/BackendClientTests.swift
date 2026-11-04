@@ -2,6 +2,24 @@ import XCTest
 @testable import SecondBrainBar
 
 final class BackendClientTests: XCTestCase {
+    func testInferenceStatusDecodesBothWorkersAndKeepsModelFailuresAsData() async throws {
+        let harness = try APITestHarness { request in
+            XCTAssertEqual(request.url?.path, "/v1/inference/status")
+            return (200, ["worker_statuses": [
+                "generation": NSNull(),
+                "embedding": ["model": "nomic-embed-text", "phase": "error", "completed": 0,
+                              "total": 0, "error": "Model download failed."],
+            ]])
+        }
+        let status: InferenceStatusResponse = try await harness.client.request("/inference/status")
+        XCTAssertEqual(Set(status.worker_statuses.keys), ["generation", "embedding"])
+        XCTAssertNil(status.worker_statuses["generation"] ?? nil)
+        let failure = try XCTUnwrap(status.worker_statuses["embedding"] ?? nil)
+        XCTAssertEqual(failure.model, "nomic-embed-text")
+        XCTAssertEqual(failure.phase, "error")
+        XCTAssertEqual(failure.error, "Model download failed.")
+    }
+
     func testRequestsUseLoopbackTokenAndEncodePathsAsQueryValues() async throws {
         let path = "documents/why? x & y#.md"
         let harness = try APITestHarness { request in

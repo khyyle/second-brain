@@ -34,7 +34,7 @@ def create_server(client: BackendClient | None = None) -> FastMCP:
             if name != "semantic_search" or error.status_code != 503:
                 raise
             return (
-                "Ollama isn't responding, so search by meaning is unavailable. Tell the "
+                "The local embedding model is unavailable. Tell the "
                 "user, and use search_wiki for keyword search instead."
             )
 

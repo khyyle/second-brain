@@ -190,11 +190,21 @@ def triage_set(context: click.Context, raw_path: str, decision: str) -> None:
 @json_output
 @click.pass_context
 def doctor(context: click.Context, as_json: bool) -> None:
-    """Check local model dependencies through the backend."""
-    result = request(context, "GET", "/diagnostics")
-    marker = "OK" if result["healthy"] else "FAIL"
-    print_result(result, as_json, f"[{marker}] {result.get('message', '')}".rstrip())
-    if not result["healthy"]:
+    """Report local model status; exit nonzero unless both workers are ready."""
+    result = request(context, "GET", "/inference/status")
+    statuses = result["worker_statuses"]
+    healthy = True
+    lines = []
+    for purpose in ("generation", "embedding"):
+        status = statuses[purpose]
+        ready = status is not None and status["phase"] == "ready"
+        healthy = healthy and ready
+        detail = f"{status['model']}: {status['phase']}" if status else "Not running"
+        if status and status.get("error"):
+            detail += f" — {status['error']}"
+        lines.append(f"[{'OK' if ready else 'FAIL'}] {purpose}: {detail}")
+    print_result(result, as_json, "\n".join(lines))
+    if not healthy:
         context.exit(1)
 
 

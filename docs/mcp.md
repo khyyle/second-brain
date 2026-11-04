@@ -21,7 +21,7 @@ The installer requires the target application to be installed and will error oth
 These are the entry points — how an assistant locates the page or pages a question is about.
 
 - **`search_wiki`** keyword-searches page text, ranked by relevance. It is the right tool for exact terms and names, and it understands query operators: phrases, `AND`/`OR`/`NOT`, and field filters like `domains:finance`.
-- **`semantic_search`** matches by meaning rather than words, so it can find relevant pages even when your wording never appears in them. This layer needs Ollama running; when unavailable, it returns a notice directing the assistant to use `search_wiki` instead.
+- **`semantic_search`** matches by meaning rather than words, so it can find relevant pages even when your wording never appears in them. This layer needs the local embedding model ready; when unavailable, it returns a notice directing the assistant to use `search_wiki` instead.
 - **`list_domains`** and **`read_index`** map what the wiki covers — the domains with their page counts, or a one-shot overview of every domain and its pages. An assistant new to your vault usually starts here.
 - **`list_pages`** filters by domain, tag, or content type (`concept`, `problem`, `project`, `insight`) when there is a known slice to browse rather than a phrase to search.
 - **`read_page`** pulls a single page in full once it has been located.

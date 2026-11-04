@@ -52,11 +52,11 @@ A SQLite manifest records what has been ingested so unchanged files are skipped 
 
 ### Triage
 
-Bulk chat history is noisy. Conversations can be small talk, one-off lookups, or abandoned tangents, so compilation might be wasted on pages worth nothing. During ingestion (before anything reaches the paid compilation step), a small local model (Gemma, via Ollama) reads each new chat and labels it kept, review, or skip.
+Bulk chat history is noisy. Conversations can be small talk, one-off lookups, or abandoned tangents, so compilation might be wasted on pages worth nothing. During ingestion (before anything reaches the paid compilation step), a small local model (Gemma) reads each new chat and labels it kept, review, or skip.
 
 By default, only imported ChatGPT conversations are triaged. Other documents are staged immediately after parsing. Chats marked review are copied into `~/second-brain/inbox/` and wait for a Keep or Skip decision.
 
-When triage is enabled, chats awaiting a decision are left out of builds. If Ollama stops responding, triage stops and the remaining chats wait to be triaged on the next run, and a chat the model can't score goes to review for you to decide.
+When triage is enabled, chats awaiting a decision are left out of builds. If local inference stops responding, triage stops and the remaining chats wait to be triaged on the next run, and a chat the model can't score goes to review for you to decide.
 
 ### Compile
 
@@ -90,7 +90,7 @@ At the end of the build attempt, the backend rebuilds the index, gap list, domai
 
 ### Access
 
-The compiled wiki is stored as plain Markdown under `~/second-brain/wiki/`, so it opens directly as an Obsidian vault. An MCP server exposes it to Claude Desktop, ChatGPT Desktop, and Cursor, always offering keyword search and adding embedding-based semantic search when Ollama is available.
+The compiled wiki is stored as plain Markdown under `~/second-brain/wiki/`, so it opens directly as an Obsidian vault. An MCP server exposes it to Claude Desktop, ChatGPT Desktop, and Cursor, always offering keyword search and adding embedding-based semantic search when the local embedding model is ready.
 
 ## What runs locally versus in the cloud
 
@@ -98,8 +98,8 @@ The compiled wiki is stored as plain Markdown under `~/second-brain/wiki/`, so i
 | --- | --- |
 | PDF layout and typed-page parsing (Docling) | Local, across MLX and Apple MPS |
 | Handwriting and scanned-page OCR (Chandra) | Local, on MLX backend on Apple Silicon |
-| Triage classification (Gemma) | Local, via Ollama |
-| Semantic-search and clustering embeddings | Local, via Ollama |
+| Triage classification (Gemma) | Local, via llama.cpp |
+| Semantic-search and clustering embeddings | Local, via llama.cpp |
 | Grouping chats into clusters | Local (threshold or HDBSCAN over embeddings) |
 | Wiki synthesis (the build step) | Cloud via the configured provider (Anthropic or DeepSeek) |
 

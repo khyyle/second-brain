@@ -26,4 +26,3 @@ struct ProviderInfo: Decodable, Identifiable {
 struct ModelInfo: Decodable, Identifiable { let id: String }
 struct CredentialStatus: Decodable { let configured: Bool }
 struct IntegrationStatus: Decodable { let configured: Bool; let message: String }
-struct OllamaHealth: Decodable { let healthy: Bool; let reachable: Bool; let message: String }

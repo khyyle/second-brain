@@ -14,6 +14,7 @@ final class PipelineStore: ObservableObject {
     @Published private(set) var groupingPlan: ClusterPlan?
     @Published private(set) var buildActions: [BuildLogEntry] = []
     @Published private(set) var compilationModel = ""
+    @Published var inferenceStatus: InferenceStatusResponse?
     @Published private(set) var connected = false
     @Published private(set) var connectionError: String?
     @Published var actionError: String?
@@ -47,6 +48,7 @@ final class PipelineStore: ObservableObject {
                 } catch {
                     guard !Task.isCancelled else { return }
                     self?.connected = false
+                    self?.inferenceStatus = nil
                     self?.connectionError = error.localizedDescription
                 }
                 do { try await Task.sleep(nanoseconds: retrySeconds * 1_000_000_000) }
@@ -88,6 +90,7 @@ final class PipelineStore: ObservableObject {
             apply(try await api.request("/desktop-state"))
         } catch {
             connected = false
+            inferenceStatus = nil
             connectionError = error.localizedDescription
         }
     }
@@ -105,6 +108,7 @@ final class PipelineStore: ObservableObject {
         groupingPlan = snapshot.grouping_plan
         buildActions = snapshot.build_actions.compactMap(\.entry)
         compilationModel = snapshot.compilation_model
+        inferenceStatus = snapshot.inference
         runRecord = RunRecord(
             ingest: jobs.first { $0.lane == "ingest" && !$0.isActive }?.stageRun,
             compile: jobs.first { $0.lane == "build" && !$0.isActive && $0.kind != "index" }?.stageRun)

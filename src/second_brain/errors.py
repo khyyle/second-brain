@@ -6,7 +6,7 @@ class SecondBrainError(Exception):
     A failure with a plain sentence the user can act on.
 
     Raise a subclass of this when correct code can still hit the failure (a bad file,
-    Ollama down, an exhausted account) and the raising code can say what went
+    local inference unavailable, an exhausted account) and the raising code can say what went
     wrong.
 
     Unexpected failures should keep built-in exceptions so API/worker handlers log

@@ -1,10 +1,13 @@
 """Desktop composition and the authenticated streaming contract."""
 
 import asyncio
+import json
+import os
 
 import pytest
 from watchdog.events import FileModifiedEvent, FileMovedEvent, FileOpenedEvent
 
+from second_brain.apps.inference.services.worker_status import WorkerStatus, write_worker_status
 from second_brain.apps.library.services import desktop_events
 
 
@@ -31,6 +34,7 @@ def test_snapshot_includes_both_workers_and_latest_outcomes(api_client, job_fact
     assert body["imports"] == body["triage"] == body["build_actions"] == []
     assert body["grouping_plan"] is None
     assert body["compilation_model"]
+    assert body["inference"] == {"worker_statuses": {"generation": None, "embedding": None}}
 
 
 async def test_event_stream_requires_authentication(async_client):
@@ -44,11 +48,51 @@ def test_notifications_cover_worker_writes_and_atomic_renames(tmp_path):
     for name in ("manifest.db-wal", "raw/documents/a.md", "wiki/topics/a.md"):
         handler.on_any_event(FileModifiedEvent(str(tmp_path / name)))
     handler.on_any_event(FileMovedEvent(str(tmp_path / ".tmp"), str(tmp_path / "config.yaml")))
-    assert len(changes) == 4
-    for name in ("manifest.db-shm", ".backend/locks/worker-build.lock", "wiki/.git/index"):
+    for purpose in ("generation", "embedding"):
+        handler.on_any_event(
+            FileMovedEvent(
+                str(tmp_path / ".backend/.tmp"),
+                str(tmp_path / f".backend/inference-{purpose}.json"),
+            )
+        )
+    assert len(changes) == 6
+    for name in (
+        "manifest.db-shm",
+        ".backend/locks/worker-build.lock",
+        "wiki/.git/index",
+        ".backend/inference-token",
+        ".backend/inference-generation.json.tmp",
+    ):
         handler.on_any_event(FileModifiedEvent(str(tmp_path / name)))
     handler.on_any_event(FileOpenedEvent(str(tmp_path / "raw/documents/a.md")))
-    assert len(changes) == 4
+    assert len(changes) == 6
+
+
+def test_inference_changes_update_snapshots_and_match_status_endpoint(api_client, config):
+    directory = config.data_dir / ".backend"
+    directory.mkdir(exist_ok=True)
+    status = WorkerStatus(
+        purpose="embedding",
+        model="nomic-embed-text",
+        pid=os.getpid(),
+        phase="downloading",
+        completed=100,
+        total=1000,
+    )
+    _, missing_signature = desktop_events.read_snapshot()
+    write_worker_status(directory, status)
+    payload, downloading_signature = desktop_events.read_snapshot()
+    assert downloading_signature != missing_signature
+    assert json.loads(payload)["inference"] == api_client.get("/v1/inference/status").json()
+
+    status.phase = "error"
+    status.error = "Model download failed."
+    write_worker_status(directory, status)
+    payload, failed_signature = desktop_events.read_snapshot()
+    assert failed_signature != downloading_signature
+    assert (
+        json.loads(payload)["inference"]["worker_statuses"]["embedding"]["error"] == status.error
+    )
 
 
 @pytest.fixture

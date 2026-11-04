@@ -151,3 +151,19 @@ def read_worker_status(directory: Path, purpose: ModelPurpose) -> WorkerStatus |
         return status
     except (OSError, ValidationError):
         return None
+
+
+def read_worker_statuses(directory: Path) -> dict[ModelPurpose, WorkerStatus | None]:
+    """Read the status of every configured inference worker.
+
+    Parameters
+    ----------
+    directory: Path
+        Vault backend directory containing the workers' status files.
+
+    Returns
+    -------
+    dict[ModelPurpose, WorkerStatus | None]
+        Live status or the last failure for each purpose; None for unavailable workers.
+    """
+    return {purpose: read_worker_status(directory, purpose) for purpose in get_args(ModelPurpose)}

@@ -19,6 +19,7 @@ final class LiveBackendTests: XCTestCase {
         defer { subscription.cancel() }
         await fulfillment(of: [initial], timeout: 10)
         XCTAssertTrue(store.connected, store.connectionError ?? "")
+        XCTAssertEqual(Set(try XCTUnwrap(store.inferenceStatus).worker_statuses.keys), ["generation", "embedding"])
 
         let added = expectation(description: "External vault write pushed to Swift")
         let updates = store.$state.compactMap { $0 }
@@ -67,13 +68,15 @@ final class LiveBackendTests: XCTestCase {
         let store = PipelineStore(config: config, api: api)
         await store.refreshNow()
         XCTAssertTrue(store.connected, store.connectionError ?? "")
+        XCTAssertEqual(Set(try XCTUnwrap(store.inferenceStatus).worker_statuses.keys), ["generation", "embedding"])
         XCTAssertEqual(store.stagedForBuild.count, 1)
         let rawPath = try XCTUnwrap(store.stagedForBuild.first?.id)
         let dryRun: JobResponse = try await api.request("/builds", method: "POST", body: ["dry_run": true])
         try await waitForSuccess(dryRun, api: api)
         let _: [BuildActionResponse] = try await api.request("/builds/actions")
         let _: ClusterPlan? = try await api.request("/grouping-plan")
-        let _: OllamaHealth = try await api.request("/diagnostics")
+        let inference: InferenceStatusResponse = try await api.request("/inference/status")
+        XCTAssertEqual(Set(inference.worker_statuses.keys), ["generation", "embedding"])
         let _: [DomainInfo] = try await api.request("/domains")
         let _: WikiHealthResponse = try await api.request("/wiki/health")
         let settings: PreferencesResponse = try await api.request("/settings")

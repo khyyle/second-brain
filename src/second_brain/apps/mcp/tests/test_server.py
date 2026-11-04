@@ -19,15 +19,17 @@ def backend_client() -> Mock:
     return Mock(spec=BackendClient)
 
 
-def test_mcp_semantic_search_notifies_when_ollama_is_down(backend_client: Mock) -> None:
-    backend_client.request.side_effect = BackendRequestError(503, "Ollama is unavailable.")
+def test_mcp_semantic_search_notifies_when_inference_is_unavailable(backend_client: Mock) -> None:
+    backend_client.request.side_effect = BackendRequestError(
+        503, "Local inference is unavailable."
+    )
 
     _, structured = asyncio.run(
         create_server(backend_client).call_tool("semantic_search", {"query": "gradient"})
     )
 
     assert structured["result"] == (
-        "Ollama isn't responding, so search by meaning is unavailable. Tell the "
+        "The local embedding model is unavailable. Tell the "
         "user, and use search_wiki for keyword search instead."
     )
 

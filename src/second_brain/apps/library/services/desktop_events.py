@@ -51,8 +51,8 @@ class VaultChangeHandler(FileSystemEventHandler):
         Returns
         -------
         bool
-            True for source, import, wiki, database, or settings paths inside the vault. Git
-            internals and unrelated paths return False.
+            True for source, import, wiki, database, settings, or inference status paths
+            inside the vault. Git internals and unrelated paths return False.
         """
         try:
             parts = Path(path).relative_to(self.vault).parts
@@ -62,6 +62,11 @@ class VaultChangeHandler(FileSystemEventHandler):
             return False
         if parts[0] in {"raw", "drops", "wiki"}:
             return True
+        if parts[0] == ".backend":
+            return len(parts) == 2 and parts[1] in {
+                "inference-generation.json",
+                "inference-embedding.json",
+            }
         return len(parts) == 1 and parts[0] in {
             "manifest.db",
             "manifest.db-wal",

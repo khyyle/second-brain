@@ -9,6 +9,7 @@ struct DesktopSnapshot: Decodable {
     let grouping_plan: ClusterPlan?
     let build_actions: [BuildActionResponse]
     let compilation_model: String
+    let inference: InferenceStatusResponse
 }
 
 /// SSE framing is independent of TCP chunks; a blank line completes an event.

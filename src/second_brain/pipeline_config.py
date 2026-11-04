@@ -188,26 +188,23 @@ class ClusteringConfig(BaseModel):
 
 class SearchConfig(BaseModel):
     """
-    Embedding model and Ollama connection details for semantic search.
+    Embedding model settings for semantic search.
 
     Fields:
     -------
     embedding_model: str, default="nomic-embed-text"
-        Ollama model used to embed wiki pages and queries.
+        Catalog model used to embed wiki pages and queries.
     embedding_dimensions: int, default=768
         Dimensionality of the embedding vectors.
-    ollama_host: str, default="http://localhost:11434"
-        Base URL of the local Ollama server.
     semantic_enabled: bool, default=True
         When True the MCP exposes a semantic_search tool and the index
-        builds embeddings; both degrade gracefully if Ollama is down.
+        builds embeddings; keyword search remains available without local inference.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     embedding_model: str = "nomic-embed-text"
     embedding_dimensions: int = Field(default=768, gt=0)
-    ollama_host: str = "http://localhost:11434"
     semantic_enabled: bool = True
 
 
@@ -226,9 +223,7 @@ class TriageConfig(BaseModel):
     enabled: bool, default=True
         Master switch for the triage stage.
     model: str, default="gemma4:12b"
-        Ollama model used to classify sources.
-    ollama_host: str, default="http://localhost:11434"
-        Base URL of the local Ollama server.
+        Catalog model used to classify sources.
     min_word_count: int, default=300
         Free heuristic floor; shorter sources are skipped without a model call.
     worthwhile_threshold: float, default=0.6
@@ -245,7 +240,6 @@ class TriageConfig(BaseModel):
 
     enabled: bool = True
     model: str = "gemma4:12b"
-    ollama_host: str = "http://localhost:11434"
     min_word_count: int = Field(default=300, ge=0)
     worthwhile_threshold: float = Field(default=0.6, ge=0.0, le=1.0)
     profile: str = "balanced"
@@ -270,6 +264,19 @@ class Preferences(BaseModel):
     clustering: ClusteringConfig = Field(default_factory=ClusteringConfig)
     search: SearchConfig = Field(default_factory=SearchConfig)
     triage: TriageConfig = Field(default_factory=TriageConfig)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _remove_obsolete_hosts(cls, value: object) -> object:
+        # Older vault settings and job snapshots can still contain Ollama addresses.
+        if not isinstance(value, dict):
+            return value
+        result = value.copy()
+        for section in ("search", "triage"):
+            if isinstance(result.get(section), dict):
+                result[section] = result[section].copy()
+                result[section].pop("ollama_host", None)
+        return result
 
 
 class PipelineConfig(Preferences):

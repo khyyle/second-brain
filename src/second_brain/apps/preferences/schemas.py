@@ -66,12 +66,3 @@ class Catalog(Schema):
     file_types: list[str]
     triage_profiles: list[str]
     clustering_algorithms: list[str]
-
-
-class Diagnostics(Schema):
-    healthy: bool
-    reachable: bool
-    host: str
-    required_models: list[str]
-    missing_models: list[str]
-    message: str

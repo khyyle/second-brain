@@ -3,7 +3,7 @@
 #
 # Installs Python dependencies, builds and installs the menu bar app into
 # /Applications, creates the data directories, records the backend launcher path
-# for the app, and pulls the local models.
+# for the app, and prepares the OCR models. Inference models download on first launch.
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -28,16 +28,10 @@ if ! command -v swift >/dev/null 2>&1; then
     exit 1
 fi
 
-if ! command -v ollama >/dev/null 2>&1; then
-    echo "Ollama is required but not installed (it runs the local triage and" >&2
-    echo "embedding models). Install it from https://ollama.com, then re-run." >&2
-    exit 1
-fi
-
-echo "[1/6] Installing Python dependencies..."
+echo "[1/5] Installing Python dependencies..."
 uv sync
 
-echo "[2/6] Creating data directories..."
+echo "[2/5] Creating data directories..."
 uv run python - <<'PY'
 import os
 
@@ -51,28 +45,18 @@ from second_brain.apps.preferences.services.user_settings import get_pipeline_co
 get_pipeline_config().ensure_directories()
 PY
 
-echo "[3/6] Pulling triage (gemma4:12b) and embedding models (nomic-embed-text) from Ollama..."
-# Pulling needs the daemon running; surface that distinctly from "not installed".
-if ! curl -s --max-time 5 http://localhost:11434/api/tags >/dev/null 2>&1; then
-    echo "Ollama is installed but not running. Start it (open the Ollama app or" >&2
-    echo "run 'ollama serve'), then re-run this installer." >&2
-    exit 1
-fi
-ollama pull gemma4:12b
-ollama pull nomic-embed-text
-
-echo "[4/6] Downloading Docling's layout, table, and formula (CodeFormulaV2) models..."
+echo "[3/5] Downloading Docling's layout, table, and formula (CodeFormulaV2) models..."
 uv run python -c "from second_brain.apps.ingestion.services.parsing.docling_parser import DoclingParser; DoclingParser().load_models()" \
     || echo "  Skipped — models will download on the first typed PDF."
 
-echo "[5/6] Preparing local OCR model (Chandra 2, 4-bit MLX)..."
+echo "[4/5] Preparing local OCR model (Chandra 2, 4-bit MLX)..."
 # Converts Chandra 2 weights to a ~2.9 GB 4-bit MLX model. First run on a
 # fresh machine downloads the source weights; otherwise it reuses the cache.
 # Falls back to converting lazily on the first handwritten ingest.
 uv run python -c "from second_brain.apps.ingestion.services.parsing.chandra_parser import ensure_mlx_model; ensure_mlx_model('4bit')" \
     || echo "  Skipped — will convert on the first handwritten ingest."
 
-echo "[6/6] Building and installing the menu bar app..."
+echo "[5/5] Building and installing the menu bar app..."
 ( cd gui/SecondBrainBar && ./bundle.sh >/dev/null )
 rm -rf "/Applications/$APP"
 cp -r "gui/SecondBrainBar/$APP" "/Applications/$APP"

@@ -39,7 +39,6 @@ See [Architecture](docs/architecture.md) for how the pipeline and storage work u
 - Around 10 GB of free disk space for dependencies and local models.
 - [uv](https://github.com/astral-sh/uv) package manager.
 - Xcode Command Line Tools (`xcode-select --install`).
-- [Ollama](https://ollama.com) installed and running.
 
 ### Install
 
@@ -49,9 +48,9 @@ From the repository root:
 ./install.sh
 ```
 
-This installs Python dependencies, builds the menu bar app into `/Applications`, sets up data directories under `~/second-brain/`, and downloads the required local models (`gemma4:12b` and `nomic-embed-text`).
+This installs Python dependencies, builds the menu bar app into `/Applications`, sets up data directories under `~/second-brain/`, and prepares the OCR models. On first launch, the backend downloads and starts the triage and embedding models (`gemma4:12b` and `nomic-embed-text`).
 
-You can verify Ollama status via the app's settings. Alternatively, to verify from a terminal:
+You can check local model status in the app's settings. Alternatively, to verify from a terminal:
 
 ```bash
 uv run second-brain doctor

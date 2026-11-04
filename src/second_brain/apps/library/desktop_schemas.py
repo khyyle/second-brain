@@ -3,6 +3,7 @@
 from ninja import Schema
 
 from second_brain.apps.compilation.schemas import BuildAction, GroupingPlan
+from second_brain.apps.inference.schemas import InferenceStatusOut
 from second_brain.apps.ingestion.schemas import ImportFile
 from second_brain.apps.jobs.schemas import JobProgress
 from second_brain.apps.library.schemas import LibraryState, TriageOut
@@ -16,3 +17,4 @@ class DesktopState(Schema):
     grouping_plan: GroupingPlan | None
     build_actions: list[BuildAction]
     compilation_model: str
+    inference: InferenceStatusOut

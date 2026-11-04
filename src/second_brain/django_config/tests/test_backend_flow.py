@@ -260,23 +260,6 @@ def test_build_worker_commits_captured_version_and_leaves_newer_version_staged(
     assert api_client.get("/v1/wiki/history").json()
 
 
-def test_diagnostics_uses_runtime_paths_and_returns_actionable_model_status(
-    api_client, monkeypatch
-):
-    from second_brain.ollama.client import OllamaStatus
-
-    monkeypatch.setattr(
-        "second_brain.apps.preferences.views.check_ollama",
-        lambda config: OllamaStatus(
-            "http://localhost:11434", True, ("test-model",), ("test-model",)
-        ),
-    )
-    response = api_client.get("/v1/diagnostics")
-    assert response.status_code == 200
-    assert response.json()["healthy"] is False
-    assert "ollama pull test-model" in response.json()["message"]
-
-
 def test_link_repair_api_passes_detected_renames_and_honors_dry_run(
     api_client, config, monkeypatch
 ):
