@@ -35,8 +35,7 @@ final class BackendClient {
     func request<T: Decodable>(_ path: String, method: String = "GET",
                                query: [String: String] = [:], body: [String: Any]? = nil) async throws -> T {
         let data = try await send(path, method: method, query: query, body: body)
-        do { return try JSONDecoder().decode(T.self, from: data) }
-        catch { throw BackendError(message: "The backend returned an incompatible response. Update and restart the app and backend together.") }
+        return try decodeResponse(T.self, from: data, path: path)
     }
 
     @discardableResult
@@ -86,7 +85,8 @@ final class BackendClient {
                 lineBytes.removeAll(keepingCapacity: true)
                 guard let event = parser.consume(line) else { continue }
                 switch event.name {
-                case "snapshot": receive(try JSONDecoder().decode(DesktopSnapshot.self, from: event.data))
+                case "snapshot":
+                    receive(try decodeResponse(DesktopSnapshot.self, from: event.data, path: "/events"))
                 case "unavailable":
                     let details = try? JSONDecoder().decode([String: String].self, from: event.data)
                     throw BackendError(message: details?["detail"] ?? "The backend couldn't refresh the library.")
@@ -97,6 +97,18 @@ final class BackendClient {
             bytes.task.cancel()
         }
         throw BackendError(message: "Backend updates disconnected. Reconnecting…")
+    }
+
+    private func decodeResponse<T: Decodable>(_ type: T.Type, from data: Data, path: String) throws -> T {
+        do { return try JSONDecoder().decode(type, from: data) }
+        catch {
+            var detail = ""
+            if case DecodingError.keyNotFound(let key, let context) = error {
+                let field = (context.codingPath + [key]).map(\.stringValue).joined(separator: ".")
+                detail = " Missing field: \(field)."
+            }
+            throw BackendError(message: "The backend returned an incompatible response for \(path).\(detail) Update and restart the app and backend together.")
+        }
     }
 
     private func authorizedRequest(_ path: String, query: [String: String] = [:]) throws -> URLRequest {

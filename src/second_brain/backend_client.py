@@ -20,11 +20,12 @@ class BackendRequestError(RuntimeError):
 class BackendClient:
     def __init__(self, vault: Path | None = None, port: int | None = None) -> None:
         load_environment()
-        self.vault = (
-            (vault or Path(os.environ.get("SECOND_BRAIN_VAULT", "~/second-brain")))
-            .expanduser()
-            .resolve()
+        vault_path = (
+            vault if vault is not None else os.environ.get("SECOND_BRAIN_VAULT", "~/second-brain")
         )
+        if not str(vault_path).strip():
+            raise ValueError("SECOND_BRAIN_VAULT must not be empty.")
+        self.vault = Path(vault_path).expanduser().resolve()
         self.port = port if port is not None else int(os.environ.get("SECOND_BRAIN_PORT", "8000"))
 
     def request(

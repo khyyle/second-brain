@@ -79,7 +79,9 @@ def main() -> None:
     signal.signal(signal.SIGTERM, stop)
     signal.signal(signal.SIGINT, stop)
     try:
-        if not ready():
+        if ready():
+            print(f"Reusing backend: http://127.0.0.1:{client.port}/v1", flush=True)
+        else:
             backend = subprocess.Popen([sys.executable, str(ROOT / "start.py")], env=environment)
             deadline = time.monotonic() + 30
             while not ready():

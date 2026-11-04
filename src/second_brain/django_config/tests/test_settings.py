@@ -2,6 +2,7 @@
 
 import json
 import os
+import runpy
 import subprocess
 import sys
 from pathlib import Path
@@ -217,3 +218,28 @@ def test_invalid_configuration_fails_before_touching_storage(
     assert result.returncode != 0
     assert message in result.stderr
     assert not vault.exists()
+
+
+@pytest.mark.parametrize("vault", ["", "   "])
+def test_dev_rejects_empty_vault_before_building(tmp_path, monkeypatch, vault):
+    dev = Path(__file__).resolve().parents[4] / "dev.py"
+    main = runpy.run_path(str(dev))["main"]
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("PYTHON_DOTENV_DISABLED", "1")
+    monkeypatch.setenv("SECOND_BRAIN_VAULT", vault)
+
+    def build(*args, **kwargs):
+        pytest.fail("Invalid startup settings must fail before building or launching anything")
+
+    monkeypatch.setattr(subprocess, "run", build)
+    with pytest.raises(ValueError, match="SECOND_BRAIN_VAULT must not be empty"):
+        main()
+    assert not list(tmp_path.iterdir())
+
+
+def test_explicit_client_vault_overrides_an_empty_environment_value(tmp_path, monkeypatch):
+    from second_brain.backend_client import BackendClient
+
+    monkeypatch.setenv("PYTHON_DOTENV_DISABLED", "1")
+    monkeypatch.setenv("SECOND_BRAIN_VAULT", "")
+    assert BackendClient(vault=tmp_path).vault == tmp_path.resolve()

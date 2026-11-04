@@ -58,6 +58,24 @@ final class BackendClientTests: XCTestCase {
         catch { XCTAssertTrue(error.localizedDescription.contains("incompatible response")) }
     }
 
+    func testMissingSnapshotFieldsNameTheEndpointFieldAndRestartAction() async throws {
+        for field in ["inference", "inference.worker_statuses"] {
+            let harness = try APITestHarness { _ in
+                var snapshot = APIFixtures.desktop()
+                if field == "inference" { snapshot.removeValue(forKey: "inference") }
+                else { snapshot["inference"] = [:] as [String: Any] }
+                return (200, snapshot)
+            }
+            do {
+                let _: DesktopSnapshot = try await harness.client.request("/desktop-state")
+                XCTFail("Expected an incompatible response")
+            } catch {
+                XCTAssertEqual(error.localizedDescription,
+                    "The backend returned an incompatible response for /desktop-state. Missing field: \(field). Update and restart the app and backend together.")
+            }
+        }
+    }
+
     func testStartupEnvironmentSelectsTheSameVaultAndPortAsPython() {
         let config = AppConfig.fromEnvironment(["SECOND_BRAIN_VAULT": "/tmp/example-vault", "SECOND_BRAIN_PORT": "9876"])
         XCTAssertEqual(config.vaultRoot.path, "/tmp/example-vault")
