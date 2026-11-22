@@ -1,10 +1,26 @@
 """Detect stable wiki changes and queue search-index refreshes."""
 
-from second_brain.apps.jobs.models import Job
-from second_brain.apps.jobs.services.job_queue import enqueue_job
+from pathlib import Path
+
+from second_brain.apps.jobs.services.automatic_jobs import schedule_for_file_change
 from second_brain.pipeline_config import PipelineConfig
 
+# (path, last_modified_time, size_in_bytes)
 WikiFingerprint = tuple[tuple[str, int, int], ...]
+
+
+def wiki_fingerprint(wiki_dir: Path) -> WikiFingerprint:
+    """Return sorted paths, modification times in nanoseconds, and sizes of wiki Markdown."""
+    files = []
+    for path in wiki_dir.rglob("*.md"):
+        if path.is_symlink() or ".git" in path.parts:
+            continue
+        try:
+            stat = path.stat()
+        except FileNotFoundError:
+            continue
+        files.append((str(path), stat.st_mtime_ns, stat.st_size))
+    return tuple(sorted(files))
 
 
 class WikiIndexWatcher:
@@ -15,7 +31,7 @@ class WikiIndexWatcher:
         self._scheduled: WikiFingerprint | None = None
 
     def scan(self, config: PipelineConfig) -> None:
-        """Queue an index refresh after two matching scans of changed wiki files.
+        """Queue an index pass for stable wiki edits or a missing search database.
 
         Parameters
         ----------
@@ -28,19 +44,14 @@ class WikiIndexWatcher:
             Records the observed version. Changes waiting on an active index job
             remain eligible on a later scan, including deletion of the last page.
         """
-        version = tuple(
-            sorted(
-                (str(path), path.stat().st_mtime_ns, path.stat().st_size)
-                for path in config.wiki_dir.rglob("*.md")
-                if not path.is_symlink() and ".git" not in path.parts
+        version = wiki_fingerprint(config.wiki_dir)
+        index_exists = config.search_db_path.is_file()
+        if (version or index_exists) and version == self._previous and version != self._scheduled:
+            # Job history survives removal of search.db. Rebuild it even while offline,
+            # but keep the wiki version so creating the DB isn't another change.
+            outcome = schedule_for_file_change(
+                "index", observed_inputs=version, missing_index=not index_exists
             )
-        )
-        if (
-            (version or config.search_db_path.exists())
-            and version == self._previous
-            and version != self._scheduled
-        ):
-            if not Job.objects.filter(kind="index", status__in=["queued", "running"]).exists():
-                enqueue_job("index", {})
+            if outcome != "busy":
                 self._scheduled = version
         self._previous = version

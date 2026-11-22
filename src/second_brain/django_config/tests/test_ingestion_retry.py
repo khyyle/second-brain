@@ -2,18 +2,25 @@
 
 import json
 from pathlib import Path
+from unittest.mock import Mock
 
 import pytest
 
 from second_brain.apps.inference.errors import InferenceUnavailableError
 from second_brain.apps.ingestion.services.parsing import text_handler
 from second_brain.apps.ingestion.services.source_manifest import Manifest
+from second_brain.apps.ingestion.services.source_watching import SourceWatcher
 from second_brain.apps.jobs.models import Job
 from second_brain.apps.jobs.services import job_queue
 from second_brain.apps.jobs.worker import run_attempt
 from second_brain.apps.library.models import Source
 from second_brain.apps.library.models import TriageDecision as StoredTriageDecision
+from second_brain.apps.preferences.services.user_settings import (
+    get_pipeline_config,
+    update_preferences,
+)
 from second_brain.errors import SecondBrainError
+from second_brain.pipeline_config import PipelineConfig
 
 
 def _run_next_ingestion() -> Job:
@@ -191,3 +198,40 @@ def test_triage_retry_does_not_reparse_completed_export(api_client, config, tmp_
     assert retried.result == {"completed": 0, "failed": 0}
     assert StoredTriageDecision.objects.get().decision == "worthwhile"
     assert len(attempts) == 2
+
+
+def test_consuming_a_drop_does_not_retry_a_timeout_until_a_new_input_arrives(
+    config: PipelineConfig,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    watched = tmp_path / "watched"
+    watched.mkdir()
+    (watched / "original.txt").write_text("Persistent watched source")
+    update_preferences({"sources": {"notes": {"path": str(watched), "file_types": ["txt"]}}})
+    config = get_pipeline_config()
+    drop = config.drops_dir / "documents" / "one.txt"
+    drop.write_text("Consumed by the first pass")
+    watcher = SourceWatcher()
+    watcher.scan(config)
+    watcher.scan(config)
+    chat = config.raw_dir / "chatgpt" / "long.md"
+    chat.parent.mkdir()
+    chat.write_text("triage " * 500)
+
+    monkeypatch.setattr(
+        "second_brain.apps.ingestion.services.triage.classification.generate_json",
+        Mock(side_effect=InferenceUnavailableError("Local inference timed out.")),
+    )
+    first = _run_next_ingestion()
+    assert first.status == "failed" and first.error == "Local inference timed out."
+    assert not drop.exists()
+    for current in (watcher, SourceWatcher()):
+        current.scan(config)
+        current.scan(config)
+        assert not Job.objects.filter(status="queued").exists()
+
+    drop.write_text("New input at the same path")
+    watcher.scan(config)
+    watcher.scan(config)
+    assert Job.objects.filter(kind="ingest", status="queued").count() == 1

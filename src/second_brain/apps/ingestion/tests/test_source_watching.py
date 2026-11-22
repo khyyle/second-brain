@@ -88,7 +88,7 @@ def test_fingerprint_notices_changed_inputs(config: PipelineConfig, tmp_path: Pa
     preferences = config.model_copy(
         update={"sources": {"notes": SourceConfig(path=watched, file_types=("md",))}}
     )
-    assert source_fingerprint(preferences) == ()
+    assert source_fingerprint(preferences) == ((), ())
     note = watched / "note.md"
     note.write_text("first")
     before = source_fingerprint(preferences)
@@ -106,4 +106,4 @@ def test_fingerprint_ignores_hidden_unsupported_and_symlinked_files(
     hidden = documents / ".hidden"
     hidden.mkdir()
     (hidden / "nested.md").write_text("hidden directory")
-    assert source_fingerprint(config) == ()
+    assert source_fingerprint(config) == ((), ())

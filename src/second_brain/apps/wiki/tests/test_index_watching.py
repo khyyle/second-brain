@@ -2,10 +2,15 @@
 
 from collections.abc import Callable
 
+import pytest
+
 from second_brain.apps.jobs.models import Job
 from second_brain.apps.jobs.services.job_execution import execute_job
+from second_brain.apps.jobs.services.job_queue import claim_next_job
+from second_brain.apps.jobs.worker import run_attempt
 from second_brain.apps.wiki.services.index_watching import WikiIndexWatcher
 from second_brain.apps.wiki.services.search_index import SearchIndex
+from second_brain.apps.wiki.services.wiki_queries import refresh_index
 from second_brain.pipeline_config import PipelineConfig
 
 
@@ -63,8 +68,44 @@ def test_wiki_must_be_unchanged_between_scans(config: PipelineConfig) -> None:
     assert Job.objects.filter(kind="index").count() == 1
 
 
+@pytest.mark.parametrize("already_claimed", [False, True], ids=["queued", "running"])
+def test_restart_with_active_first_index_does_not_repeat_it(
+    config: PipelineConfig, already_claimed: bool
+) -> None:
+    (config.wiki_dir / "index.md").write_text("Wiki navigation")
+    watcher = WikiIndexWatcher()
+    watcher.scan(config)
+    watcher.scan(config)
+    job = claim_next_job("build") if already_claimed else None
+
+    restarted = WikiIndexWatcher()
+    restarted.scan(config)
+    restarted.scan(config)
+    job = job or claim_next_job("build")
+    assert job is not None
+    run_attempt(job)
+    restarted.scan(config)
+    assert Job.objects.get(kind="index").status == Job.Status.SUCCEEDED
+
+
 def test_empty_wiki_without_an_index_does_not_queue_work(config: PipelineConfig) -> None:
     watcher = WikiIndexWatcher()
     watcher.scan(config)
     watcher.scan(config)
     assert not Job.objects.exists()
+
+
+def test_edit_during_indexing_schedules_one_successor(config: PipelineConfig) -> None:
+    page = config.wiki_dir / "concepts" / "note.md"
+    page.write_text("First version")
+    watcher = WikiIndexWatcher()
+    watcher.scan(config)
+    watcher.scan(config)
+    assert claim_next_job("build") is not None
+
+    page.write_text("Second version with an edit")
+    refresh_index(config)
+    watcher.scan(config)
+    watcher.scan(config)
+    refresh_index(config)
+    assert Job.objects.filter(kind="index", status=Job.Status.QUEUED).count() == 1

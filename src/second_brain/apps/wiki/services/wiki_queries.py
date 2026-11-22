@@ -3,10 +3,12 @@
 from dataclasses import asdict
 from pathlib import Path
 
+from second_brain.apps.jobs.services.automatic_jobs import schedule_for_file_change
 from second_brain.apps.library.services.source_files import checked_path
 from second_brain.apps.preferences.services.user_settings import get_pipeline_config
 from second_brain.apps.wiki.services import health, wiki_structure
 from second_brain.apps.wiki.services.duplicate_dismissals import DuplicateStore
+from second_brain.apps.wiki.services.index_watching import wiki_fingerprint
 from second_brain.apps.wiki.services.search_index import SearchIndex
 from second_brain.django_config.errors import NotFoundError, ServiceError
 from second_brain.django_config.paths import get_vault_paths
@@ -141,9 +143,6 @@ def refresh_index(config: PipelineConfig) -> None:
     -------
     None
     """
+    version = wiki_fingerprint(config.wiki_dir)
     SearchIndex(config.search_db_path, config.search).sync_from_wiki(config.wiki_dir)
-    from second_brain.apps.jobs.models import Job
-    from second_brain.apps.jobs.services.job_queue import enqueue_job
-
-    if not Job.objects.filter(kind="index", status="queued").exists():
-        enqueue_job("index", {})
+    schedule_for_file_change("index", observed_inputs=version, queue_after_running=True)

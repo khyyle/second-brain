@@ -1,14 +1,13 @@
 """Detect stable source changes and queue ingestion."""
 
 from second_brain.apps.ingestion.services.source_staging import SUPPORTED_EXTENSIONS
-from second_brain.apps.jobs.models import Job
-from second_brain.apps.jobs.services.job_queue import enqueue_job
+from second_brain.apps.jobs.services.automatic_jobs import schedule_for_file_change
 from second_brain.pipeline_config import PipelineConfig
 
-SourceFingerprint = tuple[tuple[str, int, int], ...]
+FileVersions = tuple[tuple[str, int, int], ...]
 
 
-def source_fingerprint(config: PipelineConfig) -> SourceFingerprint:
+def source_fingerprint(config: PipelineConfig) -> tuple[FileVersions, FileVersions]:
     """Read supported source paths, modification times, and sizes.
 
     Parameters
@@ -18,17 +17,19 @@ def source_fingerprint(config: PipelineConfig) -> SourceFingerprint:
 
     Returns
     -------
-    SourceFingerprint
-        Sorted metadata entries. Hidden paths, symlinks, and unsupported files
-        are excluded. File contents are not read.
+    tuple[FileVersions, FileVersions]
+        Sorted versions of watched originals and disposable drops, respectively.
+        Hidden paths, symlinks, and unsupported files are excluded.
     """
     roots = [(config.drops_dir, None)] + [
         (source.path, set(source.file_types))
         for source in config.sources.values()
         if source.enabled
     ]
-    entries = []
+    originals = []
+    drops = []
     for root, types in roots:
+        entries = drops if root == config.drops_dir else originals
         if not root.is_dir() or root.is_symlink():
             continue
         for path in root.rglob("*"):
@@ -45,18 +46,18 @@ def source_fingerprint(config: PipelineConfig) -> SourceFingerprint:
                     entries.append((str(path), stat.st_mtime_ns, stat.st_size))
             except FileNotFoundError:
                 continue
-    return tuple(sorted(entries))
+    return tuple(sorted(originals)), tuple(sorted(drops))
 
 
 class SourceWatcher:
     """Track observed and queued source versions across scans in one thread."""
 
     def __init__(self) -> None:
-        self._previous: tuple[str, SourceFingerprint] | None = None
-        self._scheduled: tuple[str, SourceFingerprint] | None = None
+        self._previous: tuple[str, FileVersions, FileVersions] | None = None
+        self._scheduled: tuple[str, FileVersions, FileVersions] | None = None
 
     def scan(self, config: PipelineConfig) -> None:
-        """Queue changed sources after two matching scans and an idle ingest lane.
+        """Queue stable input changes when no ingest job is active.
 
         Parameters
         ----------
@@ -70,13 +71,15 @@ class SourceWatcher:
             Records the observed version. A version waiting on an active ingest
             job remains eligible on a later scan.
         """
-        fingerprint = (
-            config.model_dump_json(exclude={"raw_input_dir"}),
-            source_fingerprint(config),
-        )
+        preferences = config.model_dump_json(exclude={"raw_input_dir"})
+        originals, drops = source_fingerprint(config)
+        fingerprint = (preferences, originals, drops)
         if fingerprint == self._previous and fingerprint != self._scheduled:
-            if not Job.objects.filter(lane="ingest", status__in=["queued", "running"]).exists():
-                if fingerprint[1]:
-                    enqueue_job("ingest", {"drops_only": False})
+            outcome = "covered"
+            if originals or drops:
+                outcome = schedule_for_file_change(
+                    "ingest", observed_inputs=(preferences, originals), drop_versions=drops
+                )
+            if outcome != "busy":
                 self._scheduled = fingerprint
         self._previous = fingerprint
