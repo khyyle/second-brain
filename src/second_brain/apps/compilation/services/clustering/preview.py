@@ -145,7 +145,7 @@ def build_preview(
     Parameters
     ----------
     config: PipelineConfig
-        Application configuration (clustering and embedding settings).
+        Vault paths, clustering settings, and compilation model for cost estimates.
     progress: Callable[[int, int], None] | None
         Called with `(done, total)` as sources are embedded.
     sources: list[str] | None
@@ -164,7 +164,6 @@ def build_preview(
         clusters = cluster_scoped_sources(
             staged,
             config.raw_dir,
-            config.search,
             get_clusterer(config.clustering),
             config.clustering.sources,
             signature_chars=config.clustering.signature_chars,

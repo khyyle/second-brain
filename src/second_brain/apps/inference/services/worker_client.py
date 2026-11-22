@@ -9,7 +9,7 @@ from django.core.exceptions import ImproperlyConfigured
 from numpy.typing import NDArray
 
 from second_brain.apps.inference import INFERENCE_TOKEN_NAME
-from second_brain.apps.inference.catalog import LocalModel, get_model
+from second_brain.apps.inference.catalog import EMBEDDING_MODEL, GENERATION_MODEL, LocalModel
 from second_brain.apps.inference.errors import (
     InferenceServerOfflineError,
     InferenceUnavailableError,
@@ -31,18 +31,15 @@ atexit.register(_http_client.close)
 
 
 def generate_json(
-    model: str,
     prompt: str,
     *,
     max_tokens: int | None,
     timeout: float = GENERATION_TIMEOUT_SECONDS,
 ) -> str:
-    """Request JSON-formatted generation from a supported generation model.
+    """Request JSON-formatted generation from the pinned generation model.
 
     Parameters
     ----------
-    model: str
-        Model identifier to resolve through the catalog; must support generation.
     prompt: str
         Complete user prompt to send to `/v1/chat/completions` in JSON mode.
     max_tokens: int | None
@@ -65,16 +62,13 @@ def generate_json(
     """
     if max_tokens is not None and max_tokens <= 0:
         raise ValueError("max_tokens must be positive or None.")
-    local_model = get_model(model)
-    if local_model.purpose != "generation":
-        raise InferenceUnavailableError(f"Local model '{model}' does not support generation.")
     payload = {
         "messages": [{"role": "user", "content": prompt}],
         "stream": False,
         "response_format": {"type": "json_object"},
         "max_tokens": max_tokens,
     }
-    body = _post(local_model, "/v1/chat/completions", payload, timeout=timeout)
+    body = _post(GENERATION_MODEL, "/v1/chat/completions", payload, timeout=timeout)
     try:
         content = body["choices"][0]["message"]["content"]
     except (KeyError, IndexError, TypeError) as exc:
@@ -85,7 +79,6 @@ def generate_json(
 
 
 def embed_text(
-    model: str,
     text: str,
     role: EmbeddingRole,
     *,
@@ -95,8 +88,6 @@ def embed_text(
 
     Parameters
     ----------
-    model: str
-        Model identifier to resolve through the catalog; must support embeddings.
     text: str
         Unprefixed text to split into at most 12 chunks of 4,000 characters each.
     role: EmbeddingRole
@@ -117,8 +108,8 @@ def embed_text(
     Raises
     ------
     InferenceUnavailableError
-        The model is unsupported or unavailable. Runtime failures propagate;
-        they are not treated as individual unusable chunks.
+        The model is unavailable or returns an invalid embedding response.
+        Runtime failures are not treated as individual unusable chunks.
 
     Examples
     --------
@@ -132,9 +123,6 @@ def embed_text(
     instructions:
     https://huggingface.co/nomic-ai/nomic-embed-text-v1.5#task-instruction-prefixes
     """
-    local_model = get_model(model)
-    if local_model.purpose != "embedding":
-        raise InferenceUnavailableError(f"Local model '{model}' does not support embeddings.")
     # Bound both per-request context and total work for unusually long documents.
     end = min(len(text), EMBED_CHUNK_CHARS * EMBED_MAX_CHUNKS)
     chunks = [text[i : i + EMBED_CHUNK_CHARS] for i in range(0, end, EMBED_CHUNK_CHARS)] or [""]
@@ -142,7 +130,7 @@ def embed_text(
     vectors = [
         vector
         for chunk in chunks
-        if (vector := _embed_chunk(local_model, chunk, role, timeout=timeout)) is not None
+        if (vector := _embed_chunk(chunk, role, timeout=timeout)) is not None
     ]
     if not vectors:
         return None
@@ -152,7 +140,6 @@ def embed_text(
 
 
 def _embed_chunk(
-    model: LocalModel,
     text: str,
     role: EmbeddingRole,
     *,
@@ -162,8 +149,6 @@ def _embed_chunk(
 
     Parameters
     ----------
-    model: LocalModel
-        Embedding catalog entry with context limit and expected dimensions.
     text: str
         One unprefixed text chunk.
     role: EmbeddingRole
@@ -184,7 +169,7 @@ def _embed_chunk(
         The worker cannot serve the request or returns an invalid response,
         including missing token usage or an invalid vector.
     """
-    body = _post(model, "/v1/embeddings", {"input": f"{role}: {text}"}, timeout=timeout)
+    body = _post(EMBEDDING_MODEL, "/v1/embeddings", {"input": f"{role}: {text}"}, timeout=timeout)
     try:
         prompt_tokens = body["usage"]["prompt_tokens"]
         entries = body["data"]
@@ -196,12 +181,12 @@ def _embed_chunk(
     if (
         type(prompt_tokens) is not int
         or prompt_tokens < 0
-        or embedding.shape != (model.dimensions,)
+        or embedding.shape != (EMBEDDING_MODEL.dimensions,)
         or not np.isfinite(embedding).all()
     ):
         raise InferenceUnavailableError("Local inference returned an invalid embedding.")
     # The server reports token usage after truncation - exact fits are indistinguishable
-    if prompt_tokens >= model.context_tokens:
+    if prompt_tokens >= EMBEDDING_MODEL.context_tokens:
         return None
     return embedding
 

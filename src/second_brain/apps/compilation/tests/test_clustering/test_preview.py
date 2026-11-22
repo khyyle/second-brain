@@ -131,7 +131,6 @@ def test_build_preview_groups_and_costs(tmp_path: Path, monkeypatch: pytest.Monk
         clustering=SimpleNamespace(
             algorithm="threshold", signature_chars=8000, sources=("chatgpt",), enabled=True
         ),
-        search=SimpleNamespace(),
         compilation=SimpleNamespace(provider="anthropic", model="claude-sonnet-4-6"),
     )
 

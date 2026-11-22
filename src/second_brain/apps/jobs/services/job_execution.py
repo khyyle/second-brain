@@ -34,7 +34,7 @@ def execute_job(job: Job) -> dict:
     if job.kind == "index":
         from second_brain.apps.wiki.services.search_index import SearchIndex
 
-        index = SearchIndex(config.search_db_path, config.search)
+        index = SearchIndex(config.search_db_path)
         index.sync_from_wiki(config.wiki_dir)
         return {"embedded_pages": index.embed_pending()}
 
@@ -76,7 +76,6 @@ def execute_job(job: Job) -> dict:
             cluster_scoped_sources(
                 sources,
                 root,
-                config.search,
                 get_clusterer(config.clustering),
                 config.clustering.sources,
                 signature_chars=config.clustering.signature_chars,

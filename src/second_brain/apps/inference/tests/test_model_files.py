@@ -6,7 +6,7 @@ from unittest.mock import Mock
 import httpx
 import pytest
 
-from second_brain.apps.inference.catalog import MODELS, LocalModel
+from second_brain.apps.inference.catalog import GENERATION_MODEL, LocalModel
 from second_brain.apps.inference.errors import InferenceUnavailableError
 from second_brain.apps.inference.services import model_files
 from second_brain.apps.inference.services.model_files import ModelFiles
@@ -17,7 +17,9 @@ Artifact = tuple[LocalModel, ModelFiles, Path, Path, bytes]
 @pytest.fixture
 def artifact(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Artifact:
     content = b"A small model artifact for integrity tests."
-    model = replace(MODELS[0], size=len(content), sha256=hashlib.sha256(content).hexdigest())
+    model = replace(
+        GENERATION_MODEL, size=len(content), sha256=hashlib.sha256(content).hexdigest()
+    )
     cache = tmp_path / "models"
     blob = cache / "blobs" / model.sha256
     blob.parent.mkdir(parents=True)
@@ -187,9 +189,9 @@ def test_download_failure_has_a_recoverable_reason(
     with pytest.raises(
         InferenceUnavailableError, match="Check the connection and available storage"
     ):
-        ModelFiles(tmp_path).ensure(MODELS[0], Mock())
+        ModelFiles(tmp_path).ensure(GENERATION_MODEL, Mock())
 
-    assert download.call_args.kwargs["revision"] == MODELS[0].revision
+    assert download.call_args.kwargs["revision"] == GENERATION_MODEL.revision
     assert download.call_args.kwargs["token"] is False
 
 

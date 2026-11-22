@@ -122,7 +122,7 @@ def _create_executor(config: PipelineConfig, sources: list[str]) -> WikiToolExec
 
         # Search stays fixed to the wiki before this conversation; file tools
         # can still read pages written during it.
-        search_index = SearchIndex(config.search_db_path, config.search)
+        search_index = SearchIndex(config.search_db_path)
         search_index.sync_from_wiki(config.wiki_dir)
         read_tools = WikiTools(config.wiki_dir, config.raw_dir, search_index)
 

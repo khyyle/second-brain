@@ -5,7 +5,6 @@ from pathlib import Path
 
 from second_brain.apps.jobs.services.automatic_jobs import schedule_for_file_change
 from second_brain.apps.library.services.source_files import checked_path
-from second_brain.apps.preferences.services.user_settings import get_pipeline_config
 from second_brain.apps.wiki.services import health, wiki_structure
 from second_brain.apps.wiki.services.duplicate_dismissals import DuplicateStore
 from second_brain.apps.wiki.services.index_watching import wiki_fingerprint
@@ -93,11 +92,11 @@ def search_pages(query: str) -> list[dict]:
         Matching page metadata and snippets. Missing indexes return an empty list; stale
         hits without a wiki page are omitted.
     """
-    config = get_pipeline_config()
-    if not config.search_db_path.exists():
+    paths = get_vault_paths()
+    if not paths.search_db_path.exists():
         return []
-    hits = SearchIndex(config.search_db_path, config.search).search(query)
-    pages = wiki_structure.discover_all_pages(config.wiki_dir)
+    hits = SearchIndex(paths.search_db_path).search(query)
+    pages = wiki_structure.discover_all_pages(paths.wiki_dir)
     return [
         {
             **_page_info(pages[hit.stem].rel_path, pages[hit.stem].frontmatter),
@@ -117,16 +116,16 @@ def wiki_health() -> dict:
         Health findings, including undismissed near-duplicate pairs when a search index
         exists.
     """
-    config = get_pipeline_config()
+    paths = get_vault_paths()
     duplicates = []
-    if config.search_db_path.exists():
+    if paths.search_db_path.exists():
         dismissed = DuplicateStore().get_dismissed()
         duplicates = [
             pair
-            for pair in SearchIndex(config.search_db_path, config.search).near_duplicate_pairs()
+            for pair in SearchIndex(paths.search_db_path).near_duplicate_pairs()
             if tuple(sorted(pair[:2])) not in dismissed
         ]
-    return asdict(health.run_health_check(config.wiki_dir, duplicates))
+    return asdict(health.run_health_check(paths.wiki_dir, duplicates))
 
 
 def refresh_index(config: PipelineConfig) -> None:
@@ -137,12 +136,12 @@ def refresh_index(config: PipelineConfig) -> None:
     Parameters
     ----------
     config: PipelineConfig
-        Wiki and index locations plus search settings.
+        Wiki and index locations.
 
     Returns
     -------
     None
     """
     version = wiki_fingerprint(config.wiki_dir)
-    SearchIndex(config.search_db_path, config.search).sync_from_wiki(config.wiki_dir)
+    SearchIndex(config.search_db_path).sync_from_wiki(config.wiki_dir)
     schedule_for_file_change("index", observed_inputs=version, queue_after_running=True)

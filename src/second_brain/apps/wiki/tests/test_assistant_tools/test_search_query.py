@@ -5,11 +5,10 @@ from __future__ import annotations
 from pathlib import Path
 
 from second_brain.apps.wiki.services.search_index import SearchIndex, _sanitize_fts_query
-from second_brain.pipeline_config import SearchConfig
 
 
 def _index(tmp_path: Path) -> SearchIndex:
-    index = SearchIndex(tmp_path / "s.db", SearchConfig())
+    index = SearchIndex(tmp_path / "s.db")
     index.index_page(
         stem="central-limit-theorem",
         title="Central Limit Theorem",

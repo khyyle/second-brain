@@ -91,11 +91,10 @@ def test_triage_file_heuristic_skip_avoids_model(
     generate.assert_not_called()
 
 
-def test_profile_and_bounded_document_are_sent_to_configured_model(generate: Mock) -> None:
+def test_prompt_includes_selected_profile_and_bounded_document(generate: Mock) -> None:
     content = "a" * 8000 + "excluded ending"
     triage_content(content, TriageConfig(profile="technical"))
-    (model, prompt), options = generate.call_args
-    assert model == "gemma4:12b"
+    (prompt,), options = generate.call_args
     assert "STEM researcher" in prompt
     assert prompt.endswith("\n\nDocument:\n" + "a" * 8000)
     assert "excluded ending" not in prompt

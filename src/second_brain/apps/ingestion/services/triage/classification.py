@@ -70,7 +70,7 @@ def triage_content(content: str, config: TriageConfig) -> TriageResult:
     content: str
         Raw source text (truncated before sending to the model).
     config: TriageConfig
-        Triage model, prompt profile, and confidence threshold.
+        Prompt profile and confidence threshold.
 
     Returns
     -------
@@ -85,7 +85,7 @@ def triage_content(content: str, config: TriageConfig) -> TriageResult:
     prompt = f"{get_prompt(config.profile)}\n\nDocument:\n{content[:TRIAGE_TRUNCATE_CHARS]}"
 
     for attempt in range(TRIAGE_MAX_ATTEMPTS):
-        response = generate_json(config.model, prompt, max_tokens=None)
+        response = generate_json(prompt, max_tokens=None)
         try:
             result = TriageResult.model_validate_json(response)
         except ValidationError:

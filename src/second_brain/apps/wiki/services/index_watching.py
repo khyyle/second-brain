@@ -61,10 +61,7 @@ class WikiIndexWatcher:
                 self._scheduled = version
         self._previous = version
         if self._embedding.schedule_pending(
-            lambda: (
-                index_exists
-                and SearchIndex(config.search_db_path, config.search).has_pending_embeddings()
-            ),
+            lambda: index_exists and SearchIndex(config.search_db_path).has_pending_embeddings(),
             wiki_version=version,
         ):
             self._scheduled = version

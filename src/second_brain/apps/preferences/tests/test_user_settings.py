@@ -35,8 +35,8 @@ def test_invalid_yaml_names_the_line(config):
 
 
 def test_unknown_setting_is_rejected_in_vault_and_job_snapshot(config):
-    (config.data_dir / "config.yaml").write_text("search:\n  embedding_dimension: 768\n")
-    with pytest.raises(ConfigError, match=r"search\.embedding_dimension"):
+    (config.data_dir / "config.yaml").write_text("triage:\n  min_words: 300\n")
+    with pytest.raises(ConfigError, match=r"triage\.min_words"):
         get_preferences()
-    with pytest.raises(ValidationError, match=r"search\.embedding_dimension"):
-        get_pipeline_config({"search": {"embedding_dimension": 768}})
+    with pytest.raises(ValidationError, match=r"triage\.min_words"):
+        get_pipeline_config({"triage": {"min_words": 300}})

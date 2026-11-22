@@ -15,33 +15,24 @@ from numpy.typing import NDArray
 from second_brain.apps.inference.services.worker_client import EmbeddingRole
 from second_brain.apps.wiki.services import search_index as search_index_mod
 from second_brain.apps.wiki.services.search_index import SearchIndex
+from second_brain.apps.wiki.tests.test_assistant_tools.conftest import padded_vector
 
 # Each fresh sync sets file mtimes explicitly so change detection is
 # deterministic regardless of filesystem timestamp resolution.
 _BASE_MTIME = 1_700_000_000.0
 
 
-@pytest.fixture
+@pytest.fixture(autouse=True)
 def embed_calls(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     """Patch the embedder to record each call, proving when work happens."""
     calls: list[str] = []
 
-    def _record(model: str, text: str, role: EmbeddingRole) -> NDArray[np.float32]:
+    def _record(text: str, role: EmbeddingRole) -> NDArray[np.float32]:
         calls.append(text)
-        return np.array([0.1, 0.2, 0.3], dtype=np.float32)
+        return padded_vector(0.1, 0.2, 0.3)
 
     monkeypatch.setattr(search_index_mod, "embed_text", _record)
     return calls
-
-
-@pytest.fixture(autouse=True)
-def _mock_default_embeddings(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Ensure all tests in this module have a 3-d mock embedder by default."""
-
-    def _default_embed(model: str, text: str, role: EmbeddingRole) -> NDArray[np.float32]:
-        return np.array([0.1, 0.2, 0.3], dtype=np.float32)
-
-    monkeypatch.setattr(search_index_mod, "embed_text", _default_embed)
 
 
 def _write(wiki_dir: Path, stem: str, body: str, mtime: float) -> Path:
@@ -182,13 +173,13 @@ def test_page_changes_during_embedding(
     page = _write(wiki, "alpha", "first draft", _BASE_MTIME)
     search_index.sync_from_wiki(wiki)
 
-    def edit_during_request(model: str, text: str, role: EmbeddingRole) -> NDArray[np.float32]:
+    def edit_during_request(text: str, role: EmbeddingRole) -> NDArray[np.float32]:
         if deleted:
             page.unlink()
         else:
             _write(wiki, "alpha", "revised draft", _BASE_MTIME + 10)
         search_index.sync_from_wiki(wiki)
-        return np.array([1, 0, 0], dtype=np.float32)
+        return padded_vector(1, 0, 0)
 
     with monkeypatch.context() as patch:
         patch.setattr(search_index_mod, "embed_text", edit_during_request)
@@ -205,13 +196,13 @@ def test_late_embedding_cannot_replace_a_newer_vector(
     _write(wiki, "note", "old draft", _BASE_MTIME)
     search_index.sync_from_wiki(wiki)
 
-    def embed(model: str, text: str, role: EmbeddingRole) -> NDArray[np.float32]:
+    def embed(text: str, role: EmbeddingRole) -> NDArray[np.float32]:
         if "old draft" in text:
             _write(wiki, "note", "new draft", _BASE_MTIME + 10)
             search_index.sync_from_wiki(wiki)
             assert search_index.embed_pending() == 1
-            return np.array([1, 0, 0], dtype=np.float32)
-        return np.array([0, 1, 0], dtype=np.float32)
+            return padded_vector(1, 0, 0)
+        return padded_vector(0, 1, 0)
 
     monkeypatch.setattr(search_index_mod, "embed_text", embed)
     assert search_index.embed_pending() == 0
@@ -227,7 +218,7 @@ def test_embed_pending_retains_pages_without_usable_embeddings(
     _write(wiki, "alpha", "alpha about cats", _BASE_MTIME)
     search_index.sync_from_wiki(wiki)
 
-    monkeypatch.setattr(search_index_mod, "embed_text", lambda model, text, role: None)
+    monkeypatch.setattr(search_index_mod, "embed_text", lambda text, role: None)
     assert search_index.embed_pending() == 0
     # Page stays pending
     assert search_index.semantic_search("cats") == []

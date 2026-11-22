@@ -6,7 +6,6 @@ from pydantic import ConfigDict, Field
 from second_brain.pipeline_config import (
     ClusteringConfig,
     ParsingConfig,
-    SearchConfig,
     SourceConfig,
     TriageConfig,
 )
@@ -30,7 +29,6 @@ class SettingsUpdate(Schema):
     parsing: ParsingConfig | None = None
     compilation: CompilationUpdate | None = None
     clustering: ClusteringConfig | None = None
-    search: SearchConfig | None = None
     triage: TriageConfig | None = None
 
 

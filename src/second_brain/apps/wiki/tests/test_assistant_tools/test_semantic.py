@@ -14,11 +14,10 @@ from second_brain.apps.inference.services.worker_client import EmbeddingRole
 from second_brain.apps.wiki.services import search_index as search_index_mod
 from second_brain.apps.wiki.services.assistant_tools import WikiTools
 from second_brain.apps.wiki.services.search_index import SearchIndex
+from second_brain.apps.wiki.tests.test_assistant_tools.conftest import padded_vector
 from second_brain.django_config.errors import DependencyError
-from second_brain.pipeline_config import SearchConfig
 
-# Tiny deterministic "embeddings": map keywords to fixed 3-d vectors so
-# nearest-neighbor ordering is predictable without a real model.
+# Three coordinates determine the nearest-neighbor ordering; the rest are zero.
 _VECTORS = {
     "gradient": [1.0, 0.0, 0.0],
     "optimization": [0.9, 0.1, 0.0],
@@ -27,12 +26,12 @@ _VECTORS = {
 }
 
 
-def _fake_embed(model: str, text: str, role: EmbeddingRole) -> NDArray[np.float32] | None:
+def _fake_embed(text: str, role: EmbeddingRole) -> NDArray[np.float32]:
     lowered = text.lower()
     for key, vec in _VECTORS.items():
         if key in lowered:
-            return np.asarray(vec, dtype=np.float32)
-    return np.array([0.0, 0.0, 1.0], dtype=np.float32)
+            return padded_vector(*vec)
+    return padded_vector(0.0, 0.0, 1.0)
 
 
 @pytest.fixture(autouse=True)
@@ -76,11 +75,11 @@ def test_semantic_search_returns_nearest(search_index: SearchIndex) -> None:
 
 
 def test_changed_page_is_excluded_until_reembedded(
-    tmp_path: Path, search_index: SearchIndex, search_config: SearchConfig
+    tmp_path: Path, search_index: SearchIndex
 ) -> None:
     _index_sample(search_index)
     search_index.embed_pending()
-    keyword_index = SearchIndex(tmp_path / "search.db", search_config)
+    keyword_index = SearchIndex(tmp_path / "search.db")
     keyword_index.index_page(
         "gradient-descent", "Changed page", "penguin", "concept", [], [], 1, "concepts/g.md"
     )
@@ -101,23 +100,19 @@ def test_changed_page_is_excluded_until_reembedded(
 
 
 def test_semantic_search_uses_retrieval_roles(
-    tmp_path: Path,
-    search_config: SearchConfig,
-    monkeypatch: pytest.MonkeyPatch,
+    search_index: SearchIndex, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     roles: list[EmbeddingRole] = []
 
-    def record_role(model: str, text: str, role: EmbeddingRole) -> NDArray[np.float32] | None:
-        assert model == search_config.embedding_model
+    def record_role(text: str, role: EmbeddingRole) -> NDArray[np.float32]:
         roles.append(role)
-        return _fake_embed(model, text, role)
+        return _fake_embed(text, role)
 
     monkeypatch.setattr(search_index_mod, "embed_text", record_role)
-    index = SearchIndex(tmp_path / "s.db", search_config)
-    _index_sample(index)
+    _index_sample(search_index)
 
-    index.embed_pending()
-    index.semantic_search("gradient")
+    search_index.embed_pending()
+    search_index.semantic_search("gradient")
 
     assert roles == [
         "search_document",
@@ -127,11 +122,11 @@ def test_semantic_search_uses_retrieval_roles(
 
 
 def test_vector_storage_failure_is_visible_and_leaves_keyword_search_available(
-    tmp_path: Path, search_config: SearchConfig, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     with monkeypatch.context() as patch:
         patch.setattr("sqlite_vec.load", Mock(side_effect=OSError("extension unavailable")))
-        index = SearchIndex(tmp_path / "search.db", search_config)
+        index = SearchIndex(tmp_path / "search.db")
         _index_sample(index)
         assert index.search("penguin")[0].stem == "penguins"
         with pytest.raises(DependencyError, match="vector index could not be initialized"):
@@ -149,7 +144,7 @@ def test_query_embedding_failure_preserves_keyword_search(
 ) -> None:
     _index_sample(search_index)
 
-    def _raise(model: str, text: str, role: EmbeddingRole) -> NDArray[np.float32]:
+    def _raise(text: str, role: EmbeddingRole) -> NDArray[np.float32]:
         raise InferenceUnavailableError("down")
 
     monkeypatch.setattr(search_index_mod, "embed_text", _raise)
@@ -165,7 +160,7 @@ def test_semantic_tool_propagates_inference_outage(
     _index_sample(search_index)
     tools = WikiTools(tmp_path / "wiki", tmp_path / "raw", search_index)
 
-    def _raise(model: str, text: str, role: EmbeddingRole) -> NDArray[np.float32]:
+    def _raise(text: str, role: EmbeddingRole) -> NDArray[np.float32]:
         raise InferenceUnavailableError("down")
 
     monkeypatch.setattr(search_index_mod, "embed_text", _raise)
@@ -178,7 +173,7 @@ def test_semantic_returns_empty_when_query_has_no_usable_embedding(
     search_index: SearchIndex, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _index_sample(search_index)
-    monkeypatch.setattr(search_index_mod, "embed_text", lambda model, text, role: None)
+    monkeypatch.setattr(search_index_mod, "embed_text", lambda text, role: None)
     assert search_index.semantic_search("gradient") == []
 
 

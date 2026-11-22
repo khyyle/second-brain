@@ -11,7 +11,6 @@ from numpy.typing import NDArray
 
 from second_brain.apps.compilation.services.clustering.base import Clusterer
 from second_brain.apps.inference.services.worker_client import embed_text
-from second_brain.pipeline_config import SearchConfig
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +20,6 @@ ProgressCallback = Callable[[int, int], None]
 def embed_sources(
     raw_paths: list[str],
     raw_dir: Path,
-    search_config: SearchConfig,
     signature_chars: int,
     progress: ProgressCallback | None = None,
 ) -> tuple[list[str], list[NDArray[np.float32]]]:
@@ -33,8 +31,6 @@ def embed_sources(
         Source paths relative to `raw_dir`.
     raw_dir: Path
         Root of the raw parsed sources.
-    search_config: SearchConfig
-        Embedding model selection.
     signature_chars: int
         How much of each source's opening to embed.
     progress: ProgressCallback | None
@@ -65,9 +61,7 @@ def embed_sources(
         except OSError as exc:
             logger.warning("Could not read %s for clustering: %s", rel, exc)
             continue
-        vector = embed_text(
-            search_config.embedding_model, text[:signature_chars], role="clustering"
-        )
+        vector = embed_text(text[:signature_chars], role="clustering")
         if vector is None:
             continue
         embedded.append(rel)
@@ -84,7 +78,6 @@ def _lane(rel_path: str) -> str:
 def cluster_scoped_sources(
     raw_paths: list[str],
     raw_dir: Path,
-    search_config: SearchConfig,
     clusterer: Clusterer,
     in_scope_lanes: tuple[str, ...],
     signature_chars: int = 8000,
@@ -102,8 +95,6 @@ def cluster_scoped_sources(
         Source paths relative to `raw_dir`.
     raw_dir: Path
         Root of the raw parsed sources.
-    search_config: SearchConfig
-        Embedding settings.
     clusterer: Clusterer
         Strategy that partitions in-scope embeddings into groups.
     in_scope_lanes: tuple[str, ...]
@@ -124,9 +115,7 @@ def cluster_scoped_sources(
 
     clusters: list[list[str]] = []
     if in_scope:
-        clusters.extend(
-            cluster_sources(in_scope, raw_dir, search_config, clusterer, signature_chars, progress)
-        )
+        clusters.extend(cluster_sources(in_scope, raw_dir, clusterer, signature_chars, progress))
     clusters.extend([rel] for rel in out_of_scope)
     return clusters
 
@@ -134,7 +123,6 @@ def cluster_scoped_sources(
 def cluster_sources(
     raw_paths: list[str],
     raw_dir: Path,
-    search_config: SearchConfig,
     clusterer: Clusterer,
     signature_chars: int = 8000,
     progress: ProgressCallback | None = None,
@@ -152,8 +140,6 @@ def cluster_sources(
         Source paths relative to `raw_dir`.
     raw_dir: Path
         Root of the raw parsed sources.
-    search_config: SearchConfig
-        Embedding settings.
     clusterer: Clusterer
         Strategy that partitions embedding vectors into groups.
     signature_chars: int
@@ -167,7 +153,7 @@ def cluster_sources(
     list[list[str]]
         Clusters of source paths covering every input path exactly once.
     """
-    embedded, vectors = embed_sources(raw_paths, raw_dir, search_config, signature_chars, progress)
+    embedded, vectors = embed_sources(raw_paths, raw_dir, signature_chars, progress)
     embedded_set = set(embedded)
     failed = [path for path in raw_paths if path not in embedded_set]
 

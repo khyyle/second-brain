@@ -10,7 +10,7 @@ import pytest
 from django.core.exceptions import ImproperlyConfigured
 
 from second_brain.apps.inference import INFERENCE_TOKEN_NAME
-from second_brain.apps.inference.catalog import DEFAULT_MODELS, get_model
+from second_brain.apps.inference.catalog import EMBEDDING_MODEL, MODELS_BY_PURPOSE
 from second_brain.apps.inference.errors import (
     InferenceServerOfflineError,
     InferenceUnavailableError,
@@ -25,12 +25,12 @@ def worker_http(tmp_path: Path, settings, monkeypatch: pytest.MonkeyPatch) -> Mo
     """Provide live status records, a private test token, and intercepted HTTP calls."""
     settings.VAULT_DIR = tmp_path
     private_token(tmp_path, INFERENCE_TOKEN_NAME)
-    for purpose, name in DEFAULT_MODELS.items():
+    for purpose, model in MODELS_BY_PURPOSE.items():
         write_worker_status(
             tmp_path / ".backend",
             WorkerStatus(
                 purpose=purpose,
-                model=name,
+                model=model.name,
                 pid=os.getpid(),
                 server_pid=os.getpid(),
                 port=50111 if purpose == "generation" else 50112,
@@ -66,9 +66,7 @@ def test_generation_sends_chat_payload_and_leaves_content_parsing_to_caller(
 ) -> None:
     worker_http.post.return_value = _response({"choices": [{"message": {"content": content}}]})
 
-    result = worker_client.generate_json(
-        "gemma4:12b", "Classify this source.", max_tokens=max_tokens, timeout=7
-    )
+    result = worker_client.generate_json("Classify this source.", max_tokens=max_tokens, timeout=7)
 
     assert result == content
     worker_http.post.assert_called_once_with(
@@ -92,27 +90,13 @@ def test_generation_sends_chat_payload_and_leaves_content_parsing_to_caller(
 def test_invalid_completion_envelope_is_a_runtime_failure(worker_http: Mock, body: Any) -> None:
     worker_http.post.return_value = _response(body)
     with pytest.raises(InferenceUnavailableError, match="invalid completion"):
-        worker_client.generate_json("gemma4:12b", "Prompt", max_tokens=80)
+        worker_client.generate_json("Prompt", max_tokens=80)
 
 
 @pytest.mark.parametrize("max_tokens", [0, -1])
 def test_generation_requires_a_positive_output_limit(worker_http: Mock, max_tokens: int) -> None:
     with pytest.raises(ValueError, match="max_tokens must be positive"):
-        worker_client.generate_json("gemma4:12b", "Prompt", max_tokens=max_tokens)
-    worker_http.post.assert_not_called()
-
-
-@pytest.mark.parametrize("model", ["nomic-embed-text", "unknown-model"])
-def test_generation_rejects_unsupported_models_before_http(worker_http: Mock, model: str) -> None:
-    with pytest.raises(InferenceUnavailableError, match="does not support|not supported"):
-        worker_client.generate_json(model, "Prompt", max_tokens=80)
-    worker_http.post.assert_not_called()
-
-
-@pytest.mark.parametrize("model", ["gemma4:12b", "unknown-model"])
-def test_embedding_rejects_unsupported_models_before_http(worker_http: Mock, model: str) -> None:
-    with pytest.raises(InferenceUnavailableError, match="does not support|not supported"):
-        worker_client.embed_text(model, "Text", role="search_document")
+        worker_client.generate_json("Prompt", max_tokens=max_tokens)
     worker_http.post.assert_not_called()
 
 
@@ -123,7 +107,7 @@ def test_embedding_sends_nomic_prefix_and_returns_float32_vector(
 ) -> None:
     worker_http.post.return_value = _response(embedding_body)
 
-    vector = worker_client.embed_text("nomic-embed-text", text, role=role, timeout=9)
+    vector = worker_client.embed_text(text, role=role, timeout=9)
 
     assert isinstance(vector, np.ndarray)
     assert vector.dtype == np.float32
@@ -148,9 +132,7 @@ def test_embedding_bounds_chunks_and_averages_without_normalizing(
         )
     worker_http.post.side_effect = responses
 
-    vector = worker_client.embed_text(
-        "nomic-embed-text", "x" * (4000 * 13), "clustering", timeout=11
-    )
+    vector = worker_client.embed_text("x" * (4000 * 13), "clustering", timeout=11)
 
     np.testing.assert_array_equal(vector, np.full(768, 6.5, dtype=np.float32))
     assert worker_http.post.call_count == 12
@@ -166,7 +148,7 @@ def test_averaging_finite_float32_vectors_does_not_overflow(
     embedding_body["data"] = [{"embedding": [maximum] * 768}]
     worker_http.post.return_value = _response(embedding_body)
 
-    vector = worker_client.embed_text("nomic-embed-text", "x" * 4001, "clustering")
+    vector = worker_client.embed_text("x" * 4001, "clustering")
 
     assert vector.dtype == np.float32
     assert np.isfinite(vector).all()
@@ -180,7 +162,7 @@ def test_context_limit_is_conservatively_treated_as_truncation(
     embedding_body["usage"]["prompt_tokens"] = prompt_tokens
     worker_http.post.return_value = _response(embedding_body)
 
-    vector = worker_client.embed_text("nomic-embed-text", "Text", "search_query")
+    vector = worker_client.embed_text("Text", "search_query")
 
     if prompt_tokens >= 2048:
         assert vector is None
@@ -196,7 +178,7 @@ def test_truncated_chunks_are_excluded_from_the_mean(
         _response({**embedding_body, "data": [{"embedding": [3.0] * 768}]}),
     ]
 
-    vector = worker_client.embed_text("nomic-embed-text", "x" * 4001, "search_document")
+    vector = worker_client.embed_text("x" * 4001, "search_document")
 
     np.testing.assert_array_equal(vector, np.full(768, 3.0, dtype=np.float32))
 
@@ -208,7 +190,7 @@ def test_failure_after_a_successful_chunk_propagates_instead_of_returning_partia
     worker_http.post.side_effect = [_response(embedding_body), failure]
 
     with pytest.raises(InferenceUnavailableError, match="timed out") as error:
-        worker_client.embed_text("nomic-embed-text", "x" * 8001, "search_document")
+        worker_client.embed_text("x" * 8001, "search_document")
 
     assert error.value.__cause__ is failure
     assert worker_http.post.call_count == 2
@@ -237,7 +219,7 @@ def test_invalid_embeddings_are_failures_rather_than_skippable_chunks(
 ) -> None:
     worker_http.post.return_value = _response({**embedding_body, **invalid_fields})
     with pytest.raises(InferenceUnavailableError, match="invalid embedding"):
-        worker_client.embed_text("nomic-embed-text", "Text", "search_document")
+        worker_client.embed_text("Text", "search_document")
 
 
 @pytest.mark.parametrize(
@@ -254,14 +236,14 @@ def test_non_ready_status_preserves_worker_failure_reason(
         ),
     )
     with pytest.raises(InferenceServerOfflineError, match=reason or f"is {phase}"):
-        worker_client.generate_json("gemma4:12b", "Prompt", max_tokens=80)
+        worker_client.generate_json("Prompt", max_tokens=80)
     worker_http.post.assert_not_called()
 
 
 def test_missing_status_prevents_http(worker_http: Mock, tmp_path: Path) -> None:
     (tmp_path / ".backend" / "inference-generation.json").unlink()
     with pytest.raises(InferenceServerOfflineError, match="Unable to confirm model status"):
-        worker_client.generate_json("gemma4:12b", "Prompt", max_tokens=80)
+        worker_client.generate_json("Prompt", max_tokens=80)
     worker_http.post.assert_not_called()
 
 
@@ -280,7 +262,7 @@ def test_wrong_loaded_model_prevents_http(worker_http: Mock, tmp_path: Path) -> 
     with pytest.raises(
         InferenceUnavailableError, match="serving another-model.*requires gemma4:12b"
     ):
-        worker_client.generate_json("gemma4:12b", "Prompt", max_tokens=80)
+        worker_client.generate_json("Prompt", max_tokens=80)
     worker_http.post.assert_not_called()
 
 
@@ -294,7 +276,7 @@ def test_credential_failures_have_a_public_reason(
     with pytest.raises(
         InferenceUnavailableError, match="credentials could not be loaded"
     ) as error:
-        worker_client.generate_json("gemma4:12b", "Prompt", max_tokens=80)
+        worker_client.generate_json("Prompt", max_tokens=80)
     assert error.value.__cause__ is failure
     worker_http.post.assert_not_called()
 
@@ -305,7 +287,7 @@ def test_http_errors_are_not_retried_or_exposed_as_completion_data(
 ) -> None:
     worker_http.post.return_value = _response({"detail": "Private request details"}, status)
     with pytest.raises(InferenceUnavailableError, match=f"HTTP {status}") as error:
-        worker_client.generate_json("gemma4:12b", "Prompt", max_tokens=80)
+        worker_client.generate_json("Prompt", max_tokens=80)
     assert isinstance(error.value.__cause__, httpx.HTTPStatusError)
     assert "Private request details" not in error.value.reason
     assert worker_http.post.call_count == 1
@@ -324,7 +306,7 @@ def test_transport_failures_preserve_cause(
 ) -> None:
     worker_http.post.side_effect = failure
     with pytest.raises(InferenceUnavailableError, match=reason) as error:
-        worker_client.generate_json("gemma4:12b", "Prompt", max_tokens=80)
+        worker_client.generate_json("Prompt", max_tokens=80)
     assert error.value.__cause__ is failure
     assert isinstance(error.value, InferenceServerOfflineError) is offline
     assert worker_http.post.call_count == 1
@@ -336,14 +318,14 @@ def test_response_must_be_a_json_object(worker_http: Mock, content: bytes) -> No
         200, content=content, request=httpx.Request("POST", "http://127.0.0.1:50111/v1/test")
     )
     with pytest.raises(InferenceUnavailableError, match="JSON"):
-        worker_client.generate_json("gemma4:12b", "Prompt", max_tokens=80)
+        worker_client.generate_json("Prompt", max_tokens=80)
 
 
 def test_each_request_reads_current_port_and_credentials(
     worker_http: Mock, tmp_path: Path
 ) -> None:
     worker_http.post.return_value = _response({"choices": [{"message": {"content": "{}"}}]})
-    worker_client.generate_json("gemma4:12b", "Prompt", max_tokens=80)
+    worker_client.generate_json("Prompt", max_tokens=80)
     write_worker_status(
         tmp_path / ".backend",
         WorkerStatus(
@@ -357,7 +339,7 @@ def test_each_request_reads_current_port_and_credentials(
     )
     (tmp_path / ".backend" / INFERENCE_TOKEN_NAME).write_text("replacement-test-token")
 
-    worker_client.generate_json("gemma4:12b", "Prompt", max_tokens=80)
+    worker_client.generate_json("Prompt", max_tokens=80)
 
     assert worker_http.post.call_args.args == ("http://127.0.0.1:50144/v1/chat/completions",)
     assert worker_http.post.call_args.kwargs["headers"] == {
@@ -375,7 +357,7 @@ def test_expected_inference_failure_is_saved_as_the_job_error(
     worker_http.post.side_effect = httpx.ConnectError("Private connection details")
 
     def execute(job: Job) -> dict:
-        worker_client.generate_json("gemma4:12b", "Prompt", max_tokens=80)
+        worker_client.generate_json("Prompt", max_tokens=80)
         return {}
 
     monkeypatch.setattr(job_execution, "execute_job", execute)
@@ -391,6 +373,6 @@ def test_post_does_not_mutate_the_payload(worker_http: Mock) -> None:
     worker_http.post.return_value = _response({})
     payload = {"input": "Prepared text"}
 
-    worker_client._post(get_model("nomic-embed-text"), "/v1/embeddings", payload, timeout=1)
+    worker_client._post(EMBEDDING_MODEL, "/v1/embeddings", payload, timeout=1)
 
     assert payload == {"input": "Prepared text"}

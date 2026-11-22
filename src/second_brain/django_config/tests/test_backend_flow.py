@@ -8,7 +8,7 @@ import pytest
 from django.test import Client
 from numpy.typing import NDArray
 
-from second_brain.apps.inference.catalog import ModelPurpose
+from second_brain.apps.inference.catalog import EMBEDDING_MODEL, ModelPurpose
 from second_brain.apps.inference.errors import InferenceServerOfflineError
 from second_brain.apps.inference.services.worker_client import EmbeddingRole
 from second_brain.apps.jobs.models import Job
@@ -58,7 +58,8 @@ def test_provider_model_patch_is_validated_after_merging(api_client):
         {"data_dir": "/tmp/other"},
         {"triage": None},
         {"compilation": {"max_iterations": 0}},
-        {"search": {"embedding_dimension": 768}},
+        {"search": {"embedding_dimensions": 128}},
+        {"triage": {"model": "my-local-model"}},
     ],
 )
 def test_invalid_settings_do_not_replace_saved_file(api_client, config, patch):
@@ -151,7 +152,7 @@ def test_index_job_retry_resumes_after_model_outage(
     requested: list[str] = []
     watcher = WikiIndexWatcher()
 
-    def embed(model: str, text: str, role: EmbeddingRole) -> NDArray[np.float32]:
+    def embed(text: str, role: EmbeddingRole) -> NDArray[np.float32]:
         requested.append(text)
         if len(requested) == 2:
             if automatic:
@@ -160,7 +161,7 @@ def test_index_job_retry_resumes_after_model_outage(
                 watcher.scan(config)
                 assert Job.objects.count() == 1
             raise InferenceServerOfflineError("The embedding model stopped.")
-        return np.ones(config.search.embedding_dimensions, dtype=np.float32)
+        return np.ones(EMBEDDING_MODEL.dimensions, dtype=np.float32)
 
     monkeypatch.setattr("second_brain.apps.wiki.services.search_index.embed_text", embed)
     refresh_index(config)
@@ -170,9 +171,7 @@ def test_index_job_retry_resumes_after_model_outage(
     first.refresh_from_db()
     assert first.status == "failed"
     assert first.error == "The embedding model stopped."
-    assert {
-        hit.stem for hit in SearchIndex(config.search_db_path, config.search).search("care")
-    } == {
+    assert {hit.stem for hit in SearchIndex(config.search_db_path).search("care")} == {
         "cats",
         "dogs",
     }
@@ -214,7 +213,7 @@ def test_restart_rebuilds_deleted_index_after_offline_failure(
         publish_ready_model("embedding")
         monkeypatch.setattr(
             "second_brain.apps.wiki.services.search_index.embed_text",
-            lambda *args, **kwargs: np.ones(config.search.embedding_dimensions, dtype=np.float32),
+            lambda *args, **kwargs: np.ones(EMBEDDING_MODEL.dimensions, dtype=np.float32),
         )
 
     scan_and_work(WikiIndexWatcher())
@@ -239,7 +238,7 @@ def test_restart_rebuilds_deleted_index_after_offline_failure(
         start_embeddings()
         scan_and_work(restarted)
 
-    index = SearchIndex(config.search_db_path, config.search)
+    index = SearchIndex(config.search_db_path)
     assert [hit.stem for hit in index.semantic_search("hives")] == ["note"]
     attempts = Job.objects.count()
     scan_and_work(restarted)

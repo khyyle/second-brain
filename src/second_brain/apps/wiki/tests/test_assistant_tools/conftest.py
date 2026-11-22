@@ -4,17 +4,26 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+import numpy as np
 import pytest
+from numpy.typing import NDArray
 
+from second_brain.apps.inference.catalog import EMBEDDING_MODEL
 from second_brain.apps.wiki.services.assistant_tools import WikiTools
 from second_brain.apps.wiki.services.search_index import SearchIndex
-from second_brain.pipeline_config import SearchConfig
+
+
+def padded_vector(*coordinates: float) -> NDArray[np.float32]:
+    """Preserve toy cosine distances in catalog-sized vec0 rows."""
+    vector = np.zeros(EMBEDDING_MODEL.dimensions, dtype=np.float32)
+    vector[: len(coordinates)] = coordinates
+    return vector
 
 
 @pytest.fixture
-def search_index(tmp_path: Path, search_config: SearchConfig) -> SearchIndex:
-    """Fresh SearchIndex with 3-d vectors in a temporary directory."""
-    return SearchIndex(tmp_path / "search.db", search_config)
+def search_index(tmp_path: Path) -> SearchIndex:
+    """Fresh SearchIndex in a temporary directory."""
+    return SearchIndex(tmp_path / "search.db")
 
 
 @dataclass(frozen=True)
@@ -40,7 +49,7 @@ def make_wiki_tools(
     wiki_dir = data_dir / "wiki"
     raw_dir.mkdir(parents=True, exist_ok=True)
     wiki_dir.mkdir(parents=True, exist_ok=True)
-    index = SearchIndex(data_dir / "search.db", SearchConfig())
+    index = SearchIndex(data_dir / "search.db")
     ingested: list[Path] = []
     trigger = ingest_trigger or ingested.append
     tools = WikiTools(wiki_dir, raw_dir, index, ingest_trigger=trigger)

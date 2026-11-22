@@ -21,7 +21,7 @@ import httpx
 from llama_cpp.server.settings import ConfigFileSettings, ModelSettings
 
 from second_brain.apps.inference import INFERENCE_TOKEN_NAME
-from second_brain.apps.inference.catalog import DEFAULT_MODELS, LocalModel, ModelPurpose, get_model
+from second_brain.apps.inference.catalog import MODELS_BY_PURPOSE, LocalModel, ModelPurpose
 from second_brain.apps.inference.errors import InferenceUnavailableError
 from second_brain.apps.inference.services.worker_status import (
     WorkerStatus,
@@ -61,7 +61,7 @@ def main(purpose: ModelPurpose) -> None:
     os.environ.setdefault("DJANGO_SETTINGS_MODULE", "second_brain.django_config.settings.runtime")
     django.setup()
 
-    model = get_model(DEFAULT_MODELS[purpose])
+    model = MODELS_BY_PURPOSE[purpose]
     parent_pid = int(os.environ.get("SECOND_BRAIN_WORKER_PARENT_PID", os.getppid()))
     stop = threading.Event()
     preparing = True
@@ -346,5 +346,5 @@ def _run_server(
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("purpose", choices=DEFAULT_MODELS)
+    parser.add_argument("purpose", choices=MODELS_BY_PURPOSE)
     main(parser.parse_args().purpose)

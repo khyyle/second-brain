@@ -17,7 +17,7 @@ from second_brain.apps.compilation.services.clustering import (
 from second_brain.apps.compilation.services.clustering import sources as sources_mod
 from second_brain.apps.inference.errors import InferenceUnavailableError
 from second_brain.apps.inference.services.worker_client import EmbeddingRole
-from second_brain.pipeline_config import ClusteringConfig, SearchConfig
+from second_brain.pipeline_config import ClusteringConfig
 
 
 def _write(raw_dir: Path, rel: str, text: str) -> None:
@@ -43,7 +43,7 @@ def test_cluster_sources_groups_by_embedding(
 ) -> None:
     raw = tmp_path / "raw"
     paths = ["chatgpt/a.md", "chatgpt/b.md", "chatgpt/c.md"]
-    _write(raw, "chatgpt/a.md", "alpha alpha")
+    _write(raw, "chatgpt/a.md", "alpha alpha plus text beyond the signature")
     _write(raw, "chatgpt/b.md", "alpha beta")
     _write(raw, "chatgpt/c.md", "zeta zeta")
 
@@ -54,16 +54,13 @@ def test_cluster_sources_groups_by_embedding(
     }
     roles: list[EmbeddingRole] = []
 
-    def fake_embed(model: str, text: str, role: EmbeddingRole) -> NDArray[np.float32]:
-        assert model == "nomic-embed-text"
+    def fake_embed(text: str, role: EmbeddingRole) -> NDArray[np.float32]:
         roles.append(role)
         return np.asarray(vectors[text], dtype=np.float32)
 
     monkeypatch.setattr(sources_mod, "embed_text", fake_embed)
 
-    clusters = cluster_sources(
-        paths, raw, SearchConfig(), ThresholdClusterer(threshold=0.9), signature_chars=100
-    )
+    clusters = cluster_sources(paths, raw, ThresholdClusterer(threshold=0.9), signature_chars=11)
 
     # a and b cluster together; c is alone; nothing dropped.
     assert any(sorted(c) == ["chatgpt/a.md", "chatgpt/b.md"] for c in clusters)
@@ -84,12 +81,10 @@ def test_embed_failure_becomes_singleton_not_dropped(
     monkeypatch.setattr(
         sources_mod,
         "embed_text",
-        lambda model, text, role: (
-            np.array([1.0, 0.0], dtype=np.float32) if "alpha" in text else None
-        ),
+        lambda text, role: np.array([1.0, 0.0], dtype=np.float32) if "alpha" in text else None,
     )
 
-    clusters = cluster_sources(paths, raw, SearchConfig(), ThresholdClusterer(threshold=0.5))
+    clusters = cluster_sources(paths, raw, ThresholdClusterer(threshold=0.5))
 
     assert ["chatgpt/b.md"] in clusters
     assert sorted(p for c in clusters for p in c) == sorted(paths)
@@ -101,12 +96,12 @@ def test_embed_sources_propagates_inference_unavailable(
     raw = tmp_path / "raw"
     _write(raw, "chatgpt/a.md", "alpha")
 
-    def _raise(model: str, text: str, role: EmbeddingRole) -> NDArray[np.float32]:
+    def _raise(text: str, role: EmbeddingRole) -> NDArray[np.float32]:
         raise InferenceUnavailableError("down")
 
     monkeypatch.setattr(sources_mod, "embed_text", _raise)
     with pytest.raises(InferenceUnavailableError):
-        sources_mod.embed_sources(["chatgpt/a.md"], raw, SearchConfig(), signature_chars=100)
+        sources_mod.embed_sources(["chatgpt/a.md"], raw, signature_chars=100)
 
 
 def test_scoped_clustering_clusters_only_in_scope_lanes(
@@ -119,12 +114,10 @@ def test_scoped_clustering_clusters_only_in_scope_lanes(
 
     # Identical vectors so any in-scope pair would cluster if eligible.
     monkeypatch.setattr(
-        sources_mod, "embed_text", lambda model, text, role: np.array([1.0, 0.0], dtype=np.float32)
+        sources_mod, "embed_text", lambda text, role: np.array([1.0, 0.0], dtype=np.float32)
     )
 
-    clusters = cluster_scoped_sources(
-        paths, raw, SearchConfig(), ThresholdClusterer(threshold=0.5), ("chatgpt",)
-    )
+    clusters = cluster_scoped_sources(paths, raw, ThresholdClusterer(threshold=0.5), ("chatgpt",))
 
     # Chats cluster together; documents stay one-per-source.
     assert ["chatgpt/a.md", "chatgpt/b.md"] in [sorted(c) for c in clusters]

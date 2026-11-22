@@ -105,6 +105,8 @@ The compiled wiki is stored as plain Markdown under `~/second-brain/wiki/`, so i
 
 Only the build step is required to leave the machine. Everything needed to capture, parse, and filter your material is local and free.
 
+`src/second_brain/apps/inference/catalog.py` pins the local triage and embedding models. The workers load those artifacts, the client checks responses against them, and search uses the catalog’s vector width. Vault settings control the triage profile and confidence threshold; the cloud compilation provider and model are also user choices.
+
 ## Where data lives
 
 Everything sits under the vault root, `~/second-brain/`:

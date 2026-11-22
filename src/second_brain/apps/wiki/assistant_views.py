@@ -9,10 +9,11 @@ from pydantic import Field, ValidationError, validate_call
 
 from second_brain.apps.inference.errors import InferenceUnavailableError
 from second_brain.apps.jobs.services.job_queue import enqueue_job
-from second_brain.apps.preferences.services.user_settings import get_pipeline_config
+from second_brain.apps.preferences.services.user_settings import get_preferences
 from second_brain.apps.wiki.services.assistant_tools import WikiTools
 from second_brain.apps.wiki.services.search_index import SearchIndex
 from second_brain.django_config.errors import DependencyError, ServiceError
+from second_brain.django_config.paths import get_vault_paths
 from second_brain.django_config.schemas import ErrorResponse, RequestSchema
 
 router = Router(tags=["Assistant tools"])
@@ -58,13 +59,15 @@ def invoke_tool(request: HttpRequest, name: ToolName, payload: ToolRequest) -> s
     str
         Tool output formatted as text.
     """
-    config = get_pipeline_config()
+    paths = get_vault_paths()
+    # Capture valid job settings before capture_note writes the file.
+    snapshot = get_preferences().model_dump(mode="json") if name == "capture_note" else None
     tools = WikiTools(
-        config.wiki_dir,
-        config.raw_dir,
-        SearchIndex(config.search_db_path, config.search),
+        paths.wiki_dir,
+        paths.raw_dir,
+        SearchIndex(paths.search_db_path),
         ingest_trigger=lambda path: enqueue_job(
-            "ingest", {"paths": [str(path)], "drops_only": True}
+            "ingest", {"paths": [str(path)], "drops_only": True}, snapshot=snapshot
         ),
     )
     method = getattr(tools, name)

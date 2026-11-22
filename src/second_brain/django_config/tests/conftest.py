@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from second_brain.apps.inference.catalog import DEFAULT_MODELS, ModelPurpose
+from second_brain.apps.inference.catalog import MODELS_BY_PURPOSE, ModelPurpose
 from second_brain.apps.inference.services.worker_status import WorkerStatus, write_worker_status
 from second_brain.django_config.paths import get_vault_paths
 from second_brain.pipeline_config import PipelineConfig
@@ -21,7 +21,7 @@ def publish_ready_model(config: PipelineConfig) -> Callable[[ModelPurpose], None
             get_vault_paths().backend_dir,
             WorkerStatus(
                 purpose=purpose,
-                model=DEFAULT_MODELS[purpose],
+                model=MODELS_BY_PURPOSE[purpose].name,
                 phase="ready",
                 pid=os.getpid(),
                 server_pid=os.getpid(),

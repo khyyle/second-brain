@@ -7,7 +7,7 @@ import pytest
 from second_brain.apps.compilation.services.build_records import BuildStore
 from second_brain.apps.ingestion.services.source_manifest import Manifest
 from second_brain.apps.ingestion.services.triage.triage_decisions import TriageStore
-from second_brain.pipeline_config import PipelineConfig, SearchConfig
+from second_brain.pipeline_config import PipelineConfig
 
 
 def pytest_addoption(parser):
@@ -69,12 +69,6 @@ def build_store(config: PipelineConfig, db) -> BuildStore:
 def triage_store(config: PipelineConfig, db) -> TriageStore:
     """Triage verdicts in the test's isolated database."""
     return TriageStore()
-
-
-@pytest.fixture
-def search_config() -> SearchConfig:
-    """3-dimensional search config for deterministic testing."""
-    return SearchConfig(embedding_dimensions=3)
 
 
 @pytest.fixture(autouse=True)

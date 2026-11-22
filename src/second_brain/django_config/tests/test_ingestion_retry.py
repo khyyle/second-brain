@@ -170,7 +170,7 @@ def test_triage_retry_does_not_reparse_completed_export(
     )
     attempts = []
 
-    def generate(model, prompt, **options):
+    def generate(prompt: str, *, max_tokens: int | None) -> str:
         attempts.append(prompt)
         if len(attempts) == 1:
             raise InferenceServerOfflineError("Local inference is still loading.")

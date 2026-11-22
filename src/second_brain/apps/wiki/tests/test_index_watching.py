@@ -18,7 +18,7 @@ def test_deleting_last_page_queues_index_cleanup(config: PipelineConfig) -> None
     page = config.wiki_dir / "concepts" / "note.md"
     page.parent.mkdir(exist_ok=True)
     page.write_text("---\ntitle: Note\ntype: concept\n---\nLast page")
-    index = SearchIndex(config.search_db_path, config.search)
+    index = SearchIndex(config.search_db_path)
     index.sync_from_wiki(config.wiki_dir)
     assert len(index.list_pages()) == 1
     page.unlink()

@@ -76,7 +76,7 @@ def _build_work_units(
     Parameters
     ----------
     config: PipelineConfig
-        Application configuration (clustering and embedding settings).
+        Vault paths and clustering settings.
     raw_dir: Path
         Directory containing raw parsed source files.
     new_sources: list[str]
@@ -101,7 +101,6 @@ def _build_work_units(
         clusters = cluster_scoped_sources(
             new_sources,
             raw_dir,
-            config.search,
             get_clusterer(config.clustering),
             config.clustering.sources,
             signature_chars=config.clustering.signature_chars,

@@ -186,24 +186,6 @@ class ClusteringConfig(BaseModel):
         return v
 
 
-class SearchConfig(BaseModel):
-    """
-    Embedding model settings for semantic search.
-
-    Fields:
-    -------
-    embedding_model: str, default="nomic-embed-text"
-        Catalog model used to embed wiki pages and queries.
-    embedding_dimensions: int, default=768
-        Dimensionality of the embedding vectors.
-    """
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    embedding_model: str = "nomic-embed-text"
-    embedding_dimensions: int = Field(default=768, gt=0)
-
-
 # Kept in sync with TRIAGE_PROMPTS in second_brain/apps/ingestion/services/triage/prompts.py
 # (asserted by a test). Hardcoded here to avoid an import cycle, since
 # the triage package imports this module.
@@ -218,8 +200,6 @@ class TriageConfig(BaseModel):
     -------
     enabled: bool, default=True
         Master switch for the triage stage.
-    model: str, default="gemma4:12b"
-        Catalog model used to classify sources.
     min_word_count: int, default=300
         Free heuristic floor; shorter sources are skipped without a model call.
     worthwhile_threshold: float, default=0.6
@@ -235,7 +215,6 @@ class TriageConfig(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     enabled: bool = True
-    model: str = "gemma4:12b"
     min_word_count: int = Field(default=300, ge=0)
     worthwhile_threshold: float = Field(default=0.6, ge=0.0, le=1.0)
     profile: str = "balanced"
@@ -258,7 +237,6 @@ class Preferences(BaseModel):
     parsing: ParsingConfig = Field(default_factory=ParsingConfig)
     compilation: CompilationConfig = Field(default_factory=CompilationConfig)
     clustering: ClusteringConfig = Field(default_factory=ClusteringConfig)
-    search: SearchConfig = Field(default_factory=SearchConfig)
     triage: TriageConfig = Field(default_factory=TriageConfig)
 
 

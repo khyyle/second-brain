@@ -11,10 +11,10 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
+from second_brain.apps.inference.catalog import EMBEDDING_MODEL
 from second_brain.apps.inference.services.worker_client import embed_text
 from second_brain.apps.wiki.services.wiki_structure import LINK_KINDS, extract_typed_edges
 from second_brain.django_config.errors import DependencyError
-from second_brain.pipeline_config import SearchConfig
 
 logger = logging.getLogger(__name__)
 
@@ -80,7 +80,7 @@ class SearchIndex:
     Vector operations load the extension on their own connections.
     """
 
-    def __init__(self, db_path: Path, search_config: SearchConfig) -> None:
+    def __init__(self, db_path: Path) -> None:
         """
         Initialize the search index, creating tables if needed.
 
@@ -88,11 +88,8 @@ class SearchIndex:
         ----------
         db_path: Path
             Filesystem path to the SQLite database file.
-        search_config: SearchConfig
-            Model and dimensions for vector operations.
         """
         self._db_path = db_path
-        self._search_config = search_config
         self._init_db()
 
     def _init_db(self) -> None:
@@ -165,7 +162,7 @@ class SearchIndex:
                 conn.enable_load_extension(True)
                 sqlite_vec.load(conn)
                 conn.enable_load_extension(False)
-                dimensions = self._search_config.embedding_dimensions
+                dimensions = EMBEDDING_MODEL.dimensions
                 conn.execute(
                     "CREATE VIRTUAL TABLE IF NOT EXISTS wiki_vec USING vec0("
                     f"stem TEXT PRIMARY KEY, embedding FLOAT[{dimensions}] distance_metric=cosine)"
@@ -319,11 +316,7 @@ class SearchIndex:
 
         embedded_count = 0
         for row in pending:
-            vector = embed_text(
-                self._search_config.embedding_model,
-                f"{row['title']}\n\n{row['content']}",
-                role="search_document",
-            )
+            vector = embed_text(f"{row['title']}\n\n{row['content']}", role="search_document")
             if vector is None:
                 # Only this page failed; it stays pending for the next pass.
                 continue
@@ -429,7 +422,7 @@ class SearchIndex:
         DependencyError
             When the vector index cannot be opened.
         """
-        vector = embed_text(self._search_config.embedding_model, query, role="search_query")
+        vector = embed_text(query, role="search_query")
         if vector is None:
             return []
 
