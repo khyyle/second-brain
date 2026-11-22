@@ -18,7 +18,6 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
-from second_brain.apps.inference.errors import InferenceUnavailableError
 from second_brain.apps.inference.services.worker_client import embed_text
 from second_brain.apps.wiki.services.wiki_structure import LINK_KINDS, extract_typed_edges
 from second_brain.pipeline_config import SearchConfig
@@ -344,19 +343,18 @@ class SearchIndex:
 
         embedded_count = 0
         for row in pending:
-            try:
-                vector = embed_text(
-                    self._search_config.embedding_model,
-                    f"{row['title']}\n\n{row['content']}",
-                    role="search_document",
-                )
-            except InferenceUnavailableError as exc:
-                # Every later page would fail the same way.
-                logger.debug("Embedding pass stopped: %s", exc)
-                break
+            # in the case inference is unavailable an error here will
+            # propagate up to the worker and exit early. work up to this point
+            # is saved in the db and the job can be retried
+            vector = embed_text(
+                self._search_config.embedding_model,
+                f"{row['title']}\n\n{row['content']}",
+                role="search_document",
+            )
             if vector is None:
                 # Only this page failed; it stays pending for the next pass.
                 continue
+
             try:
                 with self._vec_conn() as conn:
                     conn.execute("DELETE FROM wiki_vec WHERE stem = ?", (row["stem"],))
