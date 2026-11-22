@@ -38,7 +38,9 @@ def run_attempt(job: Job) -> None:
     -------
     None
     """
+    from second_brain.apps.inference.errors import InferenceServerOfflineError
     from second_brain.apps.jobs.models import Job
+    from second_brain.apps.jobs.outcomes import WAITING_FOR
     from second_brain.apps.jobs.services import job_progress
     from second_brain.apps.jobs.services.job_execution import execute_job
     from second_brain.errors import SecondBrainError
@@ -75,6 +77,8 @@ def run_attempt(job: Job) -> None:
             terminal = Job.Status.SUCCEEDED
     except SecondBrainError as exc:
         error = exc.reason
+        if job.kind == "index" and isinstance(exc, InferenceServerOfflineError):
+            result = {WAITING_FOR: "embedding"}
     except Exception:
         logger.exception("Job %s failed", job.pk)
         error = "The operation failed unexpectedly. Review backend logs before retrying."

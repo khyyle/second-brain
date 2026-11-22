@@ -10,7 +10,10 @@ from numpy.typing import NDArray
 
 from second_brain.apps.inference import INFERENCE_TOKEN_NAME
 from second_brain.apps.inference.catalog import LocalModel, get_model
-from second_brain.apps.inference.errors import InferenceUnavailableError
+from second_brain.apps.inference.errors import (
+    InferenceServerOfflineError,
+    InferenceUnavailableError,
+)
 from second_brain.apps.inference.services.worker_status import WorkerStatus, read_worker_status
 from second_brain.django_config.identity import private_token
 from second_brain.django_config.paths import VaultPaths, get_vault_paths
@@ -256,11 +259,11 @@ def _post(
         purpose=model.purpose,
     )
     if model_status is None:
-        raise InferenceUnavailableError(
+        raise InferenceServerOfflineError(
             "Unable to confirm model status. Check if the local inference server is running."
         )
     if model_status.phase != "ready":
-        raise InferenceUnavailableError(
+        raise InferenceServerOfflineError(
             model_status.error
             or f"Local inference is {model_status.phase}. Try again when it is ready."
         )
@@ -286,6 +289,10 @@ def _post(
         response.raise_for_status()
     except httpx.TimeoutException as exc:
         raise InferenceUnavailableError("Local inference timed out. Try again.") from exc
+    except (httpx.NetworkError, httpx.RemoteProtocolError) as exc:
+        raise InferenceServerOfflineError(
+            "The connection to local inference failed. Try again."
+        ) from exc
     except httpx.RequestError as exc:
         raise InferenceUnavailableError(
             "The connection to local inference failed. Try again."

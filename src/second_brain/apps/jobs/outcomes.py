@@ -3,6 +3,7 @@
 from enum import Enum
 
 CRASH_REASON = "An unexpected error occurred. For details, see the backend logs."
+WAITING_FOR = "waiting_for"
 
 
 class StageOutcome(Enum):

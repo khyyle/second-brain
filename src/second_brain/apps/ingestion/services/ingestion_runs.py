@@ -2,12 +2,14 @@
 
 from pathlib import Path
 
+from second_brain.apps.inference.errors import InferenceServerOfflineError
 from second_brain.apps.ingestion.services.file_imports import drop_path
 from second_brain.apps.ingestion.services.file_ingestion import ingest_file
 from second_brain.apps.ingestion.services.source_manifest import Manifest
 from second_brain.apps.ingestion.services.source_scanning import batch_scan
 from second_brain.apps.ingestion.services.source_staging import stage_watched_file
 from second_brain.apps.ingestion.services.triage.pipeline import triage_pending
+from second_brain.apps.jobs.outcomes import WAITING_FOR
 from second_brain.apps.jobs.services.job_progress import stop_requested
 from second_brain.errors import SecondBrainError
 from second_brain.file_hashing import hash_file
@@ -84,7 +86,15 @@ def run_ingestion(config: PipelineConfig, payload: dict) -> dict:
                 retry_failed=payload.get("retry_failed", False),
             )
         if config.triage.enabled and not stop_requested():
-            triage_pending(config)
+            try:
+                triage_pending(config)
+            except InferenceServerOfflineError as exc:
+                return {
+                    **counts,
+                    "outcome": "failed",
+                    "reason": exc.reason,
+                    WAITING_FOR: "generation",
+                }
     except SecondBrainError as exc:
         return {**counts, "outcome": "failed", "reason": exc.reason}
     except IngestionCancelled:

@@ -11,7 +11,10 @@ from django.core.exceptions import ImproperlyConfigured
 
 from second_brain.apps.inference import INFERENCE_TOKEN_NAME
 from second_brain.apps.inference.catalog import DEFAULT_MODELS, get_model
-from second_brain.apps.inference.errors import InferenceUnavailableError
+from second_brain.apps.inference.errors import (
+    InferenceServerOfflineError,
+    InferenceUnavailableError,
+)
 from second_brain.apps.inference.services import worker_client
 from second_brain.apps.inference.services.worker_status import WorkerStatus, write_worker_status
 from second_brain.django_config.identity import private_token
@@ -250,14 +253,14 @@ def test_non_ready_status_preserves_worker_failure_reason(
             purpose="generation", model="gemma4:12b", pid=os.getpid(), phase=phase, error=reason
         ),
     )
-    with pytest.raises(InferenceUnavailableError, match=reason or f"is {phase}"):
+    with pytest.raises(InferenceServerOfflineError, match=reason or f"is {phase}"):
         worker_client.generate_json("gemma4:12b", "Prompt", max_tokens=80)
     worker_http.post.assert_not_called()
 
 
 def test_missing_status_prevents_http(worker_http: Mock, tmp_path: Path) -> None:
     (tmp_path / ".backend" / "inference-generation.json").unlink()
-    with pytest.raises(InferenceUnavailableError, match="Unable to confirm model status"):
+    with pytest.raises(InferenceServerOfflineError, match="Unable to confirm model status"):
         worker_client.generate_json("gemma4:12b", "Prompt", max_tokens=80)
     worker_http.post.assert_not_called()
 
@@ -309,16 +312,21 @@ def test_http_errors_are_not_retried_or_exposed_as_completion_data(
 
 
 @pytest.mark.parametrize(
-    "failure,reason",
-    [(httpx.ConnectError("Details"), "connection"), (httpx.ReadTimeout("Details"), "timed out")],
+    "failure,reason,offline",
+    [
+        (httpx.ConnectError("Details"), "connection", True),
+        (httpx.RemoteProtocolError("Disconnected"), "connection", True),
+        (httpx.ReadTimeout("Details"), "timed out", False),
+    ],
 )
 def test_transport_failures_preserve_cause(
-    worker_http: Mock, failure: Exception, reason: str
+    worker_http: Mock, failure: Exception, reason: str, offline: bool
 ) -> None:
     worker_http.post.side_effect = failure
     with pytest.raises(InferenceUnavailableError, match=reason) as error:
         worker_client.generate_json("gemma4:12b", "Prompt", max_tokens=80)
     assert error.value.__cause__ is failure
+    assert isinstance(error.value, InferenceServerOfflineError) is offline
     assert worker_http.post.call_count == 1
 
 
