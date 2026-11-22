@@ -77,6 +77,31 @@ def test_semantic_search_returns_nearest(search_index: SearchIndex) -> None:
     assert hits2[0].stem == "penguins"
 
 
+def test_changed_page_is_excluded_until_reembedded(
+    tmp_path: Path, search_index: SearchIndex
+) -> None:
+    _index_sample(search_index)
+    search_index.embed_pending()
+    keyword_index = SearchIndex(tmp_path / "search.db")
+    keyword_index.index_page(
+        "gradient-descent", "Changed page", "penguin", "concept", [], [], 1, "concepts/g.md"
+    )
+
+    assert {hit.stem for hit in keyword_index.search("penguin")} == {
+        "gradient-descent",
+        "penguins",
+    }
+    assert [hit.stem for hit in search_index.semantic_search("gradient", limit=1)] == ["penguins"]
+    assert search_index.rank_by_similarity("gradient-descent", {"penguins"}) == []
+    assert search_index.rank_by_similarity("penguins", {"gradient-descent"}) == []
+    assert search_index.near_duplicate_pairs(min_similarity=0.0) == []
+
+    assert search_index.embed_pending() == 1
+    assert search_index.rank_by_similarity("penguins", {"gradient-descent"}) == [
+        "gradient-descent"
+    ]
+
+
 def test_semantic_search_uses_retrieval_roles(
     tmp_path: Path,
     search_config: SearchConfig,

@@ -139,6 +139,12 @@ class SearchIndex:
                     embedded_hash TEXT
                 )
             """)
+            # A keyword-only sync can invalidate an embedding without loading sqlite-vec.
+            conn.execute("""
+                CREATE VIEW IF NOT EXISTS wiki_embedded_pages AS
+                SELECT stem, title, content_type, domains FROM wiki_meta
+                WHERE embedded_hash = content_hash
+            """)
             # for a given wiki_link:
             # - `source` is the page that declares the link
             # - `target` is what it points at.
@@ -307,11 +313,8 @@ class SearchIndex:
 
         A page is pending when its ``embedded_hash`` differs from its
         current ``content_hash`` (cleared whenever the page is indexed).
-        This is the only place embeddings are computed, and it is meant to
-        run off the request path (e.g. a background thread) so inference
-        latency never blocks tool calls. Best-effort: if the embedder is
-        unavailable it stops early, leaving the rest pending for a later
-        pass.
+        Each completed page commits separately. If the page changes or disappears
+        during inference, discard the result.
 
         Parameters
         ----------
@@ -322,7 +325,12 @@ class SearchIndex:
         Returns
         -------
         int
-            Number of pages embedded.
+            Number of embeddings saved during this pass.
+
+        Raises
+        ------
+        InferenceUnavailableError
+            The model could not serve a request.
         """
         if not self._semantic or self._search_config is None:
             return 0
@@ -343,9 +351,6 @@ class SearchIndex:
 
         embedded_count = 0
         for row in pending:
-            # in the case inference is unavailable an error here will
-            # propagate up to the worker and exit early. work up to this point
-            # is saved in the db and the job can be retried
             vector = embed_text(
                 self._search_config.embedding_model,
                 f"{row['title']}\n\n{row['content']}",
@@ -355,24 +360,21 @@ class SearchIndex:
                 # Only this page failed; it stays pending for the next pass.
                 continue
 
-            try:
-                with self._vec_conn() as conn:
-                    conn.execute("DELETE FROM wiki_vec WHERE stem = ?", (row["stem"],))
-                    conn.execute(
-                        "INSERT INTO wiki_vec (stem, embedding) VALUES (?, ?)",
-                        (row["stem"], serialize_float32(vector)),
-                    )
-                with self._conn() as conn:
-                    # Guard on content_hash so a concurrent re-index (which
-                    # clears embedded_hash) is not masked as embedded here.
-                    conn.execute(
-                        "UPDATE wiki_meta SET embedded_hash = ? "
-                        "WHERE stem = ? AND content_hash = ?",
-                        (row["content_hash"], row["stem"], row["content_hash"]),
-                    )
-                embedded_count += 1
-            except sqlite3.Error as exc:
-                logger.debug("Embedding store failed for %s: %s", row["stem"], exc)
+            with self._vec_conn() as conn:
+                updated = conn.execute(
+                    "UPDATE wiki_meta SET embedded_hash = content_hash "
+                    "WHERE stem = ? AND content_hash = ? AND title = ? "
+                    "AND embedded_hash IS NOT content_hash",
+                    (row["stem"], row["content_hash"], row["title"]),
+                )
+                if updated.rowcount == 0:
+                    continue
+                conn.execute("DELETE FROM wiki_vec WHERE stem = ?", (row["stem"],))
+                conn.execute(
+                    "INSERT INTO wiki_vec (stem, embedding) VALUES (?, ?)",
+                    (row["stem"], serialize_float32(vector)),
+                )
+            embedded_count += 1
 
         if embedded_count:
             logger.info("Embedded %d pending page(s)", embedded_count)
@@ -468,30 +470,29 @@ class SearchIndex:
             return []
 
         with self._vec_conn() as conn:
-            knn = conn.execute(
-                "SELECT stem, distance FROM wiki_vec "
-                "WHERE embedding MATCH ? ORDER BY distance LIMIT ?",
+            rows = conn.execute(
+                """
+                WITH nearest AS (
+                    SELECT stem, distance FROM wiki_vec
+                    WHERE embedding MATCH ? AND stem IN (SELECT stem FROM wiki_embedded_pages)
+                    ORDER BY distance LIMIT ?
+                )
+                SELECT stem, distance, title, content_type, domains
+                FROM nearest JOIN wiki_meta USING (stem) ORDER BY distance
+                """,
                 (serialize_float32(vector), limit),
             ).fetchall()
-            hits: list[SearchHit] = []
-            for row in knn:
-                meta = conn.execute(
-                    "SELECT title, content_type, domains FROM wiki_meta WHERE stem = ?",
-                    (row["stem"],),
-                ).fetchone()
-                if meta is None:
-                    continue
-                hits.append(
-                    SearchHit(
-                        stem=row["stem"],
-                        title=meta["title"],
-                        snippet=f"(semantic match, distance {row['distance']:.3f})",
-                        score=row["distance"],
-                        content_type=meta["content_type"],
-                        domains=meta["domains"].split(",") if meta["domains"] else [],
-                    )
-                )
-        return hits
+        return [
+            SearchHit(
+                stem=row["stem"],
+                title=row["title"],
+                snippet=f"(semantic match, distance {row['distance']:.3f})",
+                score=row["distance"],
+                content_type=row["content_type"],
+                domains=row["domains"].split(",") if row["domains"] else [],
+            )
+            for row in rows
+        ]
 
     def rank_by_similarity(self, source: str, candidates: set[str]) -> list[str]:
         """Order candidate stems by embedding similarity to the source, closest first.
@@ -517,15 +518,16 @@ class SearchIndex:
         placeholders = ",".join("?" * len(candidates))
         try:
             with self._vec_conn() as conn:
-                source_row = conn.execute(
-                    "SELECT embedding FROM wiki_vec WHERE stem = ?", (source,)
-                ).fetchone()
-                if source_row is None:
-                    return []
                 rows = conn.execute(
-                    f"SELECT stem FROM wiki_vec WHERE stem IN ({placeholders}) "
-                    "ORDER BY vec_distance_cosine(embedding, ?)",
-                    [*candidates, source_row["embedding"]],
+                    f"""
+                    WITH current_vectors AS (
+                        SELECT stem, embedding FROM wiki_embedded_pages JOIN wiki_vec USING (stem)
+                    )
+                    SELECT c.stem FROM current_vectors AS c, current_vectors AS s
+                    WHERE s.stem = ? AND c.stem IN ({placeholders})
+                    ORDER BY vec_distance_cosine(c.embedding, s.embedding)
+                    """,
+                    [source, *candidates],
                 ).fetchall()
         except sqlite3.Error as exc:
             logger.debug("Similarity ranking unavailable: %s", exc)
@@ -564,18 +566,15 @@ class SearchIndex:
             return []
         try:
             with self._vec_conn() as conn:
-                rows = conn.execute("SELECT stem, embedding FROM wiki_vec").fetchall()
+                rows = conn.execute(
+                    "SELECT stem, embedding, content_type "
+                    "FROM wiki_embedded_pages JOIN wiki_vec USING (stem)"
+                ).fetchall()
         except sqlite3.Error as exc:
             logger.debug("Duplicate sweep unavailable: %s", exc)
             return []
         if len(rows) < 2:
             return []
-
-        with self._conn() as conn:
-            page_type = {
-                r["stem"]: r["content_type"]
-                for r in conn.execute("SELECT stem, content_type FROM wiki_meta")
-            }
 
         import numpy as np
 
@@ -600,7 +599,7 @@ class SearchIndex:
             # A page may legitimately sit close to a page of another type (a
             # problem drilling the concept it came from), so only same-type
             # pairs count as duplicates.
-            if not _is_same_kind(page_type.get(a), page_type.get(b)):
+            if not _is_same_kind(rows[i]["content_type"], rows[j]["content_type"]):
                 continue
             if tuple(sorted((a, b))) in dismissed:
                 continue
@@ -852,17 +851,13 @@ class SearchIndex:
 
     def _delete_page(self, stem: str) -> None:
         """Remove a page from the FTS, metadata, link, and vector tables"""
-        with self._conn() as conn:
+        with self._vec_conn() if self._semantic else self._conn() as conn:
             conn.execute("DELETE FROM wiki_fts WHERE stem = ?", (stem,))
             conn.execute("DELETE FROM wiki_meta WHERE stem = ?", (stem,))
             # only delete edges coming out of the page
             conn.execute("DELETE FROM wiki_links WHERE source = ?", (stem,))
-        if self._semantic:
-            try:
-                with self._vec_conn() as conn:
-                    conn.execute("DELETE FROM wiki_vec WHERE stem = ?", (stem,))
-            except sqlite3.Error as exc:
-                logger.debug("Embedding delete failed for %s: %s", stem, exc)
+            if self._semantic:
+                conn.execute("DELETE FROM wiki_vec WHERE stem = ?", (stem,))
 
     def _touch_mtime(self, stem: str, mtime: float) -> None:
         """Refresh a page's stored mtime without re-indexing its content.
@@ -967,16 +962,12 @@ class SearchIndex:
         """
         from second_brain.apps.wiki.services.wiki_structure import CONTENT_DIRS, _parse_frontmatter
 
-        with self._conn() as conn:
+        with self._vec_conn() if self._semantic else self._conn() as conn:
             conn.execute("DELETE FROM wiki_fts")
             conn.execute("DELETE FROM wiki_meta")
             conn.execute("DELETE FROM wiki_links")
-        if self._semantic:
-            try:
-                with self._vec_conn() as conn:
-                    conn.execute("DELETE FROM wiki_vec")
-            except sqlite3.Error as exc:
-                logger.debug("Embedding table clear failed: %s", exc)
+            if self._semantic:
+                conn.execute("DELETE FROM wiki_vec")
 
         count = 0
         for content_dir in CONTENT_DIRS:

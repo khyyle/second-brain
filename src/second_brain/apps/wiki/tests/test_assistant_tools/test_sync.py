@@ -10,7 +10,6 @@ import numpy as np
 import pytest
 from numpy.typing import NDArray
 
-from second_brain.apps.inference.errors import InferenceUnavailableError
 from second_brain.apps.inference.services.worker_client import EmbeddingRole
 from second_brain.apps.wiki.services import search_index as search_index_mod
 from second_brain.apps.wiki.services.assistant_tools import WikiTools
@@ -162,25 +161,50 @@ def test_embed_pending_reembeds_changed_page_only(
     assert len(embed_calls) == 1
 
 
-def test_embed_pending_stops_when_inference_unavailable(
+@pytest.mark.parametrize("deleted", [False, True], ids=["edit", "delete"])
+def test_page_changes_during_embedding(
+    tmp_path: Path, search_index: SearchIndex, monkeypatch: pytest.MonkeyPatch, deleted: bool
+) -> None:
+    wiki = tmp_path / "wiki"
+    page = _write(wiki, "alpha", "first draft", _BASE_MTIME)
+    search_index.sync_from_wiki(wiki)
+
+    def edit_during_request(model: str, text: str, role: EmbeddingRole) -> NDArray[np.float32]:
+        if deleted:
+            page.unlink()
+        else:
+            _write(wiki, "alpha", "revised draft", _BASE_MTIME + 10)
+        search_index.sync_from_wiki(wiki)
+        return np.array([1, 0, 0], dtype=np.float32)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(search_index_mod, "embed_text", edit_during_request)
+        assert search_index.embed_pending() == 0
+
+    assert search_index.semantic_search("first draft") == []
+    assert search_index.embed_pending() == (0 if deleted else 1)
+
+
+def test_late_embedding_cannot_replace_a_newer_vector(
     tmp_path: Path, search_index: SearchIndex, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     wiki = tmp_path / "wiki"
-    _write(wiki, "alpha", "alpha about cats", _BASE_MTIME)
-    _write(wiki, "beta", "beta about dogs", _BASE_MTIME)
+    _write(wiki, "note", "old draft", _BASE_MTIME)
     search_index.sync_from_wiki(wiki)
 
-    calls = {"n": 0}
+    def embed(model: str, text: str, role: EmbeddingRole) -> NDArray[np.float32]:
+        if "old draft" in text:
+            _write(wiki, "note", "new draft", _BASE_MTIME + 10)
+            search_index.sync_from_wiki(wiki)
+            assert search_index.embed_pending() == 1
+            return np.array([1, 0, 0], dtype=np.float32)
+        return np.array([0, 1, 0], dtype=np.float32)
 
-    def _embed(model: str, text: str, role: EmbeddingRole) -> NDArray[np.float32]:
-        calls["n"] += 1
-        if calls["n"] > 1:
-            raise InferenceUnavailableError("down")
-        return np.array([0.1, 0.2, 0.3], dtype=np.float32)
-
-    monkeypatch.setattr(search_index_mod, "embed_text", _embed)
-    assert search_index.embed_pending() == 1
-    assert any(hit.stem == "alpha" for hit in search_index.search("cats"))
+    monkeypatch.setattr(search_index_mod, "embed_text", embed)
+    assert search_index.embed_pending() == 0
+    (hit,) = search_index.semantic_search("new draft")
+    assert hit.stem == "note"
+    assert hit.score == pytest.approx(0)
 
 
 def test_embed_pending_retains_pages_without_usable_embeddings(
@@ -192,7 +216,7 @@ def test_embed_pending_retains_pages_without_usable_embeddings(
 
     monkeypatch.setattr(search_index_mod, "embed_text", lambda model, text, role: None)
     assert search_index.embed_pending() == 0
-    # Page stays pending; a later pass with a working embedder will retry.
+    # Page stays pending
     assert search_index.semantic_search("cats") == []
 
 

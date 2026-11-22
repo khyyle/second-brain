@@ -2,13 +2,21 @@
 
 from uuid import uuid4
 
+import numpy as np
 import pytest
+from django.test import Client
+from numpy.typing import NDArray
 
+from second_brain.apps.inference.errors import InferenceUnavailableError
+from second_brain.apps.inference.services.worker_client import EmbeddingRole
 from second_brain.apps.jobs.models import Job
 from second_brain.apps.jobs.services import job_progress, job_queue
 from second_brain.apps.jobs.worker import run_attempt
 from second_brain.apps.library.models import Source
 from second_brain.apps.preferences.services.user_settings import get_preferences
+from second_brain.apps.wiki.services.search_index import SearchIndex
+from second_brain.apps.wiki.services.wiki_queries import refresh_index
+from second_brain.pipeline_config import PipelineConfig
 
 
 def send(api_client, method, path, body):
@@ -117,6 +125,45 @@ def test_queued_cancellation_and_retry_create_distinct_attempts(api_client):
     assert retried.json()["id"] != first_id
     assert str(Job.objects.get(pk=retried.json()["id"]).retry_of_id) == first_id
     assert Job.objects.get(pk=first_id).status == "cancelled"
+
+
+def test_index_job_retry_resumes_after_model_outage(
+    api_client: Client, config: PipelineConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    concepts = config.wiki_dir / "concepts"
+    concepts.mkdir(exist_ok=True)
+    for stem in ("cats", "dogs"):
+        (concepts / f"{stem}.md").write_text(f"# {stem}\nPet care")
+    requested: list[str] = []
+
+    def embed(model: str, text: str, role: EmbeddingRole) -> NDArray[np.float32]:
+        requested.append(text)
+        if len(requested) == 2:
+            raise InferenceUnavailableError("The embedding model stopped.")
+        return np.ones(config.search.embedding_dimensions, dtype=np.float32)
+
+    monkeypatch.setattr("second_brain.apps.wiki.services.search_index.embed_text", embed)
+    refresh_index(config)
+    first = job_queue.claim_next_job("build")
+    assert first is not None
+    run_attempt(first)
+    first.refresh_from_db()
+    assert first.status == "failed"
+    assert first.error == "The embedding model stopped."
+    assert {hit.stem for hit in SearchIndex(config.search_db_path).search("care")} == {
+        "cats",
+        "dogs",
+    }
+
+    response = api_client.post(f"/v1/jobs/{first.pk}/retry")
+    assert response.status_code == 202
+    retried = job_queue.claim_next_job("build")
+    assert retried is not None and retried.retry_of_id == first.pk
+    run_attempt(retried)
+    retried.refresh_from_db()
+    assert retried.status == "succeeded", retried.error
+    assert retried.result == {"embedded_pages": 1}
+    assert requested[2:] == [requested[1]]
 
 
 def test_recovery_marks_only_abandoned_running_lane_jobs(api_client, job_factory):
