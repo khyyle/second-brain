@@ -37,7 +37,7 @@ struct IngestTab: View {
             if store.skippedCount > 0 {
                 SectionHeader(
                     title: "Skipped",
-                    help: "Chats triage deemed as unworthy of compilation. Skipped chats can be restored until the next build."
+                    help: "Chats set aside by triage. Restore one to include it in a future build."
                 )
                 PaginatedList(items: skipped, expansionKey: "ingest.skipped") { row in
                     SkippedRow(
@@ -124,14 +124,13 @@ struct IngestTab: View {
     }
 
     private func refreshQueue() {
-        queue = IngestQueue.queue(config: config, submitted: rows.items)
+        queue = IngestQueue.queue(imports: store.imports)
             .filter { !store.isRemoving($0.id) }
-        let reader = ManifestReader(dbPath: config.manifestDB)
         withAnimation(.easeOut(duration: 0.3)) {
             rows.update(
                 live: triageQueue + queue.filter { $0.state != .failed },
                 failedIDs: Set(queue.filter { $0.state == .failed }.map(\.id)),
-                outcome: { item in outcome(of: item, reader: reader) }
+                outcome: { item in outcome(of: item) }
             )
         }
         loaded = true
@@ -147,19 +146,19 @@ struct IngestTab: View {
     }
 
     /// Where an item went once it left the in-progress list.
-    private func outcome(of item: QueueItem, reader: ManifestReader) -> QueueItem.Outcome? {
+    private func outcome(of item: QueueItem) -> QueueItem.Outcome? {
         if !isChat(item) {
-            guard let status = reader.statusByPath()[item.id], status.updatedAt >= item.since else {
+            guard let status = store.imports.first(where: { $0.file_path == item.id }) else {
                 return nil
             }
             switch status.status {
-            case .complete:
+            case "complete":
                 return URL(fileURLWithPath: item.id).pathExtension.lowercased() == "json" ? .unpacked : .staged
-            case .duplicate: return .alreadyProcessed
+            case "duplicate": return .alreadyProcessed
             default: return nil
             }
         }
-        switch reader.triageDecisions().first(where: { $0.id == item.id })?.decision {
+        switch store.triage.first(where: { $0.id == item.id })?.decision {
         case .worthwhile: return .kept
         case .review: return .review
         case .skip: return .skipped
@@ -167,41 +166,11 @@ struct IngestTab: View {
         }
     }
 
-    private func refreshReview() {
-        review = ManifestReader(dbPath: config.manifestDB)
-            .triageDecisions()
-            .filter { row in
-                row.decision == .review
-                    && FileManager.default.fileExists(atPath: config.rawRoot.appending(path: row.id).path)
-            }
-    }
-
-    private func refreshSkipped() {
-        skipped = ManifestReader(dbPath: config.manifestDB)
-            .triageDecisions()
-            .filter { row in
-                row.decision == .skip
-                    && FileManager.default.fileExists(
-                        atPath: ManifestMutator.skippedURL(config, row.id).path
-                    )
-            }
-    }
-
-    private func keep(_ row: TriageRow) {
-        ManifestMutator.setTriageDecision(config: config, rawPath: row.id, decision: "worthwhile")
-        refreshReview()
-    }
-
-    private func skip(_ row: TriageRow) {
-        ManifestMutator.skipSource(config: config, rawRel: row.id)
-        refreshReview()
-        refreshSkipped()
-    }
-
-    private func unskip(_ row: TriageRow) {
-        ManifestMutator.unskipSource(config: config, rawRel: row.id)
-        refreshSkipped()
-    }
+    private func refreshReview() { review = store.triage.filter { $0.decision == .review } }
+    private func refreshSkipped() { skipped = store.triage.filter { $0.decision == .skip } }
+    private func keep(_ row: TriageRow) { store.setTriage(row.id, decision: "worthwhile") }
+    private func skip(_ row: TriageRow) { store.setTriage(row.id, decision: "skip") }
+    private func unskip(_ row: TriageRow) { store.setTriage(row.id, decision: "worthwhile") }
 
     private func remove(_ path: String) {
         withAnimation(.easeOut(duration: 0.3)) {
@@ -212,7 +181,7 @@ struct IngestTab: View {
     }
 
     private func retry(_ path: String) {
-        ManifestMutator.retryIngest(config: config, filePath: path)
+        store.retryIngestion(path)
         refreshQueue()
     }
 
@@ -229,6 +198,6 @@ struct IngestTab: View {
     }
 
     private func openSkipped(_ row: TriageRow) {
-        openInDefaultApp(ManifestMutator.skippedURL(config, row.id))
+        openInDefaultApp(config.rawRoot.appending(path: ".skipped/\(row.id)"))
     }
 }

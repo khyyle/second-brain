@@ -1,8 +1,8 @@
 # Command line
 
-The menu bar app shells out to the `second-brain` command, so most of its operations are available from the terminal. This is useful for the first bulk import, scripting, and debugging. Run commands from the repository root.
+The `second-brain` command calls the same local HTTP backend as the menu bar app. Open the app or run `make backend` first.
 
-To list every command and its options:
+To list every command and its options, from the repository root run:
 
 ```bash
 uv run second-brain --help
@@ -13,7 +13,7 @@ uv run second-brain --help
 Bulk import a ChatGPT export:
 
 ```bash
-uv run second-brain ingest --chatgpt ~/Downloads/chatgpt-export
+uv run second-brain ingest --chatgpt ~/Downloads/chatgpt-export/conversations.json
 ```
 
 Build or update the wiki from everything staged:
@@ -22,17 +22,17 @@ Build or update the wiki from everything staged:
 uv run second-brain compile
 ```
 
-Remove a source from the pipeline, either mid-ingest or already staged (see [deletion](lifecycle.md#deletion) for what each removal keeps):
+Remove a queued input or parsed source (see [deletion](lifecycle.md#deletion) for what each removal keeps):
 
 ```bash
-uv run second-brain forget-drop <path>    # a file still in drops/
-uv run second-brain forget <raw-path>     # a staged source, forgotten entirely
+uv run second-brain forget-drop ~/second-brain/drops/documents/notes.md
+uv run second-brain forget documents/notes.md
 ```
 
 Requeue sources for the next build, whether already compiled or set aside:
 
 ```bash
-uv run second-brain recompile <raw-path>...
+uv run second-brain recompile documents/notes.md
 ```
 
 Connect the wiki to an assistant over MCP:
@@ -43,10 +43,19 @@ uv run second-brain mcp install --target chatgpt-desktop
 uv run second-brain mcp install --target cursor
 ```
 
-Ingest watched directories on a schedule (8am, 2pm, and 8pm by default). Scheduled runs stage sources; building stays manual:
+Ingest any modified or new files in the `drops` folder or any watched folder:
 
 ```bash
-uv run second-brain schedule install
+uv run second-brain ingest
+```
+
+Ingestion and build commands return a queued job immediately. Inspect its outcome with `status` or its job ID:
+
+```bash
+uv run second-brain status
+uv run second-brain jobs show JOB_ID
+uv run second-brain jobs cancel JOB_ID
+uv run second-brain jobs retry JOB_ID
 ```
 
 ## Wiki maintenance
@@ -56,7 +65,7 @@ The wiki is its own git repository, committed to as each build progresses (see [
 View the `N` most recent build commits:
 
 ```bash
-uv run second-brain wiki log -n 3
+uv run second-brain wiki log -n <N>
 ```
 
 Undo the last `N` build commits, requeueing their sources for compilation. This command will prompt before resetting (pass `--yes` to skip) and refuses to run on a dirty wiki tree.
@@ -74,5 +83,5 @@ uv run second-brain wiki repair-links --dry-run
 Retire duplicate pages into the one worth keeping. Move any prose worth saving into the destination first; the merge carries over sources and relationships, not body text:
 
 ```bash
-uv run second-brain wiki merge <dest> <source 1>...
+uv run second-brain wiki merge <dest> <source 1> <source 2> ...
 ```

@@ -20,6 +20,8 @@ mkdir -p "$APP_BUNDLE/Contents/Resources"
 
 cp "$BUILD_DIR/$APP_NAME" "$APP_BUNDLE/Contents/MacOS/$APP_NAME"
 cp "Resources/Info.plist" "$APP_BUNDLE/Contents/Info.plist"
+REPO_DIR="$(cd ../.. && pwd)"
+printf '%s\n' "$REPO_DIR/run.sh" > "$APP_BUNDLE/Contents/Resources/BackendLauncher.txt"
 
 # The menu-bar glyph is loaded at runtime as a template image.
 if [ -f "Resources/MenuBarIcon.png" ]; then
@@ -62,20 +64,8 @@ if [ -f "Resources/AppIcon.png" ]; then
     rm -rf "$WORK"
 fi
 
-# Ad-hoc sign so Gatekeeper lets it launch from /Applications without
-# re-quarantining on every build. Can replace `-` with a real Developer ID
-# identity for proper notarization
+# Ad-hoc sign the locally built bundle. This does not notarize it for distribution.
 codesign --force --deep --sign - "$APP_BUNDLE" >/dev/null
-
-# Keep the app's pointer to run.sh fresh for dev iteration (install.sh does
-# this too). Only when the vault already exists, so a plain build doesn't
-# create directories as a side effect.
-VAULT="$HOME/second-brain"
-if [ -d "$VAULT" ]; then
-    REPO_DIR="$(cd ../.. && pwd)"
-    printf '%s\n' "$REPO_DIR/run.sh" > "$VAULT/.pipeline-script"
-    echo "[link] recorded pipeline path -> $VAULT/.pipeline-script"
-fi
 
 echo "built $(pwd)/${APP_BUNDLE}"
 echo

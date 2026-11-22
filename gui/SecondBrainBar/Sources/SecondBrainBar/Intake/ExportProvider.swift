@@ -35,7 +35,7 @@ enum ExportProvider: String, CaseIterable, Identifiable {
     }
 
     /// Subfolder of `drops/` this provider's files are copied into; matches
-    /// a `sources` key in `config.yaml`.
+    /// the backend's chat source type.
     var lane: String {
         switch self {
         case .chatgpt: return "chatgpt"

@@ -29,12 +29,7 @@ private enum Tab: String, CaseIterable, Identifiable {
 struct ContentView: View {
     let config: AppConfig
     @State private var tab: Tab = .ingest
-    @State private var autoRunner: AutoRunner?
     @State private var showingSettings = false
-    @State private var showingNoKeyAlert = false
-    @State private var showingBusyAlert = false
-    @State private var showingOllamaAlert = false
-    @State private var ollamaHealth: PipelineRunner.OllamaHealth?
     @EnvironmentObject private var store: PipelineStore
     @EnvironmentObject private var intake: DropIntake
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -55,43 +50,6 @@ struct ContentView: View {
         .frame(maxHeight: .infinity, alignment: .top)
         .background(Theme.backgroundGradient)
         .preferredColorScheme(.dark)
-        .alert("API key required", isPresented: $showingNoKeyAlert) {
-            Button("Open Settings") {
-                withAnimation(.easeInOut(duration: 0.2)) { showingSettings = true }
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("Building the wiki needs an API key for your selected provider. "
-                + "Add one in Settings.")
-        }
-        .alert("A run is already in progress", isPresented: $showingBusyAlert) {
-            Button("OK", role: .cancel) {}
-        } message: {
-            Text("Second Brain is already ingesting or building. Try again when it finishes.")
-        }
-        .alert("Ollama is required", isPresented: $showingOllamaAlert) {
-            Button("OK", role: .cancel) {}
-        } message: {
-            Text(ollamaHealth?.message
-                ?? "Building needs Ollama running with its models downloaded. "
-                + "Start Ollama, then try again.")
-        }
-        .alert("Couldn't finish removing the file", isPresented: Binding(
-            get: { store.removalError != nil },
-            set: { if !$0 { store.removalError = nil } }
-        )) {
-            Button("OK", role: .cancel) {}
-        } message: {
-            Text(store.removalError ?? "")
-        }
-        .onAppear {
-            if autoRunner == nil { autoRunner = AutoRunner(config: config) }
-            probeOllama()
-        }
-        .onChange(of: intake.added) { newValue in
-            // A successful drop schedules a debounced (free) ingest run.
-            if newValue != nil { autoRunner?.schedule() }
-        }
         .onChange(of: intake.submissionCount) { _ in
             withAnimation(.spring(response: 0.28, dampingFraction: 0.82)) { tab = .ingest }
         }
@@ -110,6 +68,15 @@ struct ContentView: View {
     private var main: some View {
         VStack(alignment: .leading, spacing: 10) {
             tabBar
+            if let error = store.actionError {
+                NoticeBanner(headline: "Couldn't complete the action", reason: error) {
+                    store.actionError = nil
+                }
+            }
+            if let error = store.connectionError {
+                Text(error).font(Theme.Font.meta(10)).foregroundStyle(Theme.Colors.danger)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             if let notice = currentNotice {
                 RunOutcomeBanner(notice: notice, onDismiss: { store.dismiss(notice) })
                     .transition(.opacity.combined(with: .move(edge: .top)))
@@ -211,7 +178,7 @@ struct ContentView: View {
                 case .build:   BuildTab(
                     config: config,
                     onBuild: attemptBuild,
-                    canBuild: config.runScriptPath != nil
+                    canBuild: store.connected && !store.locked
                 )
                 case .domains: DomainsTab(config: config)
                 case .overview: OverviewTab(config: config)
@@ -252,7 +219,7 @@ struct ContentView: View {
                 .layoutPriority(1)
             Spacer(minLength: 6)
             TextAction(title: "Reveal", help: "Show the Second Brain folder in Finder") {
-                PipelineRunner.revealInFinder(config.vaultRoot)
+                NSWorkspace.shared.activateFileViewerSelecting([config.vaultRoot])
             }
             IconAction(systemName: "gearshape", help: "Settings") {
                 withAnimation(.easeInOut(duration: 0.2)) { showingSettings = true }
@@ -260,38 +227,5 @@ struct ContentView: View {
         }
     }
 
-    /// Start a compile, after the busy / API-key / Ollama gates. Passed to the
-    /// Build tab, which surfaces it as that tab's primary action.
-    private func attemptBuild() {
-        if store.isActive {
-            showingBusyAlert = true
-            return
-        }
-        let keyName = ConfigStore.locate(config)
-            .map { ConfigStore.load(from: $0).llmProvider.envKeyName }
-            ?? LLMProvider.anthropic.envKeyName
-        guard !EnvStore.readKey(config, keyName: keyName).isEmpty else {
-            showingNoKeyAlert = true
-            return
-        }
-        // A detached build discards output, so a missing-Ollama failure would
-        // be invisible; gate on the last probe instead.
-        if ollamaHealth?.healthy == false {
-            showingOllamaAlert = true
-            return
-        }
-        if let url = config.runScriptPath {
-            PipelineRunner.runDetached(scriptURL: url, stage: .compile)
-        }
-    }
-
-    /// Probe Ollama health off the main thread so the build gate and Settings
-    /// can reflect whether the local model stack is ready.
-    private func probeOllama() {
-        guard let repo = config.repoDir else { return }
-        DispatchQueue.global(qos: .utility).async {
-            let health = PipelineRunner.checkOllama(repoDir: repo)
-            DispatchQueue.main.async { ollamaHealth = health }
-        }
-    }
+    private func attemptBuild() { store.requestBuild() }
 }

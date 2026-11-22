@@ -1,0 +1,895 @@
+"""SQLite keyword and vector indexes for wiki pages. Keyword queries work offline."""
+
+from __future__ import annotations
+
+import hashlib
+import logging
+import re
+import sqlite3
+from collections.abc import Iterator
+from contextlib import contextmanager
+from dataclasses import dataclass
+from pathlib import Path
+
+from second_brain.apps.inference.catalog import EMBEDDING_MODEL
+from second_brain.apps.inference.services.worker_client import embed_text
+from second_brain.apps.wiki.services.wiki_structure import LINK_KINDS, extract_typed_edges
+from second_brain.django_config.errors import DependencyError
+
+logger = logging.getLogger(__name__)
+
+BUSY_TIMEOUT_SECONDS = 5.0
+PENDING_EMBEDDING = "embedded_hash IS NULL OR embedded_hash != content_hash"
+
+
+def _sanitize_fts_query(query: str) -> str:
+    """Turn arbitrary text into a safe FTS5 MATCH expression.
+
+    Extracts alphanumeric terms and double-quotes each one, so punctuation,
+    bare operators, or unbalanced quotes in natural-language input cannot
+    produce an FTS5 syntax error.
+
+    Parameters
+    ----------
+    query: str
+        Raw user/agent query text.
+
+    Returns
+    -------
+    str
+        A space-separated list of quoted terms (implicit AND), or an empty
+        string if the input has no alphanumeric terms.
+    """
+    return " ".join(f'"{term}"' for term in re.findall(r"\w+", query))
+
+
+def _hash_content(content: str) -> str:
+    """Return a stable content fingerprint used to detect page changes.
+
+    Parameters
+    ----------
+    content: str
+        Full markdown body of a wiki page.
+
+    Returns
+    -------
+    str
+        Hex SHA-256 digest of the UTF-8 encoded content.
+    """
+    return hashlib.sha256(content.encode("utf-8")).hexdigest()
+
+
+def _is_same_kind(type_a: str | None, type_b: str | None) -> bool:
+    return type_a is not None and type_a == type_b
+
+
+@dataclass(frozen=True)
+class SearchHit:
+    stem: str
+    title: str
+    snippet: str
+    score: float
+    content_type: str
+    domains: list[str]
+
+
+class SearchIndex:
+    """Wiki keyword, graph, and embedding search in one SQLite database.
+
+    Keyword and graph operations need neither sqlite-vec nor a running model.
+    Vector operations load the extension on their own connections.
+    """
+
+    def __init__(self, db_path: Path) -> None:
+        """
+        Initialize the search index, creating tables if needed.
+
+        Parameters
+        ----------
+        db_path: Path
+            Filesystem path to the SQLite database file.
+        """
+        self._db_path = db_path
+        self._init_db()
+
+    def _init_db(self) -> None:
+        with self._conn() as conn:
+            conn.execute("""
+                CREATE VIRTUAL TABLE IF NOT EXISTS wiki_fts USING fts5(
+                    stem,
+                    title,
+                    content,
+                    domains,
+                    tags,
+                    content_type,
+                    tokenize='porter unicode61'
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS wiki_meta (
+                    stem TEXT PRIMARY KEY,
+                    title TEXT,
+                    content_type TEXT,
+                    domains TEXT,
+                    tags TEXT,
+                    word_count INTEGER,
+                    path TEXT,
+                    content_hash TEXT,
+                    mtime REAL,
+                    embedded_hash TEXT
+                )
+            """)
+            # A keyword-only sync can invalidate an embedding without loading sqlite-vec.
+            conn.execute("""
+                CREATE VIEW IF NOT EXISTS wiki_embedded_pages AS
+                SELECT stem, title, content_type, domains FROM wiki_meta
+                WHERE embedded_hash = content_hash
+            """)
+            # for a given wiki_link:
+            # - `source` is the page that declares the link
+            # - `target` is what it points at.
+            # for example, 'prerequisite' edges run from the dependent
+            # page (source) to the concept it needs (target).
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS wiki_links (
+                    source TEXT NOT NULL,
+                    target TEXT NOT NULL,
+                    kind TEXT NOT NULL,
+                    PRIMARY KEY (source, target, kind)
+                )
+            """)
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_wiki_links_source ON wiki_links(source)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_wiki_links_target ON wiki_links(target)")
+
+    @contextmanager
+    def _conn(self) -> Iterator[sqlite3.Connection]:
+        conn = sqlite3.connect(str(self._db_path), timeout=BUSY_TIMEOUT_SECONDS)
+        try:
+            conn.row_factory = sqlite3.Row
+            self._apply_pragmas(conn)
+            yield conn
+            conn.commit()
+        finally:
+            conn.close()
+
+    @contextmanager
+    def _vec_conn(self) -> Iterator[sqlite3.Connection]:
+        """Open vector storage, reporting setup failures only to callers that need it."""
+        with self._conn() as conn:
+            try:
+                import sqlite_vec
+
+                conn.enable_load_extension(True)
+                sqlite_vec.load(conn)
+                conn.enable_load_extension(False)
+                dimensions = EMBEDDING_MODEL.dimensions
+                conn.execute(
+                    "CREATE VIRTUAL TABLE IF NOT EXISTS wiki_vec USING vec0("
+                    f"stem TEXT PRIMARY KEY, embedding FLOAT[{dimensions}] distance_metric=cosine)"
+                )
+            except (sqlite3.Error, AttributeError, ImportError, OSError) as exc:
+                raise DependencyError(
+                    "The wiki vector index could not be initialized. Check sqlite-vec."
+                ) from exc
+            yield conn
+
+    @staticmethod
+    def _apply_pragmas(conn: sqlite3.Connection) -> None:
+        """Enable WAL and a busy timeout so the request path and the
+        background embedder can read and write the same database
+        concurrently without spurious 'database is locked' failures.
+        """
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute(f"PRAGMA busy_timeout={int(BUSY_TIMEOUT_SECONDS * 1000)}")
+
+    def index_page(
+        self,
+        stem: str,
+        title: str,
+        content: str,
+        content_type: str,
+        domains: list[str],
+        tags: list[str],
+        word_count: int,
+        path: str,
+        mtime: float | None = None,
+    ) -> None:
+        """Add or replace a page in both the FTS and metadata tables.
+
+        Does not compute embeddings: the page is left marked as pending
+        (its `embedded_hash` is cleared) so the semantic layer is
+        refreshed off the request path by :meth:`embed_pending`.
+
+        Parameters
+        ----------
+        stem: str
+            URL-safe slug used as the unique key.
+        title: str
+            Human-readable page title.
+        content: str
+            Full markdown body indexed for search.
+        content_type: str
+            Page type (e.g. `"concept"`, `"problem"`).
+        domains: list[str]
+            Knowledge domains the page belongs to.
+        tags: list[str]
+            Free-form tags for filtering.
+        word_count: int
+            Pre-computed word count of *content*.
+        path: str
+            Relative path from the wiki root to the `.md` file.
+        mtime: float | None
+            Filesystem modification time of the source file, stored so
+            :meth:`sync_from_wiki` can skip unchanged files cheaply.
+
+        Returns
+        -------
+        None
+        """
+        domains_str = ",".join(domains)
+        tags_str = ",".join(tags)
+        content_hash = _hash_content(content)
+
+        with self._conn() as conn:
+            conn.execute("DELETE FROM wiki_fts WHERE stem = ?", (stem,))
+            conn.execute(
+                "INSERT INTO wiki_fts (stem, title, content, domains, tags, content_type) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (stem, title, content, domains_str, tags_str, content_type),
+            )
+            conn.execute(
+                "INSERT OR REPLACE INTO wiki_meta "
+                "(stem, title, content_type, domains, tags, word_count, path, "
+                "content_hash, mtime, embedded_hash) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)",
+                (
+                    stem,
+                    title,
+                    content_type,
+                    domains_str,
+                    tags_str,
+                    word_count,
+                    path,
+                    content_hash,
+                    mtime,
+                ),
+            )
+            # delete every edge this page declares
+            conn.execute("DELETE FROM wiki_links WHERE source = ?", (stem,))
+            # then insert its current set
+            conn.executemany(
+                "INSERT OR IGNORE INTO wiki_links (source, target, kind) VALUES (?, ?, ?)",
+                [(stem, target, kind) for target, kind in extract_typed_edges(content)],
+            )
+
+    def has_pending_embeddings(self) -> bool:
+        """Return whether any page needs a vector for its current content."""
+        with self._conn() as conn:
+            return (
+                conn.execute(
+                    f"SELECT 1 FROM wiki_meta WHERE {PENDING_EMBEDDING} LIMIT 1"
+                ).fetchone()
+                is not None
+            )
+
+    def embed_pending(self, limit: int | None = None) -> int:
+        """
+        Embed pages whose stored embedding is missing or stale.
+
+        A page is pending when its ``embedded_hash`` differs from its
+        current ``content_hash`` (cleared whenever the page is indexed).
+        Each completed page commits separately. If the page changes or disappears
+        during inference, discard the result.
+
+        Parameters
+        ----------
+        limit: int | None
+            Maximum number of pages to embed in this pass; ``None`` embeds
+            all pending pages.
+
+        Returns
+        -------
+        int
+            Number of embeddings saved during this pass.
+
+        Raises
+        ------
+        InferenceUnavailableError
+            The model could not serve a request.
+        DependencyError
+            The configured vector index could not load sqlite-vec.
+        """
+        query = (
+            "SELECT m.stem, m.title, m.content_hash, f.content "
+            "FROM wiki_meta m JOIN wiki_fts f ON f.stem = m.stem "
+            f"WHERE {PENDING_EMBEDDING}"
+        )
+        params: tuple = ()
+        if limit is not None:
+            query += " LIMIT ?"
+            params = (limit,)
+        with self._vec_conn() as conn:
+            # Keyword sync removes page metadata immediately, even without sqlite-vec.
+            # Its vectors are already excluded from queries; reclaim them on this pass.
+            conn.execute("DELETE FROM wiki_vec WHERE stem NOT IN (SELECT stem FROM wiki_meta)")
+            pending = conn.execute(query, params).fetchall()
+
+        embedded_count = 0
+        for row in pending:
+            vector = embed_text(f"{row['title']}\n\n{row['content']}", role="search_document")
+            if vector is None:
+                # Only this page failed; it stays pending for the next pass.
+                continue
+
+            with self._vec_conn() as conn:
+                updated = conn.execute(
+                    "UPDATE wiki_meta SET embedded_hash = content_hash "
+                    "WHERE stem = ? AND content_hash = ? AND title = ? "
+                    "AND embedded_hash IS NOT content_hash",
+                    (row["stem"], row["content_hash"], row["title"]),
+                )
+                if updated.rowcount == 0:
+                    continue
+                conn.execute("DELETE FROM wiki_vec WHERE stem = ?", (row["stem"],))
+                conn.execute(
+                    "INSERT INTO wiki_vec (stem, embedding) VALUES (?, ?)",
+                    (row["stem"], vector.tobytes()),
+                )
+            embedded_count += 1
+
+        if embedded_count:
+            logger.info("Embedded %d pending page(s)", embedded_count)
+        return embedded_count
+
+    def _run_fts(self, match_expr: str, limit: int) -> list[sqlite3.Row] | None:
+        """Run one FTS5 MATCH query; return ``None`` on a syntax error."""
+        try:
+            with self._conn() as conn:
+                return conn.execute(
+                    """SELECT stem, title,
+                              snippet(wiki_fts, 2, '<b>', '</b>', '...', 40) as snip,
+                              rank, content_type, domains
+                       FROM wiki_fts
+                       WHERE wiki_fts MATCH ?
+                       ORDER BY rank
+                       LIMIT ?""",
+                    (match_expr, limit),
+                ).fetchall()
+        except sqlite3.OperationalError as exc:
+            logger.debug("FTS query rejected (%s): %s", match_expr, exc)
+            return None
+
+    def search(self, query: str, limit: int = 10) -> list[SearchHit]:
+        """
+        Keyword search using FTS5 with BM25 ranking.
+
+        The raw query is tried first so FTS5 operators (``AND``, ``OR``,
+        ``NEAR``, quoted phrases) keep working. If it is not valid FTS5
+        syntax, the query is sanitized into quoted terms and retried, so a
+        natural-language query never raises and never silently returns a
+        misleading empty result for a recoverable input.
+
+        Parameters
+        ----------
+        query: str
+            FTS5 match expression or plain text.
+        limit: int
+            Maximum number of results to return.
+
+        Returns
+        -------
+        list[SearchHit]
+            Hits ordered by descending relevance score.
+        """
+        rows = self._run_fts(query, limit)
+        if rows is None:
+            sanitized = _sanitize_fts_query(query)
+            rows = self._run_fts(sanitized, limit) or [] if sanitized else []
+
+        return [
+            SearchHit(
+                stem=r["stem"],
+                title=r["title"],
+                snippet=r["snip"],
+                score=abs(r["rank"]),
+                content_type=r["content_type"],
+                domains=r["domains"].split(",") if r["domains"] else [],
+            )
+            for r in rows
+        ]
+
+    def semantic_search(self, query: str, limit: int = 10) -> list[SearchHit]:
+        """Find wiki pages by embedding similarity to a natural-language query.
+
+        Returns an empty list when the query has no usable embedding or no current page matches.
+
+        Parameters
+        ----------
+        query: str
+            Natural-language query to embed and match.
+        limit: int
+            Maximum number of results.
+
+        Returns
+        -------
+        list[SearchHit]
+            Hits ordered by ascending vector distance (closest first).
+
+        Raises
+        ------
+        InferenceUnavailableError
+            When local inference cannot embed the query.
+        DependencyError
+            When the vector index cannot be opened.
+        """
+        vector = embed_text(query, role="search_query")
+        if vector is None:
+            return []
+
+        with self._vec_conn() as conn:
+            rows = conn.execute(
+                """
+                WITH nearest AS (
+                    SELECT stem, distance FROM wiki_vec
+                    WHERE embedding MATCH ? AND stem IN (SELECT stem FROM wiki_embedded_pages)
+                    ORDER BY distance LIMIT ?
+                )
+                SELECT stem, distance, title, content_type, domains
+                FROM nearest JOIN wiki_meta USING (stem) ORDER BY distance
+                """,
+                (vector.tobytes(), limit),
+            ).fetchall()
+        return [
+            SearchHit(
+                stem=row["stem"],
+                title=row["title"],
+                snippet=f"(semantic match, distance {row['distance']:.3f})",
+                score=row["distance"],
+                content_type=row["content_type"],
+                domains=row["domains"].split(",") if row["domains"] else [],
+            )
+            for row in rows
+        ]
+
+    def rank_by_similarity(self, source: str, candidates: set[str]) -> list[str]:
+        """Order candidate stems by embedding similarity to the source, closest first.
+
+        Omits candidates without an embedding. Returns an empty list when the source
+        has no embedding or vector storage is unavailable.
+
+        Parameters
+        ----------
+        source: str
+            Stem whose embedding the candidates are measured against.
+        candidates: set[str]
+            Stems to order.
+
+        Returns
+        -------
+        list[str]
+            The embedded subset of `candidates`, ascending by cosine distance
+            to `source`.
+        """
+        if not candidates:
+            return []
+        placeholders = ",".join("?" * len(candidates))
+        try:
+            with self._vec_conn() as conn:
+                rows = conn.execute(
+                    f"""
+                    WITH current_vectors AS (
+                        SELECT stem, embedding FROM wiki_embedded_pages JOIN wiki_vec USING (stem)
+                    )
+                    SELECT c.stem FROM current_vectors AS c, current_vectors AS s
+                    WHERE s.stem = ? AND c.stem IN ({placeholders})
+                    ORDER BY vec_distance_cosine(c.embedding, s.embedding)
+                    """,
+                    [source, *candidates],
+                ).fetchall()
+        except (DependencyError, sqlite3.Error) as exc:
+            logger.debug("Similarity ranking unavailable: %s", exc)
+            return []
+        return [row["stem"] for row in rows]
+
+    def near_duplicate_pairs(
+        self,
+        min_similarity: float = 0.90,
+        limit: int | None = None,
+        exclude: set[tuple[str, str]] | None = None,
+    ) -> list[tuple[str, str, float]]:
+        """
+        Find pairs of pages whose embeddings are close enough to suggest overlap.
+
+        Compares every same-type embedded page by cosine similarity and returns
+        the closest pairs. Returns an empty list if storage is unavailable or
+        nothing is embedded yet.
+
+        Parameters
+        ----------
+        min_similarity: float
+            Cosine similarity floor; pairs below it are not reported.
+        limit: int | None
+            Optional cap on the number of pairs returned; ``None`` returns all
+            above the floor.
+        exclude: set[tuple[str, str]] | None
+            Dismissed pairs to leave out, each as a sorted stem tuple.
+
+        Returns
+        -------
+        list[tuple[str, str, float]]
+            ``(stem_a, stem_b, similarity)`` triples, most similar first.
+        """
+        try:
+            with self._vec_conn() as conn:
+                rows = conn.execute(
+                    "SELECT stem, embedding, content_type "
+                    "FROM wiki_embedded_pages JOIN wiki_vec USING (stem)"
+                ).fetchall()
+        except (DependencyError, sqlite3.Error) as exc:
+            logger.debug("Duplicate sweep unavailable: %s", exc)
+            return []
+        if len(rows) < 2:
+            return []
+
+        import numpy as np
+
+        stems = [row["stem"] for row in rows]
+
+        # compute cosine similarity of every page against every other
+        vectors = np.vstack([np.frombuffer(row["embedding"], dtype=np.float32) for row in rows])
+        norms = np.linalg.norm(vectors, axis=1, keepdims=True)
+        norms[norms == 0] = 1.0  # a zero vector would divide to nan
+        units = vectors / norms
+        similarity = units @ units.T
+
+        # Take each unordered pair once (upper triangle, no self-pairs) and keep
+        # only those at or above the floor before inspecting any in Python.
+        row_index, col_index = np.triu_indices(len(stems), k=1)
+        above_floor = similarity[row_index, col_index] >= min_similarity
+
+        dismissed = exclude or set()
+        pairs: list[tuple[str, str, float]] = []
+        for i, j in zip(row_index[above_floor], col_index[above_floor], strict=True):
+            a, b = stems[i], stems[j]
+            # A page may legitimately sit close to a page of another type (a
+            # problem drilling the concept it came from), so only same-type
+            # pairs count as duplicates.
+            if not _is_same_kind(rows[i]["content_type"], rows[j]["content_type"]):
+                continue
+            if tuple(sorted((a, b))) in dismissed:
+                continue
+            pairs.append((a, b, float(similarity[i, j])))
+
+        pairs.sort(key=lambda pair: -pair[2])
+        return pairs[:limit]
+
+    @staticmethod
+    def _kind_filter(kinds: tuple[str, ...] | None) -> tuple[str, list[str]]:
+        """
+        Build the SQL fragment and params that restrict a query to ``kinds``.
+
+        The fragment extends an existing ``WHERE`` clause, and is empty when
+        ``kinds`` is ``None`` (every kind allowed).
+
+        Parameters
+        ----------
+        kinds: tuple[str, ...] | None
+            Edge kinds to keep; each must be one of
+            ``second_brain.apps.wiki.services.wiki_structure.LINK_KINDS``.
+
+        Returns
+        -------
+        clause: str
+            A trailing ``" AND kind IN (...)"`` fragment, or ``""``.
+        params: list[str]
+            The kind values to bind, positionally matching the fragment.
+
+        Raises
+        ------
+        ValueError
+            If ``kinds`` contains a value that is not a known edge kind.
+        """
+        if not kinds:
+            return "", []
+        unknown = set(kinds) - set(LINK_KINDS)
+        if unknown:
+            raise ValueError(
+                f"Unknown edge kind(s): {sorted(unknown)}. Valid kinds: {list(LINK_KINDS)}"
+            )
+        return f" AND kind IN ({','.join('?' * len(kinds))})", list(kinds)
+
+    def neighbors(
+        self,
+        stems: set[str],
+        kinds: tuple[str, ...] | None = None,
+        following: str = "both",
+    ) -> set[str]:
+        """
+        Find the stems one edge away from any of ``stems`` in the link graph.
+
+        Parameters
+        ----------
+        stems: set[str]
+            Page stems to walk out from.
+        kinds: tuple[str, ...] | None, default=None
+            Edge kinds to traverse; each must be one of
+            ``second_brain.apps.wiki.services.wiki_structure.LINK_KINDS``. ``None`` traverses
+            every kind.
+        following: str
+            Which end of each edge to walk toward: ``"targets"`` for what a
+            page points at (e.g. its prerequisites), ``"sources"`` for what
+            points at it (e.g. its dependents), or ``"both"`` for the union.
+
+        Returns
+        -------
+        set[str]
+            The reached stems, which may include members of ``stems`` (a mutual
+            link) and gaps (a stem with no page).
+
+        Raises
+        ------
+        ValueError
+            If ``kinds`` has an unknown edge kind, or ``following`` is not
+            ``"targets"``, ``"sources"``, or ``"both"``.
+        """
+        if not stems:
+            return set()
+        if following not in ("targets", "sources", "both"):
+            raise ValueError(
+                f"following must be 'targets', 'sources', or 'both', got '{following}'"
+            )
+        kind_sql, kind_params = self._kind_filter(kinds)
+        placeholders = ",".join("?" * len(stems))
+
+        reached: set[str] = set()
+        with self._conn() as conn:
+            if following in ("targets", "both"):
+                outgoing = conn.execute(
+                    f"SELECT target FROM wiki_links WHERE source IN ({placeholders}){kind_sql}",
+                    [*stems, *kind_params],
+                ).fetchall()
+                reached.update(row["target"] for row in outgoing)
+
+            if following in ("sources", "both"):
+                incoming = conn.execute(
+                    f"SELECT source FROM wiki_links WHERE target IN ({placeholders}){kind_sql}",
+                    [*stems, *kind_params],
+                ).fetchall()
+                reached.update(row["source"] for row in incoming)
+        return reached
+
+    def edges_from(
+        self, stems: set[str], kinds: tuple[str, ...] | None = None
+    ) -> list[tuple[str, str]]:
+        """Read outgoing edges from the supplied stems, retaining source and target pairs.
+
+        Parameters
+        ----------
+        stems: set[str]
+            Stems to read outgoing edges from; each is matched as an edge source.
+        kinds: tuple[str, ...] | None
+            Edge kinds to include; each must be one of
+            `second_brain.apps.wiki.services.wiki_structure.LINK_KINDS`. `None` includes every
+            kind.
+
+        Returns
+        -------
+        list[tuple[str, str]]
+            `(source, target)` pairs, where the target may be a gap (no page).
+
+        Raises
+        ------
+        ValueError
+            If `kinds` contains a value that is not a known edge kind.
+        """
+        if not stems:
+            return []
+        kind_sql, kind_params = self._kind_filter(kinds)
+        placeholders = ",".join("?" * len(stems))
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT source, target FROM wiki_links "
+                f"WHERE source IN ({placeholders}){kind_sql}",
+                [*stems, *kind_params],
+            ).fetchall()
+        return [(row["source"], row["target"]) for row in rows]
+
+    def page_titles(self, stems: set[str]) -> dict[str, str]:
+        """
+        Find the title of each stem that is a real page.
+
+        Parameters
+        ----------
+        stems: set[str]
+            Page stems to look up.
+
+        Returns
+        -------
+        dict[str, str]
+            ``{stem: title}`` for the stems that resolve to a page.
+        """
+        if not stems:
+            return {}
+        placeholders = ",".join("?" * len(stems))
+
+        with self._conn() as conn:
+            titles = conn.execute(
+                f"SELECT stem, title FROM wiki_meta WHERE stem IN ({placeholders})", list(stems)
+            ).fetchall()
+        return {row["stem"]: row["title"] for row in titles}
+
+    def list_pages(
+        self,
+        domain: str | None = None,
+        content_type: str | None = None,
+        tag: str | None = None,
+    ) -> list[dict]:
+        """
+        List pages from the metadata table with optional filtering.
+
+        Parameters
+        ----------
+        domain: str | None
+            Filter to pages whose domains contain this value.
+        content_type: str | None
+            Filter to pages with this exact content type.
+        tag: str | None
+            Filter to pages whose tags contain this value.
+
+        Returns
+        -------
+        list[dict]
+            Metadata rows as dicts, ordered by title.
+        """
+        with self._conn() as conn:
+            query = "SELECT * FROM wiki_meta WHERE 1=1"
+            params: list = []
+
+            if domain:
+                query += " AND domains LIKE ?"
+                params.append(f"%{domain}%")
+            if content_type:
+                query += " AND content_type = ?"
+                params.append(content_type)
+            if tag:
+                query += " AND tags LIKE ?"
+                params.append(f"%{tag}%")
+
+            query += " ORDER BY title"
+            rows = conn.execute(query, params).fetchall()
+
+        return [dict(r) for r in rows]
+
+    def domain_counts(self) -> dict[str, int]:
+        """
+        Count how many pages declare each domain.
+
+        Returns
+        -------
+        dict[str, int]
+            ``{domain: page_count}`` over every indexed page.
+        """
+        counts: dict[str, int] = {}
+        with self._conn() as conn:
+            rows = conn.execute("SELECT domains FROM wiki_meta").fetchall()
+
+        # domains are stored comma-joined, so split each row back into names
+        for row in rows:
+            for domain in (row["domains"] or "").split(","):
+                cleaned = domain.strip()
+                if cleaned:
+                    counts[cleaned] = counts.get(cleaned, 0) + 1
+        return counts
+
+    def list_gaps(self) -> list[tuple[str, int]]:
+        """
+        Find link targets that have no page, ranked by how many pages want them.
+
+        A gap is a ``wiki_links`` target with no matching ``wiki_meta`` row, e.g., a
+        concept other pages reference but that has not been written yet.
+
+        Returns
+        -------
+        list[tuple[str, int]]
+            ``(target, reference_count)`` pairs, most-referenced first.
+        """
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT l.target, COUNT(DISTINCT l.source) AS refs "
+                "FROM wiki_links l "
+                "LEFT JOIN wiki_meta m ON m.stem = l.target "
+                "WHERE m.stem IS NULL "
+                "GROUP BY l.target "
+                "ORDER BY refs DESC, l.target"
+            ).fetchall()
+        return [(row["target"], row["refs"]) for row in rows]
+
+    def _delete_page(self, stem: str) -> None:
+        """Remove a page from keyword, graph, and current-vector results."""
+        with self._conn() as conn:
+            conn.execute("DELETE FROM wiki_fts WHERE stem = ?", (stem,))
+            conn.execute("DELETE FROM wiki_meta WHERE stem = ?", (stem,))
+            # only delete edges coming out of the page
+            conn.execute("DELETE FROM wiki_links WHERE source = ?", (stem,))
+
+    def _touch_mtime(self, stem: str, mtime: float) -> None:
+        """Refresh a page's stored mtime without re-indexing its content.
+
+        Used when a file's mtime changed but its content hash did not, so
+        future syncs can skip it via the cheap mtime gate.
+        """
+        with self._conn() as conn:
+            conn.execute("UPDATE wiki_meta SET mtime = ? WHERE stem = ?", (mtime, stem))
+
+    def sync_from_wiki(self, wiki_dir: Path) -> int:
+        """
+        Incrementally reconcile the index with the wiki on disk.
+
+        Index new or edited pages and mark them for the next embedding pass.
+        Removed pages leave search results immediately. An unchanged wiki costs
+        only a stat per file; changed mtimes are checked against the content hash.
+
+        Parameters
+        ----------
+        wiki_dir: Path
+            Root directory of the compiled wiki.
+
+        Returns
+        -------
+        int
+            Number of pages (re)indexed during this sync.
+        """
+        from second_brain.apps.wiki.services.wiki_structure import CONTENT_DIRS, _parse_frontmatter
+
+        with self._conn() as conn:
+            rows = conn.execute("SELECT stem, content_hash, mtime FROM wiki_meta").fetchall()
+        indexed_pages = {r["stem"]: (r["content_hash"], r["mtime"]) for r in rows}
+
+        seen_stems: set[str] = set()
+        indexed_count = 0
+
+        for content_dir in CONTENT_DIRS:
+            dir_path = wiki_dir / content_dir
+            if not dir_path.exists():
+                continue
+            for md_file in dir_path.glob("*.md"):
+                stem = md_file.stem
+                seen_stems.add(stem)
+                file_mtime = md_file.stat().st_mtime
+                previous = indexed_pages.get(stem)
+
+                if previous is not None and previous[1] == file_mtime:
+                    continue
+
+                content = md_file.read_text(encoding="utf-8")
+                content_hash = _hash_content(content)
+                if previous is not None and previous[0] == content_hash:
+                    self._touch_mtime(stem, file_mtime)
+                    continue
+
+                fm = _parse_frontmatter(content)
+                self.index_page(
+                    stem=stem,
+                    title=fm.get("title", stem),
+                    content=content,
+                    content_type=fm.get("type", "unknown"),
+                    domains=fm.get("domains", []),
+                    tags=fm.get("tags", []),
+                    word_count=len(content.split()),
+                    path=f"{content_dir}/{md_file.name}",
+                    mtime=file_mtime,
+                )
+                indexed_count += 1
+
+        removed_count = 0
+        for stem in indexed_pages.keys() - seen_stems:
+            self._delete_page(stem)
+            removed_count += 1
+
+        if indexed_count or removed_count:
+            logger.info(
+                "Synced search index: %d indexed, %d removed",
+                indexed_count,
+                removed_count,
+            )
+        return indexed_count

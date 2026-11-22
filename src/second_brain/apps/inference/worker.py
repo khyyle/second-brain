@@ -1,0 +1,350 @@
+"""Run one model worker while its backend launcher is alive."""
+
+import argparse
+import os
+import signal
+import socket
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+from collections.abc import Iterator
+from contextlib import contextmanager
+from functools import partial
+from pathlib import Path
+from types import FrameType
+from typing import Literal
+
+import django
+import httpx
+from llama_cpp.server.settings import ConfigFileSettings, ModelSettings
+
+from second_brain.apps.inference import INFERENCE_TOKEN_NAME
+from second_brain.apps.inference.catalog import MODELS_BY_PURPOSE, LocalModel, ModelPurpose
+from second_brain.apps.inference.errors import InferenceUnavailableError
+from second_brain.apps.inference.services.worker_status import (
+    WorkerStatus,
+    worker_status_path,
+    write_worker_status,
+)
+from second_brain.django_config.identity import private_token
+from second_brain.django_config.paths import VaultPaths, get_vault_paths
+from second_brain.django_config.vault_storage import vault_lock
+
+PARENT_CHECK_SECONDS = 1
+SHUTDOWN_TIMEOUT_SECONDS = 3
+STARTUP_TIMEOUT_SECONDS = 120
+
+
+def main(purpose: ModelPurpose) -> None:
+    """Prepare one model and serve inference until shutdown or parent exit.
+
+    Reads the vault from Django settings and the launcher's process ID from
+    SECOND_BRAIN_WORKER_PARENT_PID. Holds a lock for the selected purpose until
+    the server exits, then removes its temporary configuration.
+
+    Parameters
+    ----------
+    purpose: ModelPurpose
+        Selects the generation or embedding model and its separate status file.
+
+    Returns
+    -------
+    None
+
+    Raises
+    ------
+    SystemExit
+        Shutdown was requested, or the server exited unsuccessfully.
+    """
+    os.environ.setdefault("DJANGO_SETTINGS_MODULE", "second_brain.django_config.settings.runtime")
+    django.setup()
+
+    model = MODELS_BY_PURPOSE[purpose]
+    parent_pid = int(os.environ.get("SECOND_BRAIN_WORKER_PARENT_PID", os.getppid()))
+    stop = threading.Event()
+    preparing = True
+
+    def request_shutdown(signum: int, frame: FrameType | None) -> None:
+        """Interrupt model preparation or let the server loop clean up its child."""
+        stop.set()
+        if preparing:
+            # Interrupt downloads; no child process needs to be reaped yet.
+            raise SystemExit(0)
+
+    previous_handlers = {
+        signum: signal.getsignal(signum) for signum in (signal.SIGTERM, signal.SIGINT)
+    }
+    watcher = threading.Thread(target=_watch_parent, args=(parent_pid, stop), daemon=True)
+    try:
+        for signum in previous_handlers:
+            signal.signal(signum, request_shutdown)
+        watcher.start()
+        vault_paths: VaultPaths = get_vault_paths()
+        directory = vault_paths.backend_dir
+        # A second worker for this purpose must not replace the active worker's status.
+        with (
+            vault_lock(f"inference-{purpose}", blocking=False),
+            _track_worker_status(model, directory) as status,
+            tempfile.TemporaryDirectory(
+                prefix=f"inference-{purpose}-", dir=directory
+            ) as temporary,
+        ):
+            server_config: ConfigFileSettings = _prepare_server_config(model, vault_paths, status)
+            config_path = Path(temporary) / "server_config.json"
+            config_path.write_text(server_config.model_dump_json(indent=2))
+
+            # Defer signals during process creation until its handle can be cleaned up.
+            preparing = False
+            if stop.is_set():
+                return
+            return_code = _run_server(config_path, stop, directory, status)
+            if return_code and not stop.is_set():
+                raise SystemExit(return_code if return_code > 0 else 1)
+    finally:
+        stop.set()
+        if watcher.ident is not None:
+            watcher.join()
+        # Signal handlers belong to the process, so restore them when this runner returns.
+        for signum, handler in previous_handlers.items():
+            signal.signal(signum, handler)
+
+
+def _prepare_server_config(
+    model: LocalModel, vault_paths: VaultPaths, status: WorkerStatus
+) -> ConfigFileSettings:
+    """Prepare the model file and configure its authenticated HTTP server.
+
+    Parameters
+    ----------
+    model: LocalModel
+        Catalog artifact and its generation or embedding settings.
+    vault_paths: VaultPaths
+        Vault containing the inference token and preparation status file.
+    status: WorkerStatus
+        Worker identity to preserve while publishing model preparation progress.
+
+    Returns
+    -------
+    ConfigFileSettings
+        Server settings containing the verified model path and authentication token.
+
+    Raises
+    ------
+    InferenceUnavailableError
+        The model file could not be downloaded or verified.
+    """
+    # Hugging Face reads cache settings at import time, after Django loads .env.
+    from second_brain.apps.inference.services.model_files import ModelFiles
+
+    model_path = ModelFiles().ensure(
+        model, partial(_publish_progress, vault_paths.backend_dir, status)
+    )
+    model_settings = ModelSettings(
+        model=str(model_path),
+        model_alias=model.name,
+        n_ctx=model.context_tokens,
+        n_gpu_layers=-1,
+        embedding=model.purpose == "embedding",
+        # NOTE: may not work on machines with less RAM
+        cache=model.purpose == "generation",
+    )
+    if model.purpose == "embedding":
+        model_settings.n_batch = model.context_tokens
+        # The Nomic encoder needs the entire input in one physical token batch.
+        model_settings.n_ubatch = model.context_tokens
+    return ConfigFileSettings(
+        host="127.0.0.1",
+        port=0,
+        api_key=private_token(vault_paths.data_dir, INFERENCE_TOKEN_NAME),
+        # Pending requests wait instead of interrupting an active stream.
+        interrupt_requests=False,
+        models=[model_settings],
+    )
+
+
+@contextmanager
+def _track_worker_status(model: LocalModel, directory: Path) -> Iterator[WorkerStatus]:
+    """Publish startup status and retain failures after the worker exits.
+
+    Parameters
+    ----------
+    model: LocalModel
+        Model whose worker owns the status file.
+    directory: Path
+        Vault backend directory. The per-purpose worker lock must remain held
+        throughout this context so another worker cannot replace its status.
+
+    Yields
+    ------
+    WorkerStatus
+        Initial worker identity with phase starting. Normal exit and successful
+        SystemExit remove the status file; exceptions and nonzero SystemExit
+        retain an error record and propagate unchanged.
+    """
+    status = WorkerStatus(
+        purpose=model.purpose, model=model.name, pid=os.getpid(), phase="starting"
+    )
+    reason: str | None = None
+    try:
+        write_worker_status(directory, status)
+        yield status
+    except SystemExit as exc:
+        if exc.code:
+            reason = "Local inference stopped unexpectedly. Check backend logs."
+        raise
+    except Exception as exc:
+        reason = (
+            exc.reason
+            if isinstance(exc, InferenceUnavailableError)
+            else "Local inference failed to start. Check backend logs."
+        )
+        raise
+    finally:
+        if reason is None:
+            worker_status_path(directory, model.purpose).unlink(missing_ok=True)
+        else:
+            write_worker_status(
+                directory, status.model_copy(update={"phase": "error", "error": reason})
+            )
+
+
+def _watch_parent(parent_pid: int, stop: threading.Event) -> None:
+    """Request normal shutdown if the original parent disappears."""
+    while not stop.wait(PARENT_CHECK_SECONDS):
+        if os.getppid() != parent_pid:
+            os.kill(os.getpid(), signal.SIGTERM)
+            return
+
+
+def _publish_progress(
+    directory: Path,
+    status: WorkerStatus,
+    phase: Literal["downloading", "verifying"],
+    completed: int,
+    total: int,
+) -> None:
+    """Publish byte counts for the model currently being prepared.
+
+    Parameters
+    ----------
+    directory: Path
+        Vault backend directory containing the worker's status file.
+    status: WorkerStatus
+        Worker identity to preserve in the progress snapshot.
+    phase: Literal["downloading", "verifying"]
+        Preparation step whose byte counts are being reported.
+    completed: int
+        Bytes completed within this step.
+    total: int
+        Expected model file size in bytes.
+
+    Returns
+    -------
+    None
+    """
+    write_worker_status(
+        directory,
+        status.model_copy(update={"phase": phase, "completed": completed, "total": total}),
+    )
+
+
+def _run_server(
+    config_path: Path, stop: threading.Event, directory: Path, status: WorkerStatus
+) -> int:
+    """Publish HTTP readiness and stop the server before returning.
+
+    Parameters
+    ----------
+    config_path: Path
+        JSON configuration containing loopback server settings, token, and model paths.
+    stop: threading.Event
+        Requests shutdown when set.
+    directory: Path
+        Vault backend directory where startup status is published.
+    status: WorkerStatus
+        Worker identity and selected model, before the HTTP server starts.
+
+    Returns
+    -------
+    int
+        Server exit code, including a negative signal number on forced termination.
+
+    Raises
+    ------
+    InferenceUnavailableError
+        The server did not become ready or returned an unexpected model list.
+    """
+    server_config: ConfigFileSettings = ConfigFileSettings.model_validate_json(
+        config_path.read_text()
+    )
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+        listener.bind(("127.0.0.1", 0))
+        port = listener.getsockname()[1]
+        # Pass the open socket so another process cannot claim the port before startup.
+        process = subprocess.Popen(
+            [
+                sys.executable,
+                "-m",
+                "second_brain.apps.inference.server",
+                str(config_path),
+                str(listener.fileno()),
+                str(os.getpid()),
+            ],
+            pass_fds=(listener.fileno(),),
+        )
+    try:
+        status = status.model_copy(
+            update={"server_pid": process.pid, "port": port, "phase": "loading"}
+        )
+        deadline = time.monotonic() + STARTUP_TIMEOUT_SECONDS
+        write_worker_status(directory, status)
+        with httpx.Client(
+            base_url=f"http://127.0.0.1:{port}",
+            headers={"Authorization": f"Bearer {server_config.api_key}"},
+            timeout=1,
+            trust_env=False,
+        ) as client:
+            while process.poll() is None and not stop.wait(PARENT_CHECK_SECONDS):
+                if status.phase == "ready":
+                    continue
+                try:
+                    response = client.get("/v1/models")
+                except httpx.RequestError:
+                    pass
+                else:
+                    try:
+                        response.raise_for_status()
+                        available = {model["id"] for model in response.json()["data"]}
+                        expected = {
+                            model.model_alias or model.model for model in server_config.models
+                        }
+                        if available != expected:
+                            raise ValueError("Unexpected model aliases")
+                    except (httpx.HTTPStatusError, ValueError, KeyError, TypeError) as exc:
+                        raise InferenceUnavailableError(
+                            "Local inference did not confirm its configured models. "
+                            "Check backend logs."
+                        ) from exc
+                    status = status.model_copy(update={"phase": "ready"})
+                    write_worker_status(directory, status)
+                if status.phase != "ready" and time.monotonic() >= deadline:
+                    raise InferenceUnavailableError(
+                        "Local inference took too long to start. Check backend logs and retry."
+                    )
+    finally:
+        if process.poll() is None:
+            process.terminate()
+        try:
+            return_code = process.wait(timeout=SHUTDOWN_TIMEOUT_SECONDS)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            return_code = process.wait()
+    return return_code
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("purpose", choices=MODELS_BY_PURPOSE)
+    main(parser.parse_args().purpose)

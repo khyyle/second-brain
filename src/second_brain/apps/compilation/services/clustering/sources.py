@@ -1,0 +1,165 @@
+"""Embed raw sources and group them into clusters for compilation."""
+
+from __future__ import annotations
+
+import logging
+from collections.abc import Callable
+from pathlib import Path
+
+import numpy as np
+from numpy.typing import NDArray
+
+from second_brain.apps.compilation.services.clustering.base import Clusterer
+from second_brain.apps.inference.services.worker_client import embed_text
+
+logger = logging.getLogger(__name__)
+
+ProgressCallback = Callable[[int, int], None]
+
+
+def embed_sources(
+    raw_paths: list[str],
+    raw_dir: Path,
+    signature_chars: int,
+    progress: ProgressCallback | None = None,
+) -> tuple[list[str], list[NDArray[np.float32]]]:
+    """Embed each source's opening as a topical fingerprint.
+
+    Parameters
+    ----------
+    raw_paths: list[str]
+        Source paths relative to `raw_dir`.
+    raw_dir: Path
+        Root of the raw parsed sources.
+    signature_chars: int
+        How much of each source's opening to embed.
+    progress: ProgressCallback | None
+        Called before each source with its zero-based index and the total source
+        count, including sources later skipped because reading or embedding failed.
+
+    Returns
+    -------
+    embedded: list[str]
+        Paths that embedded successfully, aligned with `vectors`.
+    vectors: list[NDArray[np.float32]]
+        Their embedding vectors.
+
+    Raises
+    ------
+    InferenceUnavailableError
+        When the embedder cannot serve a request. A partial set is not
+        returned, because a grouping built from it would be wrong.
+    """
+    embedded: list[str] = []
+    vectors: list[NDArray[np.float32]] = []
+    total = len(raw_paths)
+    for index, rel in enumerate(raw_paths):
+        if progress is not None:
+            progress(index, total)
+        try:
+            text = (raw_dir / rel).read_text(encoding="utf-8", errors="replace")
+        except OSError as exc:
+            logger.warning("Could not read %s for clustering: %s", rel, exc)
+            continue
+        vector = embed_text(text[:signature_chars], role="clustering")
+        if vector is None:
+            continue
+        embedded.append(rel)
+        vectors.append(vector)
+    return embedded, vectors
+
+
+def _lane(rel_path: str) -> str:
+    """Return a raw path's source lane (its first path component)."""
+    parts = Path(rel_path).parts
+    return parts[0] if parts else ""
+
+
+def cluster_scoped_sources(
+    raw_paths: list[str],
+    raw_dir: Path,
+    clusterer: Clusterer,
+    in_scope_lanes: tuple[str, ...],
+    signature_chars: int = 8000,
+    progress: ProgressCallback | None = None,
+) -> list[list[str]]:
+    """Cluster only sources in the configured lanes; pass others through.
+
+    Sources whose lane is outside `in_scope_lanes` become singletons, so
+    deliberately dropped material compiles one source per run while bulk
+    imports are grouped.
+
+    Parameters
+    ----------
+    raw_paths: list[str]
+        Source paths relative to `raw_dir`.
+    raw_dir: Path
+        Root of the raw parsed sources.
+    clusterer: Clusterer
+        Strategy that partitions in-scope embeddings into groups.
+    in_scope_lanes: tuple[str, ...]
+        Lanes eligible for clustering.
+    signature_chars: int
+        How much of each source to embed as its fingerprint.
+    progress: ProgressCallback | None
+        Optional callback receiving the zero-based index and total count of the
+        sources selected for embedding, before each source is processed.
+
+    Returns
+    -------
+    list[list[str]]
+        Clusters covering every input path exactly once.
+    """
+    in_scope = [rel for rel in raw_paths if _lane(rel) in in_scope_lanes]
+    out_of_scope = [rel for rel in raw_paths if _lane(rel) not in in_scope_lanes]
+
+    clusters: list[list[str]] = []
+    if in_scope:
+        clusters.extend(cluster_sources(in_scope, raw_dir, clusterer, signature_chars, progress))
+    clusters.extend([rel] for rel in out_of_scope)
+    return clusters
+
+
+def cluster_sources(
+    raw_paths: list[str],
+    raw_dir: Path,
+    clusterer: Clusterer,
+    signature_chars: int = 8000,
+    progress: ProgressCallback | None = None,
+) -> list[list[str]]:
+    """Group related sources into clusters, preserving every source.
+
+    Sources that return no embedding are kept as their own singleton
+    clusters, so one unreadable or oversized source is not dropped. An
+    unavailable embedder raises instead, so grouping does not proceed on
+    a partial set.
+
+    Parameters
+    ----------
+    raw_paths: list[str]
+        Source paths relative to `raw_dir`.
+    raw_dir: Path
+        Root of the raw parsed sources.
+    clusterer: Clusterer
+        Strategy that partitions embedding vectors into groups.
+    signature_chars: int
+        How much of each source to embed as its fingerprint.
+    progress: ProgressCallback | None
+        Optional callback receiving the zero-based index and total count of the
+        sources selected for embedding, before each source is processed.
+
+    Returns
+    -------
+    list[list[str]]
+        Clusters of source paths covering every input path exactly once.
+    """
+    embedded, vectors = embed_sources(raw_paths, raw_dir, signature_chars, progress)
+    embedded_set = set(embedded)
+    failed = [path for path in raw_paths if path not in embedded_set]
+
+    clusters: list[list[str]] = []
+    if vectors:
+        for group in clusterer.cluster(vectors):
+            clusters.append([embedded[i] for i in group])
+    clusters.extend([path] for path in failed)
+    return clusters

@@ -1,0 +1,260 @@
+"""Embedding retrieval, page freshness, and keyword search during model outages."""
+
+from __future__ import annotations
+
+from pathlib import Path
+from unittest.mock import Mock
+
+import numpy as np
+import pytest
+from numpy.typing import NDArray
+
+from second_brain.apps.inference.errors import InferenceUnavailableError
+from second_brain.apps.inference.services.worker_client import EmbeddingRole
+from second_brain.apps.wiki.services import search_index as search_index_mod
+from second_brain.apps.wiki.services.assistant_tools import WikiTools
+from second_brain.apps.wiki.services.search_index import SearchIndex
+from second_brain.apps.wiki.tests.test_assistant_tools.conftest import padded_vector
+from second_brain.django_config.errors import DependencyError
+
+# Three coordinates determine the nearest-neighbor ordering; the rest are zero.
+_VECTORS = {
+    "gradient": [1.0, 0.0, 0.0],
+    "optimization": [0.9, 0.1, 0.0],
+    "penguin": [0.0, 1.0, 0.0],
+    "biology": [0.0, 0.9, 0.1],
+}
+
+
+def _fake_embed(text: str, role: EmbeddingRole) -> NDArray[np.float32]:
+    lowered = text.lower()
+    for key, vec in _VECTORS.items():
+        if key in lowered:
+            return padded_vector(*vec)
+    return padded_vector(0.0, 0.0, 1.0)
+
+
+@pytest.fixture(autouse=True)
+def _mock_embeddings(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(search_index_mod, "embed_text", _fake_embed)
+
+
+def _index_sample(index: SearchIndex) -> None:
+    index.index_page(
+        stem="gradient-descent",
+        title="Gradient Descent optimization",
+        content="gradient based optimization method",
+        content_type="concept",
+        domains=["math"],
+        tags=["optimization"],
+        word_count=4,
+        path="concepts/gradient-descent.md",
+    )
+    index.index_page(
+        stem="penguins",
+        title="Penguin biology",
+        content="penguin species and biology",
+        content_type="concept",
+        domains=["biology"],
+        tags=["penguin"],
+        word_count=4,
+        path="concepts/penguins.md",
+    )
+
+
+def test_semantic_search_returns_nearest(search_index: SearchIndex) -> None:
+    _index_sample(search_index)
+    search_index.embed_pending()
+
+    hits = search_index.semantic_search("gradient optimization", limit=1)
+    assert len(hits) == 1
+    assert hits[0].stem == "gradient-descent"
+
+    hits2 = search_index.semantic_search("penguin", limit=1)
+    assert hits2[0].stem == "penguins"
+
+
+def test_changed_page_is_excluded_until_reembedded(
+    tmp_path: Path, search_index: SearchIndex
+) -> None:
+    _index_sample(search_index)
+    search_index.embed_pending()
+    keyword_index = SearchIndex(tmp_path / "search.db")
+    keyword_index.index_page(
+        "gradient-descent", "Changed page", "penguin", "concept", [], [], 1, "concepts/g.md"
+    )
+
+    assert {hit.stem for hit in keyword_index.search("penguin")} == {
+        "gradient-descent",
+        "penguins",
+    }
+    assert [hit.stem for hit in search_index.semantic_search("gradient", limit=1)] == ["penguins"]
+    assert search_index.rank_by_similarity("gradient-descent", {"penguins"}) == []
+    assert search_index.rank_by_similarity("penguins", {"gradient-descent"}) == []
+    assert search_index.near_duplicate_pairs(min_similarity=0.0) == []
+
+    assert search_index.embed_pending() == 1
+    assert search_index.rank_by_similarity("penguins", {"gradient-descent"}) == [
+        "gradient-descent"
+    ]
+
+
+def test_semantic_search_uses_retrieval_roles(
+    search_index: SearchIndex, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    roles: list[EmbeddingRole] = []
+
+    def record_role(text: str, role: EmbeddingRole) -> NDArray[np.float32]:
+        roles.append(role)
+        return _fake_embed(text, role)
+
+    monkeypatch.setattr(search_index_mod, "embed_text", record_role)
+    _index_sample(search_index)
+
+    search_index.embed_pending()
+    search_index.semantic_search("gradient")
+
+    assert roles == [
+        "search_document",
+        "search_document",
+        "search_query",
+    ]
+
+
+def test_vector_storage_failure_is_visible_and_leaves_keyword_search_available(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with monkeypatch.context() as patch:
+        patch.setattr("sqlite_vec.load", Mock(side_effect=OSError("extension unavailable")))
+        index = SearchIndex(tmp_path / "search.db")
+        _index_sample(index)
+        assert index.search("penguin")[0].stem == "penguins"
+        with pytest.raises(DependencyError, match="vector index could not be initialized"):
+            index.embed_pending()
+        with pytest.raises(DependencyError, match="vector index could not be initialized"):
+            index.semantic_search("penguin")
+        assert index.has_pending_embeddings()
+
+    assert index.embed_pending() == 2
+    assert index.semantic_search("penguin", limit=1)[0].stem == "penguins"
+
+
+def test_query_embedding_failure_preserves_keyword_search(
+    search_index: SearchIndex, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _index_sample(search_index)
+
+    def _raise(text: str, role: EmbeddingRole) -> NDArray[np.float32]:
+        raise InferenceUnavailableError("down")
+
+    monkeypatch.setattr(search_index_mod, "embed_text", _raise)
+    with pytest.raises(InferenceUnavailableError):
+        search_index.semantic_search("gradient")
+    hits = search_index.search("penguin")
+    assert any(hit.stem == "penguins" for hit in hits)
+
+
+def test_semantic_tool_propagates_inference_outage(
+    tmp_path: Path, search_index: SearchIndex, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _index_sample(search_index)
+    tools = WikiTools(tmp_path / "wiki", tmp_path / "raw", search_index)
+
+    def _raise(text: str, role: EmbeddingRole) -> NDArray[np.float32]:
+        raise InferenceUnavailableError("down")
+
+    monkeypatch.setattr(search_index_mod, "embed_text", _raise)
+
+    with pytest.raises(InferenceUnavailableError):
+        tools.semantic_search("gradient")
+
+
+def test_semantic_returns_empty_when_query_has_no_usable_embedding(
+    search_index: SearchIndex, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _index_sample(search_index)
+    monkeypatch.setattr(search_index_mod, "embed_text", lambda text, role: None)
+    assert search_index.semantic_search("gradient") == []
+
+
+def test_keyword_search_works_before_pages_are_embedded(search_index: SearchIndex) -> None:
+    _index_sample(search_index)
+    hits = search_index.search("penguin")
+    assert any(h.stem == "penguins" for h in hits)
+
+
+def test_near_duplicate_pairs_finds_only_close_pages(search_index: SearchIndex) -> None:
+    _index_sample(search_index)
+    # A near-copy of the gradient page: its fake embedding matches "gradient"
+    # exactly, while the penguin page points in an orthogonal direction.
+    search_index.index_page(
+        stem="gradient-descent-2",
+        title="Gradient methods",
+        content="gradient stepping toward minima",
+        content_type="concept",
+        domains=["math"],
+        tags=[],
+        word_count=4,
+        path="concepts/gradient-descent-2.md",
+    )
+    search_index.embed_pending()
+
+    pairs = search_index.near_duplicate_pairs(min_similarity=0.95)
+
+    assert [(a, b) for a, b, _ in pairs] == [("gradient-descent", "gradient-descent-2")]
+    assert pairs[0][2] >= 0.95
+
+
+def test_near_duplicate_pairs_ignores_cross_type_matches(search_index: SearchIndex) -> None:
+    # A concept and a problem that embed identically: high similarity, but a
+    # problem drilling a concept is intentional, not a duplicate.
+    search_index.index_page(
+        stem="gradient-descent",
+        title="Gradient Descent",
+        content="gradient based optimization method",
+        content_type="concept",
+        domains=["math"],
+        tags=[],
+        word_count=4,
+        path="concepts/gradient-descent.md",
+    )
+    search_index.index_page(
+        stem="gradient-descent-drill",
+        title="Gradient Descent drill",
+        content="gradient based optimization method",
+        content_type="problem",
+        domains=["math"],
+        tags=[],
+        word_count=4,
+        path="problems/gradient-descent-drill.md",
+    )
+    search_index.embed_pending()
+
+    assert search_index.near_duplicate_pairs(min_similarity=0.95) == []
+
+
+def test_no_duplicate_pairs_before_pages_are_embedded(search_index: SearchIndex) -> None:
+    _index_sample(search_index)
+    assert search_index.near_duplicate_pairs() == []
+
+
+def test_near_duplicate_pairs_excludes_dismissed(search_index: SearchIndex) -> None:
+    _index_sample(search_index)
+    search_index.index_page(
+        stem="gradient-descent-2",
+        title="Gradient methods",
+        content="gradient stepping toward minima",
+        content_type="concept",
+        domains=["math"],
+        tags=[],
+        word_count=4,
+        path="concepts/gradient-descent-2.md",
+    )
+    search_index.embed_pending()
+
+    pairs = search_index.near_duplicate_pairs(
+        min_similarity=0.95,
+        exclude={("gradient-descent", "gradient-descent-2")},
+    )
+
+    assert ("gradient-descent", "gradient-descent-2") not in [(a, b) for a, b, _ in pairs]

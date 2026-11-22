@@ -9,10 +9,7 @@ let package = Package(
     targets: [
         .executableTarget(
             name: "SecondBrainBar",
-            path: "Sources/SecondBrainBar",
-            linkerSettings: [
-                .linkedLibrary("sqlite3")
-            ]
+            path: "Sources/SecondBrainBar"
         ),
         .testTarget(
             name: "SecondBrainBarTests",

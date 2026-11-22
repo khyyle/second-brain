@@ -19,14 +19,14 @@
 
 ## How it works
 
-1. **Ingest**: Drop files into the app or save them into watched folders. Local parsing models extract clean Markdown on your Mac (including handwriting and layout OCR). When you import chat history, a local model filters out low-value chats and groups related conversations.
-2. **Review**: Staged sources appear in the menu bar app with cost estimates. You can inspect parsed files, remove sources you do not want, or adjust conversation clusters.
+1. **Ingest**: Drop files into the app or save them into watched folders. Local parsing models extract clean Markdown on your Mac (including handwriting and layout OCR). When you import chat history, a local model filters out low-value chats.
+2. **Review**: Staged sources appear in the menu bar app with cost estimates. You can inspect parsed files, remove sources you do not want, or group related chats and adjust those groups before building.
 3. **Compile**: A cloud model agent inspects your existing wiki to understand what you already know, updates existing concept pages with new material, adds new pages, and wires bidirectional links and prerequisites.
 4. **Access**: The resulting pages update directly in Obsidian. Connected desktop agents (Claude, Cursor, ChatGPT) can query the graph through MCP and write new discoveries back.
 
 ```
-documents   capture -> ingest ----------------------> compile -> access
-chats       capture -> ingest -> triage -> cluster -> compile -> access
+documents   capture -> ingest ----------------------------------> compile -> access
+chats       capture -> ingest -> triage -> optional grouping ----> compile -> access
 ```
 
 See [Architecture](docs/architecture.md) for how the pipeline and storage work under the hood.
@@ -39,7 +39,6 @@ See [Architecture](docs/architecture.md) for how the pipeline and storage work u
 - Around 10 GB of free disk space for dependencies and local models.
 - [uv](https://github.com/astral-sh/uv) package manager.
 - Xcode Command Line Tools (`xcode-select --install`).
-- [Ollama](https://ollama.com) installed and running.
 
 ### Install
 
@@ -49,9 +48,9 @@ From the repository root:
 ./install.sh
 ```
 
-This installs Python dependencies, builds the menu bar app into `/Applications`, sets up data directories under `~/second-brain/`, and downloads the required local models (`gemma4:12b` and `nomic-embed-text`).
+This installs Python dependencies, builds the menu bar app into `/Applications`, sets up data directories under `~/second-brain/`, and prepares the OCR models. On first launch, the backend downloads and starts the triage and embedding models (`gemma4:12b` and `nomic-embed-text`).
 
-You can verify Ollama status via the app's settings. Alternatively, to verify from a terminal:
+You can check local model status in the app's settings. Alternatively, to verify from a terminal:
 
 ```bash
 uv run second-brain doctor
@@ -59,7 +58,7 @@ uv run second-brain doctor
 
 ## First run
 
-Open Second Brain from the menu bar:
+Launch Second Brain from Applications, then click its menu bar icon:
 
 1. Open Settings, select a cloud model for compilation, and add its corresponding API key. You can set a per-build spend cap to keep cloud costs bounded.
 2. Select files to add into the knowledge base on the Ingest tab (or drag a file anywhere in the app window). These files will be parsed and subsequently staged for compilation.
@@ -96,7 +95,7 @@ The knowledge base is stored at `~/second-brain/wiki/` as standard Markdown file
 Connecting via MCP gives desktop agents access to the same graph. Assistants can search your notes by meaning or keyword, follow links across concepts, trace citations back to raw sources, and write new notes directly back into the vault. In Settings, click then refresh the corresponding assistant to install the Second Brain MCP. 
 
 <p align="center">
-  <img src="docs/images/settings-mcp-buttons.png" width="520 alt="MCP integration buttons in settings">
+  <img src="docs/images/settings-mcp-buttons.png" width="520" alt="MCP integration buttons in settings">
 </p>
 
 See [Querying over MCP](docs/mcp.md) for more details and tool reference.
@@ -107,6 +106,7 @@ See [Querying over MCP](docs/mcp.md) for more details and tool reference.
 - [Command line](docs/cli.md): manage the pipeline and inspect vault status from the terminal.
 - [Querying over MCP](docs/mcp.md): configure desktop AI clients and query tools.
 - [Architecture](docs/architecture.md): pipeline execution model and on-disk layout.
+- [Development](docs/development.md): developer relevant details for the backend.
 - [Wiki structure](docs/wiki-structure.md): vault directory layout, metadata conventions, and link semantics.
 - [Data lifecycle and deletion](docs/lifecycle.md): content hashing, caching, and recovery behavior.
 

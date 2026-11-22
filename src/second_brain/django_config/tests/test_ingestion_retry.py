@@ -1,0 +1,379 @@
+"""Exercise explicit ingestion retries and automatic triage recovery in a disposable vault."""
+
+import json
+from collections.abc import Callable
+from pathlib import Path
+from unittest.mock import Mock
+
+import pytest
+
+from second_brain.apps.inference.catalog import ModelPurpose
+from second_brain.apps.inference.errors import (
+    InferenceServerOfflineError,
+    InferenceUnavailableError,
+)
+from second_brain.apps.ingestion.services.parsing import text_handler
+from second_brain.apps.ingestion.services.source_manifest import Manifest
+from second_brain.apps.ingestion.services.source_watching import SourceWatcher
+from second_brain.apps.jobs.models import Job
+from second_brain.apps.jobs.services import job_queue
+from second_brain.apps.jobs.worker import run_attempt
+from second_brain.apps.library.models import Source
+from second_brain.apps.library.models import TriageDecision as StoredTriageDecision
+from second_brain.apps.preferences.services.user_settings import (
+    get_pipeline_config,
+    update_preferences,
+)
+from second_brain.errors import SecondBrainError
+from second_brain.pipeline_config import PipelineConfig
+
+
+def _run_next_ingestion() -> Job:
+    job = job_queue.claim_next_job("ingest")
+    assert job is not None
+    run_attempt(job)
+    job.refresh_from_db()
+    return job
+
+
+@pytest.mark.parametrize(
+    "selection,remove_copy",
+    [
+        ("selected", False),
+        ("selected", True),
+        ("drops", False),
+        ("watched", False),
+        ("watched", True),
+    ],
+)
+def test_job_retry_recovers_unchanged_failure_and_preserves_success(
+    api_client, config, tmp_path, monkeypatch, selection, remove_copy
+):
+    originals = tmp_path / "originals"
+    originals.mkdir()
+    for name in ("good.md", "bad.md"):
+        (originals / name).write_text(f"# {name}\n\nDistinct content for {name}.")
+    parsed = []
+    process_text = text_handler.process_text_file
+
+    def fail_once(path, output_dir):
+        parsed.append(path.name)
+        if path.name == "bad.md" and parsed.count("bad.md") == 1:
+            raise SecondBrainError("Storage is temporarily unavailable.")
+        return process_text(path, output_dir)
+
+    monkeypatch.setattr(text_handler, "process_text_file", fail_once)
+    if selection == "selected":
+        response = api_client.post(
+            "/v1/imports",
+            data={"paths": [str(path) for path in sorted(originals.iterdir())]},
+            content_type="application/json",
+        )
+        assert response.status_code == 202, response.content
+    else:
+        if selection == "watched":
+            response = api_client.put(
+                "/v1/watched-folders",
+                data=[
+                    {
+                        "name": "research",
+                        "path": str(originals),
+                        "file_types": ["md"],
+                        "enabled": True,
+                    }
+                ],
+                content_type="application/json",
+            )
+            assert response.status_code == 200, response.content
+        else:
+            for path in originals.iterdir():
+                (config.drops_dir / "documents" / path.name).write_bytes(path.read_bytes())
+        job_queue.enqueue_job("ingest", {"drops_only": selection == "drops"})
+
+    failed = _run_next_ingestion()
+    original_payload = dict(failed.payload)
+    assert failed.status == "failed"
+    assert failed.result["completed"] == 1
+    failed_source = Source.objects.get(status="failed")
+    assert failed_source.error == "Storage is temporarily unavailable."
+    completed = Source.objects.get(status="complete")
+    completed_output = config.raw_dir / completed.raw_output
+    original_output = completed_output.read_bytes()
+    if remove_copy:
+        Path(failed_source.file_path).unlink()
+    unrelated = None
+    if selection == "selected":
+        unrelated_path = config.drops_dir / "documents" / "unrelated.md"
+        unrelated_path.write_text("A failure outside this job's selected files.")
+        manifest = Manifest()
+        manifest.mark_processing(unrelated_path, "documents")
+        manifest.mark_failed(unrelated_path, "Unrelated failure.")
+        unrelated = Source.objects.get(pk=str(unrelated_path))
+
+    job_queue.enqueue_job("ingest", {"drops_only": selection != "watched"})
+    automatic_scan = _run_next_ingestion()
+    assert automatic_scan.result == {"completed": 0, "failed": 0}
+    failed_source.refresh_from_db()
+    assert failed_source.status == "failed"
+    assert parsed.count("bad.md") == 1
+
+    response = api_client.post(
+        f"/v1/jobs/{failed.pk}/retry", data={}, content_type="application/json"
+    )
+    assert response.status_code == 202, response.content
+    retried = _run_next_ingestion()
+
+    assert retried.pk != failed.pk
+    assert retried.retry_of_id == failed.pk
+    assert retried.status == "succeeded", retried.error
+    assert retried.result == {"completed": 1, "failed": 0}
+    assert parsed.count("good.md") == 1
+    assert parsed.count("bad.md") == 2
+    assert completed_output.read_bytes() == original_output
+    failed_source.refresh_from_db()
+    assert failed_source.status == "complete"
+    assert failed_source.error is None
+    if unrelated is not None:
+        unrelated.refresh_from_db()
+        assert unrelated.status == "failed"
+        assert unrelated.error == "Unrelated failure."
+        assert "unrelated.md" not in parsed
+    failed.refresh_from_db()
+    assert failed.status == "failed"
+    assert failed.payload == original_payload
+
+
+@pytest.mark.parametrize("automatic", [False, True], ids=["explicit-retry", "model-ready"])
+def test_triage_retry_does_not_reparse_completed_export(
+    api_client, config, tmp_path, monkeypatch, publish_ready_model, automatic
+):
+    export = tmp_path / "conversations.json"
+    export.write_text(
+        json.dumps(
+            [
+                {
+                    "title": "Useful conversation",
+                    "id": "retry123",
+                    "mapping": {
+                        "node": {
+                            "message": {
+                                "author": {"role": "user"},
+                                "content": {
+                                    "parts": ["A conversation about gradient descent. " * 100]
+                                },
+                            }
+                        }
+                    },
+                }
+            ]
+        )
+    )
+    attempts = []
+
+    def generate(prompt: str, *, max_tokens: int | None) -> str:
+        attempts.append(prompt)
+        if len(attempts) == 1:
+            raise InferenceServerOfflineError("Local inference is still loading.")
+        return '{"decision": "worthwhile", "confidence": 1.0}'
+
+    monkeypatch.setattr(
+        "second_brain.apps.ingestion.services.triage.classification.generate_json", generate
+    )
+    response = api_client.post(
+        "/v1/imports",
+        data={"paths": [str(export)], "source_type": "chatgpt"},
+        content_type="application/json",
+    )
+    assert response.status_code == 202, response.content
+    failed = _run_next_ingestion()
+    source = Source.objects.get()
+    assert failed.status == "failed"
+    assert failed.error == "Local inference is still loading."
+    assert source.status == "complete"
+    assert not Path(source.file_path).exists()
+    assert not StoredTriageDecision.objects.exists()
+
+    def unexpected_parse(*args, **kwargs):
+        pytest.fail("Completed export should not be parsed again during triage retry")
+
+    monkeypatch.setattr(
+        "second_brain.apps.ingestion.services.ingestion_runs.ingest_file", unexpected_parse
+    )
+    if automatic:
+        watcher = SourceWatcher()
+        publish_ready_model("generation")
+        watcher.scan(config)
+        watcher.scan(config)
+    else:
+        job_queue.retry(failed.pk)
+    retried = _run_next_ingestion()
+
+    assert retried.status == "succeeded", retried.error
+    assert retried.result == {"completed": 0, "failed": 0}
+    assert StoredTriageDecision.objects.get().decision == "worthwhile"
+    assert len(attempts) == 2
+    if automatic:
+        watcher.scan(config)
+        assert Job.objects.count() == 2
+
+
+def test_ingest_queued_during_empty_triage_scan_can_still_resume(
+    config: PipelineConfig,
+    publish_ready_model: Callable[[ModelPurpose], None],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    watcher = SourceWatcher()
+    publish_ready_model("generation")
+
+    def enqueue_during_scan(*_: object) -> list[Path]:
+        job_queue.enqueue_job("ingest", {"paths": []})
+        return []  # The scan hasn't seen any chats yet.
+
+    with monkeypatch.context() as patch:
+        patch.setattr(
+            "second_brain.apps.ingestion.services.source_watching.find_untriaged_sources",
+            enqueue_during_scan,
+        )
+        watcher.scan(config)
+
+    chat = config.raw_dir / "chatgpt" / "late.md"
+    chat.parent.mkdir()
+    chat.write_text("triage " * 500)
+    monkeypatch.setattr(
+        "second_brain.apps.ingestion.services.triage.classification.generate_json",
+        Mock(side_effect=InferenceServerOfflineError("Model is not responding.")),
+    )
+    failed = _run_next_ingestion()
+    assert failed.result["waiting_for"] == "generation"
+    watcher.scan(config)
+    assert Job.objects.get(status="queued").retry_of_id == failed.pk
+
+
+def test_ready_generation_only_triages_while_a_new_drop_is_still_being_written(
+    config: PipelineConfig, publish_ready_model: Callable[[ModelPurpose], None]
+) -> None:
+    chat = config.raw_dir / "chatgpt" / "short.md"
+    chat.parent.mkdir()
+    chat.write_text("Short chat below the automatic skip threshold.")
+    drop = config.drops_dir / "documents" / "draft.txt"
+    watcher = SourceWatcher()
+    publish_ready_model("generation")
+    with drop.open("w") as writer:
+        writer.write("first part")
+        writer.flush()
+        watcher.scan(config)
+        recovered = _run_next_ingestion()
+        assert recovered.status == "succeeded"
+        assert StoredTriageDecision.objects.get().decision == "skip"
+        assert drop.is_file()
+        writer.write(" and the rest")
+
+    watcher.scan(config)
+    assert not Job.objects.filter(status="queued").exists()
+    watcher.scan(config)
+    assert _run_next_ingestion().result["completed"] == 1
+    assert "first part and the rest" in (config.raw_dir / "documents" / "draft.md").read_text()
+
+
+@pytest.mark.parametrize("cancel_before_failure", [True, False])
+def test_cancelled_request_does_not_hide_another_jobs_deferred_triage(
+    config: PipelineConfig,
+    publish_ready_model: Callable[[ModelPurpose], None],
+    cancel_before_failure: bool,
+) -> None:
+    chat = config.raw_dir / "chatgpt" / "deferred.md"
+    chat.parent.mkdir()
+    chat.write_text("chat " * 500)
+    first = job_queue.enqueue_job("ingest", {"drops_only": True})
+    # A scan cancelled before the outage cannot supersede it. Nor can a
+    # later cancellation of an unrelated, unstarted file selection.
+    payload = (
+        {"drops_only": True}
+        if cancel_before_failure
+        else {"paths": [str(config.drops_dir / "other.md")]}
+    )
+    other = job_queue.enqueue_job("ingest", payload)
+    if cancel_before_failure:
+        job_queue.cancel(other.pk)
+    failed = _run_next_ingestion()
+    assert failed.pk == first.pk and failed.result["waiting_for"] == "generation"
+    if not cancel_before_failure:
+        job_queue.cancel(other.pk)
+
+    publish_ready_model("generation")
+    watcher = SourceWatcher()
+    watcher.scan(config)
+    recovery = Job.objects.get(status="queued")
+    assert recovery.retry_of_id == failed.pk
+    # Cancelling the recovery itself *does* stop this work, including after restart.
+    job_queue.cancel(recovery.pk)
+    SourceWatcher().scan(config)
+    assert not Job.objects.filter(status="queued").exists()
+
+
+def test_unchanged_watched_original_does_not_revive_stopped_triage(
+    config: PipelineConfig,
+    tmp_path: Path,
+    publish_ready_model: Callable[[ModelPurpose], None],
+) -> None:
+    watched = tmp_path / "watched"
+    watched.mkdir()
+    (watched / "original.txt").write_text("An original retained after ingestion")
+    update_preferences({"sources": {"notes": {"path": str(watched), "file_types": ["txt"]}}})
+    config = get_pipeline_config()
+    watcher = SourceWatcher()
+    watcher.scan(config)
+    watcher.scan(config)
+    assert _run_next_ingestion().status == "succeeded"
+
+    chat = config.raw_dir / "chatgpt" / "unfinished.md"
+    chat.parent.mkdir()
+    chat.write_text("triage " * 500)
+    publish_ready_model("generation")
+    watcher.scan(config)
+    recovery = Job.objects.get(status="queued")
+    job_queue.cancel(recovery.pk)
+
+    restarted = SourceWatcher()
+    restarted.scan(config)
+    restarted.scan(config)
+    assert not Job.objects.filter(status="queued").exists()
+
+
+def test_consuming_a_drop_does_not_retry_a_timeout_until_a_new_input_arrives(
+    config: PipelineConfig,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    publish_ready_model: Callable[[ModelPurpose], None],
+) -> None:
+    watched = tmp_path / "watched"
+    watched.mkdir()
+    (watched / "original.txt").write_text("Persistent watched source")
+    update_preferences({"sources": {"notes": {"path": str(watched), "file_types": ["txt"]}}})
+    config = get_pipeline_config()
+    drop = config.drops_dir / "documents" / "one.txt"
+    drop.write_text("Consumed by the first pass")
+    watcher = SourceWatcher()
+    publish_ready_model("generation")
+    watcher.scan(config)
+    watcher.scan(config)
+    chat = config.raw_dir / "chatgpt" / "long.md"
+    chat.parent.mkdir()
+    chat.write_text("triage " * 500)
+
+    monkeypatch.setattr(
+        "second_brain.apps.ingestion.services.triage.classification.generate_json",
+        Mock(side_effect=InferenceUnavailableError("Local inference timed out.")),
+    )
+    first = _run_next_ingestion()
+    assert first.status == "failed" and first.error == "Local inference timed out."
+    assert not drop.exists()
+    for current in (watcher, SourceWatcher()):
+        current.scan(config)
+        current.scan(config)
+        assert not Job.objects.filter(status="queued").exists()
+
+    drop.write_text("New input at the same path")
+    watcher.scan(config)
+    watcher.scan(config)
+    assert Job.objects.filter(kind="ingest", status="queued").count() == 1

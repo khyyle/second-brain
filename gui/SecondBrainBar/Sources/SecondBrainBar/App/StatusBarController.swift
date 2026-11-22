@@ -1,18 +1,15 @@
 import SwiftUI
 import AppKit
 
-/// The app delegate. It owns the menu bar icon, the floating panel, and the
-/// menus, and routes files arriving from drops, the watcher, and ⌘O into the
-/// shared intake.
+/// Owns the menu-bar window and routes selected or dropped files into intake.
 @MainActor
-final class StatusBarController: NSObject, NSApplicationDelegate, NSMenuItemValidation {
+final class StatusBarController: NSObject, NSApplicationDelegate, NSMenuItemValidation, NSWindowDelegate {
     private let config = AppConfig.default
     private var statusItem: NSStatusItem!
     private var panel: NSPanel?
     private var store: PipelineStore?
     private lazy var intake = DropIntake(config: config)
-    private let autoRunner = AutoRunner(config: AppConfig.default)
-    private var folderWatcher: FolderWatcher?
+    private let backend = BackendProcess()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         statusItem = NSStatusBar.system.statusItem(
@@ -28,11 +25,10 @@ final class StatusBarController: NSObject, NSApplicationDelegate, NSMenuItemVali
 
         installMainMenu()
 
-        NotificationCenter.default.addObserver(
-            self, selector: #selector(reloadWatchedFolders),
-            name: .watchedFoldersDidChange, object: nil
-        )
-        reloadWatchedFolders()
+        Task {
+            do { try await backend.connectOrStart(config: config); store?.refresh() }
+            catch { store?.actionError = error.localizedDescription }
+        }
 
         // Opening the app surfaces the window straight away; the status item
         // is the way back to it after that. Deferred briefly so the status
@@ -42,24 +38,12 @@ final class StatusBarController: NSObject, NSApplicationDelegate, NSMenuItemVali
         }
     }
 
-    @objc private func reloadWatchedFolders() {
-        folderWatcher?.stop()
-        try? FileManager.default.createDirectory(
-            at: config.dropsRoot, withIntermediateDirectories: true
-        )
-        let watched = SourcesStore.load(config)
-            .filter(\.enabled)
-            .map { URL(fileURLWithPath: $0.path) }
-        let directories = ([config.dropsRoot] + watched).filter {
-            FileManager.default.fileExists(atPath: $0.path)
-        }
-        let watcher = FolderWatcher(directories: directories) { [weak self] in
-            self?.autoRunner.schedule()
-        }
-        watcher.start()
-        folderWatcher = watcher
-        autoRunner.schedule()
+    func applicationWillTerminate(_ notification: Notification) {
+        store?.setWindowVisible(false)
+        backend.stop()
     }
+
+    func windowWillClose(_ notification: Notification) { store?.setWindowVisible(false) }
 
     /// Closing the panel only hides it; the status item brings it back. Quit
     /// is an explicit choice in the status item's menu, never a side effect of
@@ -85,6 +69,7 @@ final class StatusBarController: NSObject, NSApplicationDelegate, NSMenuItemVali
 
     private func togglePanel() {
         if let panel, panel.isVisible {
+            store?.setWindowVisible(false)
             panel.orderOut(nil)
         } else {
             showPanel()
@@ -105,8 +90,9 @@ final class StatusBarController: NSObject, NSApplicationDelegate, NSMenuItemVali
             panel.makeKeyAndOrderFront(nil)
         }
         // The panel is reused across opens, so SwiftUI's .onAppear fires only
-        // the first time. Broadcast each show so disk-backed views reload
+        // the first time. Broadcast each show so API-backed views reload
         // (e.g. the build log written by a background run while we were hidden).
+        store?.setWindowVisible(true)
         NotificationCenter.default.post(name: .panelDidShow, object: nil)
     }
 
@@ -200,6 +186,7 @@ final class StatusBarController: NSObject, NSApplicationDelegate, NSMenuItemVali
             defer: false
         )
         panel.contentView = DropContainerView(content: hosting, intake: intake)
+        panel.delegate = self
         panel.setContentSize(NSSize(width: Theme.Metric.popoverWidth, height: 420))
         panel.title = ""
         panel.titleVisibility = .hidden

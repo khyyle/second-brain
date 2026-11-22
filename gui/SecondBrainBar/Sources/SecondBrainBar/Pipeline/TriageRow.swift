@@ -14,3 +14,16 @@ struct TriageRow: Identifiable, Hashable {
         case skip
     }
 }
+
+struct TriageResponse: Decodable {
+    let raw_path: String
+    let decision: String
+    let confidence: Double
+    let reason: String?
+    let available: Bool
+    var row: TriageRow? {
+        guard let verdict = TriageRow.Decision(rawValue: decision) else { return nil }
+        return TriageRow(id: raw_path, displayName: ((raw_path as NSString).lastPathComponent as NSString).deletingPathExtension,
+                         decision: verdict, confidence: confidence, reason: reason ?? "")
+    }
+}

@@ -1,6 +1,7 @@
 # Using the app
 
 Second Brain runs as a menu bar app: click the icon and a small window drops down. From here you can:
+
 - **Ingest files**: drag and drop or select files to *stage* them for building
 - **Build the wiki**: compile *staged* files into the wiki
 - **Manage domains**: edit, delete, and merge tags used to denote the topic of a page
@@ -20,21 +21,21 @@ Two kinds of sources can be ingested:
 
 Imported ChatGPT conversations get one more pass. Chat history is noisy, so a small local model sorts each conversation into kept, review, or skip before anything reaches the build (see [architecture](architecture.md)). Conversations the model was unsure about wait in "Needs review" at the top of the Ingest tab for your call, and a count on the tab shows how many are waiting.
 
-It is highly recommended that you prune chats for redundancy avoid paying to compile overlapping material, whether through this review, manually, or through an agent of your choice (just tell an agent of your choice to prune `~/second-brain/drops/chatgpt/` to your preferences).
+Review chats before building and skip redundant material so you don't pay to compile overlapping conversations.
 
 **Build** is where staged sources are compiled into wiki pages using a cloud model. It shows what is ready to build with an estimated cost, along with a log of recently built pages. A kept chat can still be skipped from the staged list, which moves it to the skipped chats on the Ingest tab. Removing a staged source takes it out of the pipeline entirely (see [deletion](lifecycle.md#deletion)).
 
-**Domains** curates the broad subject tags used in page frontmatter. Renaming, merging, or deleting a domain rewrites every affected page's frontmatter so tag vocabulary stays consistent across the wiki.
+**Domains** manages the wiki's subject tags. Renaming, merging, or deleting a domain updates the tags on every affected page.
 
-**Overview** surfaces structural opportunities for wiki improvement and defect pages.
+**Overview** lists unwritten topics, unlinked pages, possible duplicates, and pages that need titles, tags, or size adjustments.
 
 ## Building the wiki
 
 A build reads your staged sources and writes wiki pages with a cloud model agent. The number on the Build tab is a rough estimate based on known input/output costs. Once a build is running, the real cost will increment in the status line.
 
-When the plan looks right, "Build wiki" compiles it. You can "Stop" mid-build: pages finished so far are kept, and the conversation in progress is rolled back cleanly so the next build redoes it from scratch.
+When the plan looks right, "Build wiki" compiles it. You can "Stop" mid-build: pages finished so far are kept, and unfinished changes for the source or group currently being built are discarded. Those sources remain ready for the next build.
 
-If a source can't be compiled cleanly (e.g., the agent fails to finish compilation, or the source is too large for the model to read in one pass), it will be set aside with its relevant wiki edits rolled back. Failed sources are marked "Set aside" along with the reason, and can be recompiled via a retry button. Retried files will be marked ready for the next compilation pass. Importantly, sources that are too large to compile *cannot be retried* and must be split into smaller files first.
+If a source can't be compiled cleanly (e.g., the agent fails to finish compilation, or the source is too large for the model to read in one pass), it will be set aside and its unfinished wiki changes discarded. Failed sources are marked "Set aside" along with the reason, and can be recompiled via a retry button. Retried files will be marked ready for the next compilation pass. Sources that are too large to compile *cannot be retried* and must be split into smaller files first.
 
 ## Reading what you built
 
@@ -46,12 +47,12 @@ For asking questions instead of browsing, you can hand the wiki to Claude Deskto
 
 You must set your compilation provider's API key in Settings before you can build the wiki. Settings also holds the compilation model, a per-build spend cap, triage tuning, and watched folders.
 
-### Running on a schedule
+### Watched folders
 
-New and changed files in watched folders ingest automatically while the app is open. Add folders in Settings under Automation; this works without enabling a schedule. Files are copied into `drops/<folder name>/` before parsing, and originals stay untouched. Already-ingested versions are left alone.
+New and changed files in watched folders ingest automatically while the app is open. Add folders in Settings under Watched folders. The app works on copies and leaves your originals untouched. Already-ingested versions are left alone.
 
 Files that fail stay visible in Ingest with a reason and Retry. The same failed version waits for Retry; editing the original makes it eligible on the next scan. You can also repair the queued copy and retry it without changing the original.
 
-Turn on "Ingest on a schedule" to also scan while the app is closed. This installs a macOS LaunchAgent (`com.secondbrain.pipeline`, via `launchd`) that ingests at the times you set. It runs while you are logged in, and a run missed during sleep happens on wake.
+Leave the app running to keep watching folders; closing its window is fine.
 
 Automatic runs only ingest and stage sources. Press Build wiki when you are ready to compile them.

@@ -6,6 +6,10 @@ readme = "README.md"
 license = "MIT"
 requires-python = ">=3.11"
 dependencies = [
+    "django>=5.2,<5.3",
+    "django-ninja>=1.7,<2",
+    "uvicorn>=0.35,<1",
+    "python-dotenv>=1.2,<2",
     "click",
     "pyyaml",
     "tomlkit",
@@ -21,13 +25,15 @@ dependencies = [
     # Wiki access + semantic search.
     "mcp[cli]",
     "sqlite-vec",
-    "ollama",
+    "llama-cpp-python[server]==0.3.36",
+    "huggingface-hub>=1.10,<2",
     "scikit-learn>=1.9.0",
 ]
 
 [dependency-groups]
 dev = [
     "pytest",
+    "pytest-django>=4.11,<5",
     "pytest-asyncio",
     "ruff",
     "mypy",
@@ -36,6 +42,7 @@ dev = [
 
 [project.scripts]
 second-brain = "second_brain.cli:main"
+second-brain-backend = "second_brain.django_config.server:main"
 
 [build-system]
 requires = ["hatchling"]
@@ -58,5 +65,6 @@ warn_unused_configs = true
 disallow_untyped_defs = true
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = ["src/second_brain"]
+DJANGO_SETTINGS_MODULE = "second_brain.django_config.settings.test"
 asyncio_mode = "auto"
