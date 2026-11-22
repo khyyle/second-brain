@@ -3,16 +3,17 @@
 from __future__ import annotations
 
 import os
-from collections.abc import Callable
+import sqlite3
+from contextlib import closing
 from pathlib import Path
 
 import numpy as np
 import pytest
+import sqlite_vec
 from numpy.typing import NDArray
 
 from second_brain.apps.inference.services.worker_client import EmbeddingRole
 from second_brain.apps.wiki.services import search_index as search_index_mod
-from second_brain.apps.wiki.services.assistant_tools import WikiTools
 from second_brain.apps.wiki.services.search_index import SearchIndex
 
 # Each fresh sync sets file mtimes explicitly so change detection is
@@ -110,7 +111,9 @@ def test_sync_picks_up_new_file(tmp_path: Path, search_index: SearchIndex) -> No
     assert {p["stem"] for p in search_index.list_pages()} == {"alpha", "gamma"}
 
 
-def test_sync_drops_deleted_file(tmp_path: Path, search_index: SearchIndex) -> None:
+def test_sync_drops_deleted_file(
+    tmp_path: Path, search_index: SearchIndex, monkeypatch: pytest.MonkeyPatch
+) -> None:
     wiki = tmp_path / "wiki"
     _write(wiki, "alpha", "alpha about cats", _BASE_MTIME)
     beta = _write(wiki, "beta", "beta about dogs", _BASE_MTIME)
@@ -118,11 +121,21 @@ def test_sync_drops_deleted_file(tmp_path: Path, search_index: SearchIndex) -> N
     search_index.embed_pending()
 
     beta.unlink()
-    search_index.sync_from_wiki(wiki)
+    with monkeypatch.context() as patch:
+        patch.setattr(
+            sqlite_vec, "load", lambda conn: pytest.fail("Keyword sync loaded sqlite-vec")
+        )
+        search_index.sync_from_wiki(wiki)
+        assert search_index.search("dogs") == []
 
     assert {p["stem"] for p in search_index.list_pages()} == {"alpha"}
-    assert search_index.search("dogs") == []
     assert all(h.stem != "beta" for h in search_index.semantic_search("dogs"))
+    assert search_index.embed_pending() == 0
+    # Searches already exclude deleted metadata. Check the stored vector is gone too.
+    with closing(sqlite3.connect(tmp_path / "search.db")) as conn:
+        conn.enable_load_extension(True)
+        sqlite_vec.load(conn)
+        assert conn.execute("SELECT stem FROM wiki_vec").fetchall() == [("alpha",)]
 
 
 # --- embedding: only pending pages, off the request path ---------------------
@@ -218,44 +231,3 @@ def test_embed_pending_retains_pages_without_usable_embeddings(
     assert search_index.embed_pending() == 0
     # Page stays pending
     assert search_index.semantic_search("cats") == []
-
-
-# --- live pickup via WikiTools -----------------------------------------------
-
-
-def test_ensure_synced_picks_up_new_file_without_restart(
-    tmp_path: Path, search_index: SearchIndex, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(
-        "second_brain.apps.wiki.services.assistant_tools.SYNC_MIN_INTERVAL_SECONDS", 0.0
-    )
-
-    class SyncThread:
-        def __init__(self, target: Callable[[], None], daemon: bool = True) -> None:
-            self._target = target
-
-        def start(self) -> None:
-            self._target()  # run synchronously on main thread
-
-        def is_alive(self) -> bool:
-            return False
-
-    monkeypatch.setattr(
-        "second_brain.apps.wiki.services.assistant_tools.threading.Thread", SyncThread
-    )
-
-    wiki = tmp_path / "wiki"
-    raw = tmp_path / "raw"
-    raw.mkdir()
-    _write(wiki, "alpha", "alpha about cats", _BASE_MTIME)
-    tools = WikiTools(wiki, raw, search_index)
-
-    tools.ensure_synced()
-    assert tools.search_wiki("dogs") == "No results found."
-
-    _write(wiki, "beta", "beta about dogs", _BASE_MTIME + 10)
-    tools.ensure_synced()
-
-    # Keyword search is updated inline.
-    assert "beta" in tools.search_wiki("dogs")
-    assert any(h.stem == "beta" for h in search_index.semantic_search("dogs"))

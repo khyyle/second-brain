@@ -55,7 +55,7 @@ final class LiveBackendTests: XCTestCase {
         let catalog: ApplicationCatalog = try await api.request("/catalog")
         XCTAssertFalse(catalog.providers.isEmpty)
         try await api.send("/settings", method: "PATCH", body: [
-            "triage": ["enabled": false], "search": ["semantic_enabled": false],
+            "triage": ["enabled": false],
             "compilation": ["max_cost_per_build_usd": 1.25]
         ])
         let original = config.vaultRoot.deletingLastPathComponent().appending(path: "http-smoke-notes.md")

@@ -12,7 +12,7 @@ def test_list_pages_pages_and_reports_total(wiki_harness: WikiToolsHarness) -> N
         (concepts / f"p{i:02d}.md").write_text(
             f"---\ntitle: Page {i:02d}\ntype: concept\n---\nBody.\n", encoding="utf-8"
         )
-    wiki_harness.tools.ensure_synced()
+    wiki_harness.index.sync_from_wiki(wiki_harness.wiki_dir)
 
     first = wiki_harness.tools.list_pages(limit=10, offset=0)
     assert first.count("\n- ") + first.startswith("- ") == 10  # 10 list rows

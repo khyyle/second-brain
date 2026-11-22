@@ -91,11 +91,11 @@ def search_pages(query: str) -> list[dict]:
         Matching page metadata and snippets. Missing indexes return an empty list; stale
         hits without a wiki page are omitted.
     """
-    paths = get_vault_paths()
-    if not paths.search_db_path.exists():
+    config = get_pipeline_config()
+    if not config.search_db_path.exists():
         return []
-    hits = SearchIndex(paths.search_db_path).search(query)
-    pages = wiki_structure.discover_all_pages(paths.wiki_dir)
+    hits = SearchIndex(config.search_db_path, config.search).search(query)
+    pages = wiki_structure.discover_all_pages(config.wiki_dir)
     return [
         {
             **_page_info(pages[hit.stem].rel_path, pages[hit.stem].frontmatter),
@@ -128,7 +128,7 @@ def wiki_health() -> dict:
 
 
 def refresh_index(config: PipelineConfig) -> None:
-    """Reconcile keyword and link indexes, then queue missing embedding work if enabled.
+    """Reconcile keyword and link indexes, then queue an embedding pass.
 
     Does not request embeddings directly. Leaves an existing queued index job in place.
 
@@ -145,8 +145,5 @@ def refresh_index(config: PipelineConfig) -> None:
     from second_brain.apps.jobs.models import Job
     from second_brain.apps.jobs.services.job_queue import enqueue_job
 
-    if (
-        config.search.semantic_enabled
-        and not Job.objects.filter(kind="index", status="queued").exists()
-    ):
+    if not Job.objects.filter(kind="index", status="queued").exists():
         enqueue_job("index", {})

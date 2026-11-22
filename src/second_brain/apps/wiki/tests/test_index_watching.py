@@ -24,7 +24,6 @@ def test_deleting_last_page_queues_index_cleanup(config: PipelineConfig) -> None
     watcher.scan(config)
     watcher.scan(config)
     job = Job.objects.get(kind="index")
-    job.config_snapshot["search"]["semantic_enabled"] = False
     execute_job(job)
 
     assert index.list_pages() == []

@@ -9,7 +9,7 @@ from second_brain.pipeline_config import SearchConfig
 
 
 def _index(tmp_path: Path) -> SearchIndex:
-    index = SearchIndex(tmp_path / "s.db", SearchConfig(semantic_enabled=False))
+    index = SearchIndex(tmp_path / "s.db", SearchConfig())
     index.index_page(
         stem="central-limit-theorem",
         title="Central Limit Theorem",

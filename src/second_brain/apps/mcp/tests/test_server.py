@@ -19,18 +19,20 @@ def backend_client() -> Mock:
     return Mock(spec=BackendClient)
 
 
-def test_mcp_semantic_search_notifies_when_inference_is_unavailable(backend_client: Mock) -> None:
-    backend_client.request.side_effect = BackendRequestError(
-        503, "Local inference is unavailable."
-    )
+@pytest.mark.parametrize(
+    "reason", ["Local inference is unavailable.", "Vector storage is unavailable."]
+)
+def test_mcp_semantic_search_reports_the_dependency_failure(
+    backend_client: Mock, reason: str
+) -> None:
+    backend_client.request.side_effect = BackendRequestError(503, reason)
 
     _, structured = asyncio.run(
         create_server(backend_client).call_tool("semantic_search", {"query": "gradient"})
     )
 
     assert structured["result"] == (
-        "The local embedding model is unavailable. Tell the "
-        "user, and use search_wiki for keyword search instead."
+        f"{reason} Tell the user, and use search_wiki for keyword search instead."
     )
 
 

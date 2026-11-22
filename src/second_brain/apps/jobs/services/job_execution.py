@@ -36,7 +36,7 @@ def execute_job(job: Job) -> dict:
 
         index = SearchIndex(config.search_db_path, config.search)
         index.sync_from_wiki(config.wiki_dir)
-        return {"embedded_pages": index.embed_pending() if config.search.semantic_enabled else 0}
+        return {"embedded_pages": index.embed_pending()}
 
     root = get_vault_paths().backend_dir / "jobs" / str(job.pk) / "raw"
     for relative, digest in job.payload["hashes"].items():

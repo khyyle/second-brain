@@ -3,9 +3,6 @@
 from __future__ import annotations
 
 import heapq
-import logging
-import threading
-import time
 from collections import defaultdict
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -32,10 +29,6 @@ from second_brain.apps.wiki.tool_limits import (
     MAX_SOURCE_LENGTH_CHARS,
 )
 from second_brain.django_config.vault_storage import atomic_write
-
-logger = logging.getLogger(__name__)
-
-SYNC_MIN_INTERVAL_SECONDS = 1.0
 
 
 def _queue_ingest(path: Path) -> None:
@@ -182,68 +175,6 @@ class WikiTools:
         self._raw = raw_dir
         self._search = search_index
         self._ingest_trigger = ingest_trigger or _queue_ingest
-        self._last_sync_check = 0.0
-        self._last_sync_mtime = -1.0
-        self._embed_lock = threading.Lock()
-        self._embed_thread: threading.Thread | None = None
-
-    def ensure_synced(self) -> None:
-        """Refresh the search index from disk when wiki files have changed.
-
-        Lets newly compiled or edited pages become searchable mid-session
-        without restarting the server. The keyword/metadata sync is fast
-        and runs inline (rate-limited by a directory-stat check), so
-        `search_wiki` and `list_pages` stay correct and responsive.
-        Embeddings are refreshed on a background thread so inference latency
-        never blocks a tool call.
-
-        Returns
-        -------
-        None
-        """
-        now = time.monotonic()
-        if now - self._last_sync_check < SYNC_MIN_INTERVAL_SECONDS:
-            return
-        self._last_sync_check = now
-
-        current_mtime = self._latest_mtime()
-        if current_mtime == self._last_sync_mtime:
-            return
-
-        self._search.sync_from_wiki(self._wiki)
-        self._last_sync_mtime = current_mtime
-        self._start_background_embed()
-
-    def _start_background_embed(self) -> None:
-        """Embed pending pages on a daemon thread if one is not running.
-
-        Keeps embedding requests entirely off the
-        request path. At most one embed pass runs at a time; pages that
-        change while a pass is in flight are picked up by the next call.
-        """
-        if not self._search.semantic_enabled:
-            return
-        with self._embed_lock:
-            if self._embed_thread is not None and self._embed_thread.is_alive():
-                return
-            self._embed_thread = threading.Thread(target=self._search.embed_pending, daemon=True)
-            self._embed_thread.start()
-
-    def _latest_mtime(self) -> float:
-        """Return the newest mtime across wiki content dirs and their files.
-
-        Directory mtimes are included so file additions and deletions are
-        detected, not just edits to existing files.
-        """
-        latest = 0.0
-        for content_dir in CONTENT_DIRS:
-            dir_path = self._wiki / content_dir
-            if not dir_path.exists():
-                continue
-            latest = max(latest, dir_path.stat().st_mtime)
-            for md_file in dir_path.glob("*.md"):
-                latest = max(latest, md_file.stat().st_mtime)
-        return latest
 
     def search_wiki(self, query: str, limit: int = DEFAULT_SEARCH_LIMIT) -> str:
         """
@@ -295,20 +226,15 @@ class WikiTools:
         -------
         str
             One block per matching page with its title, content type, domains, and a
-            relevance distance (closest first). Falls back to a notice pointing at
-            ``search_wiki`` when the semantic layer is unavailable.
+            relevance distance (closest first), or a notice if no pages match.
 
         Raises
         ------
         InferenceUnavailableError
             When the embedding server stops answering a query.
+        DependencyError
+            When the vector index cannot be opened.
         """
-        if not self._search.semantic_enabled:
-            return (
-                "Semantic search is unavailable (the embedding index is disabled or "
-                "could not be initialized). Use search_wiki for keyword search instead."
-            )
-
         hits = self._search.semantic_search(query, limit=limit)
         if not hits:
             return (

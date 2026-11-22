@@ -196,16 +196,12 @@ class SearchConfig(BaseModel):
         Catalog model used to embed wiki pages and queries.
     embedding_dimensions: int, default=768
         Dimensionality of the embedding vectors.
-    semantic_enabled: bool, default=True
-        When True the MCP exposes a semantic_search tool and the index
-        builds embeddings; keyword search remains available without local inference.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     embedding_model: str = "nomic-embed-text"
     embedding_dimensions: int = Field(default=768, gt=0)
-    semantic_enabled: bool = True
 
 
 # Kept in sync with TRIAGE_PROMPTS in second_brain/apps/ingestion/services/triage/prompts.py
@@ -264,19 +260,6 @@ class Preferences(BaseModel):
     clustering: ClusteringConfig = Field(default_factory=ClusteringConfig)
     search: SearchConfig = Field(default_factory=SearchConfig)
     triage: TriageConfig = Field(default_factory=TriageConfig)
-
-    @model_validator(mode="before")
-    @classmethod
-    def _remove_obsolete_hosts(cls, value: object) -> object:
-        # Older vault settings and job snapshots can still contain Ollama addresses.
-        if not isinstance(value, dict):
-            return value
-        result = value.copy()
-        for section in ("search", "triage"):
-            if isinstance(result.get(section), dict):
-                result[section] = result[section].copy()
-                result[section].pop("ollama_host", None)
-        return result
 
 
 class PipelineConfig(Preferences):

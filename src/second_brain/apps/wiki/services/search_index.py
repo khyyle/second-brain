@@ -1,11 +1,4 @@
-"""Hybrid search index — SQLite FTS5 for keyword search, sqlite-vec for semantic.
-
-The semantic (vector) layer is optional and isolated: if it can't be
-set up (no ``SearchConfig`` passed, sqlite-vec not loadable, or local inference
-unavailable for embeddings) the index still serves keyword search
-normally. Callers ask for semantic results explicitly via
-:meth:`SearchIndex.semantic_search`.
-"""
+"""SQLite keyword and vector indexes for wiki pages. Keyword queries work offline."""
 
 from __future__ import annotations
 
@@ -20,11 +13,13 @@ from pathlib import Path
 
 from second_brain.apps.inference.services.worker_client import embed_text
 from second_brain.apps.wiki.services.wiki_structure import LINK_KINDS, extract_typed_edges
+from second_brain.django_config.errors import DependencyError
 from second_brain.pipeline_config import SearchConfig
 
 logger = logging.getLogger(__name__)
 
 BUSY_TIMEOUT_SECONDS = 5.0
+PENDING_EMBEDDING = "embedded_hash IS NULL OR embedded_hash != content_hash"
 
 
 def _sanitize_fts_query(query: str) -> str:
@@ -79,20 +74,13 @@ class SearchHit:
 
 
 class SearchIndex:
-    """Hybrid FTS5 + optional vector search over wiki pages.
+    """Wiki keyword, graph, and embedding search in one SQLite database.
 
-    Wraps a SQLite database with an FTS5 virtual table for full-text
-    keyword search and a companion metadata table for filtered listing.
-    When a ``SearchConfig`` with ``semantic_enabled`` is supplied and
-    sqlite-vec loads, a vec0 table is added for embedding search.
-    The database is created on first use and reused across calls.
+    Keyword and graph operations need neither sqlite-vec nor a running model.
+    Vector operations load the extension on their own connections.
     """
 
-    def __init__(
-        self,
-        db_path: Path,
-        search_config: SearchConfig | None = None,
-    ) -> None:
+    def __init__(self, db_path: Path, search_config: SearchConfig) -> None:
         """
         Initialize the search index, creating tables if needed.
 
@@ -100,16 +88,11 @@ class SearchIndex:
         ----------
         db_path: Path
             Filesystem path to the SQLite database file.
-        search_config: SearchConfig | None
-            When provided with ``semantic_enabled=True``, enables the
-            optional embedding-backed semantic layer.
+        search_config: SearchConfig
+            Model and dimensions for vector operations.
         """
         self._db_path = db_path
         self._search_config = search_config
-        # Semantic stays off unless explicitly enabled AND the sqlite-vec
-        # extension actually loads on this platform (checked in _init_db).
-        self._semantic = bool(search_config and search_config.semantic_enabled)
-        self._dim = search_config.embedding_dimensions if search_config else 768
         self._init_db()
 
     def _init_db(self) -> None:
@@ -161,27 +144,12 @@ class SearchIndex:
             conn.execute("CREATE INDEX IF NOT EXISTS idx_wiki_links_source ON wiki_links(source)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_wiki_links_target ON wiki_links(target)")
 
-        if self._semantic:
-            self._init_vec_table()
-
-    def _init_vec_table(self) -> None:
-        """Create the vec0 embedding table, disabling semantics if it fails."""
-        try:
-            with self._vec_conn() as conn:
-                conn.execute(
-                    f"CREATE VIRTUAL TABLE IF NOT EXISTS wiki_vec USING vec0("
-                    f"stem TEXT PRIMARY KEY, embedding FLOAT[{self._dim}] distance_metric=cosine)"
-                )
-        except (sqlite3.Error, AttributeError, OSError) as exc:
-            logger.warning("Semantic search disabled (sqlite-vec unavailable): %s", exc)
-            self._semantic = False
-
     @contextmanager
     def _conn(self) -> Iterator[sqlite3.Connection]:
         conn = sqlite3.connect(str(self._db_path), timeout=BUSY_TIMEOUT_SECONDS)
-        conn.row_factory = sqlite3.Row
-        self._apply_pragmas(conn)
         try:
+            conn.row_factory = sqlite3.Row
+            self._apply_pragmas(conn)
             yield conn
             conn.commit()
         finally:
@@ -189,23 +157,24 @@ class SearchIndex:
 
     @contextmanager
     def _vec_conn(self) -> Iterator[sqlite3.Connection]:
-        """Yield a connection with the sqlite-vec extension loaded.
+        """Open vector storage, reporting setup failures only to callers that need it."""
+        with self._conn() as conn:
+            try:
+                import sqlite_vec
 
-        Required for any statement that touches the ``wiki_vec`` table.
-        """
-        import sqlite_vec
-
-        conn = sqlite3.connect(str(self._db_path), timeout=BUSY_TIMEOUT_SECONDS)
-        conn.row_factory = sqlite3.Row
-        self._apply_pragmas(conn)
-        conn.enable_load_extension(True)
-        sqlite_vec.load(conn)
-        conn.enable_load_extension(False)
-        try:
+                conn.enable_load_extension(True)
+                sqlite_vec.load(conn)
+                conn.enable_load_extension(False)
+                dimensions = self._search_config.embedding_dimensions
+                conn.execute(
+                    "CREATE VIRTUAL TABLE IF NOT EXISTS wiki_vec USING vec0("
+                    f"stem TEXT PRIMARY KEY, embedding FLOAT[{dimensions}] distance_metric=cosine)"
+                )
+            except (sqlite3.Error, AttributeError, ImportError, OSError) as exc:
+                raise DependencyError(
+                    "The wiki vector index could not be initialized. Check sqlite-vec."
+                ) from exc
             yield conn
-            conn.commit()
-        finally:
-            conn.close()
 
     @staticmethod
     def _apply_pragmas(conn: sqlite3.Connection) -> None:
@@ -215,17 +184,6 @@ class SearchIndex:
         """
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute(f"PRAGMA busy_timeout={int(BUSY_TIMEOUT_SECONDS * 1000)}")
-
-    @property
-    def semantic_enabled(self) -> bool:
-        """Whether the embedding-backed semantic layer is active.
-
-        Returns
-        -------
-        bool
-            Whether semantic indexing is enabled for this index.
-        """
-        return self._semantic
 
     def index_page(
         self,
@@ -307,6 +265,16 @@ class SearchIndex:
                 [(stem, target, kind) for target, kind in extract_typed_edges(content)],
             )
 
+    def has_pending_embeddings(self) -> bool:
+        """Return whether any page needs a vector for its current content."""
+        with self._conn() as conn:
+            return (
+                conn.execute(
+                    f"SELECT 1 FROM wiki_meta WHERE {PENDING_EMBEDDING} LIMIT 1"
+                ).fetchone()
+                is not None
+            )
+
     def embed_pending(self, limit: int | None = None) -> int:
         """
         Embed pages whose stored embedding is missing or stale.
@@ -331,22 +299,22 @@ class SearchIndex:
         ------
         InferenceUnavailableError
             The model could not serve a request.
+        DependencyError
+            The configured vector index could not load sqlite-vec.
         """
-        if not self._semantic or self._search_config is None:
-            return 0
-
-        from sqlite_vec import serialize_float32
-
         query = (
             "SELECT m.stem, m.title, m.content_hash, f.content "
             "FROM wiki_meta m JOIN wiki_fts f ON f.stem = m.stem "
-            "WHERE m.embedded_hash IS NULL OR m.embedded_hash != m.content_hash"
+            f"WHERE {PENDING_EMBEDDING}"
         )
         params: tuple = ()
         if limit is not None:
             query += " LIMIT ?"
             params = (limit,)
-        with self._conn() as conn:
+        with self._vec_conn() as conn:
+            # Keyword sync removes page metadata immediately, even without sqlite-vec.
+            # Its vectors are already excluded from queries; reclaim them on this pass.
+            conn.execute("DELETE FROM wiki_vec WHERE stem NOT IN (SELECT stem FROM wiki_meta)")
             pending = conn.execute(query, params).fetchall()
 
         embedded_count = 0
@@ -372,7 +340,7 @@ class SearchIndex:
                 conn.execute("DELETE FROM wiki_vec WHERE stem = ?", (row["stem"],))
                 conn.execute(
                     "INSERT INTO wiki_vec (stem, embedding) VALUES (?, ?)",
-                    (row["stem"], serialize_float32(vector)),
+                    (row["stem"], vector.tobytes()),
                 )
             embedded_count += 1
 
@@ -440,8 +408,7 @@ class SearchIndex:
     def semantic_search(self, query: str, limit: int = 10) -> list[SearchHit]:
         """Find wiki pages by embedding similarity to a natural-language query.
 
-        Returns an empty list when semantic search is disabled or the query has no
-        usable embedding.
+        Returns an empty list when the query has no usable embedding or no current page matches.
 
         Parameters
         ----------
@@ -459,12 +426,9 @@ class SearchIndex:
         ------
         InferenceUnavailableError
             When local inference cannot embed the query.
+        DependencyError
+            When the vector index cannot be opened.
         """
-        if not self._semantic or self._search_config is None:
-            return []
-
-        from sqlite_vec import serialize_float32
-
         vector = embed_text(self._search_config.embedding_model, query, role="search_query")
         if vector is None:
             return []
@@ -480,7 +444,7 @@ class SearchIndex:
                 SELECT stem, distance, title, content_type, domains
                 FROM nearest JOIN wiki_meta USING (stem) ORDER BY distance
                 """,
-                (serialize_float32(vector), limit),
+                (vector.tobytes(), limit),
             ).fetchall()
         return [
             SearchHit(
@@ -497,8 +461,8 @@ class SearchIndex:
     def rank_by_similarity(self, source: str, candidates: set[str]) -> list[str]:
         """Order candidate stems by embedding similarity to the source, closest first.
 
-        Omits candidates without an embedding. Returns an empty list when semantic
-        search is disabled or the source has no embedding.
+        Omits candidates without an embedding. Returns an empty list when the source
+        has no embedding or vector storage is unavailable.
 
         Parameters
         ----------
@@ -513,7 +477,7 @@ class SearchIndex:
             The embedded subset of `candidates`, ascending by cosine distance
             to `source`.
         """
-        if not self._semantic or not candidates:
+        if not candidates:
             return []
         placeholders = ",".join("?" * len(candidates))
         try:
@@ -529,7 +493,7 @@ class SearchIndex:
                     """,
                     [source, *candidates],
                 ).fetchall()
-        except sqlite3.Error as exc:
+        except (DependencyError, sqlite3.Error) as exc:
             logger.debug("Similarity ranking unavailable: %s", exc)
             return []
         return [row["stem"] for row in rows]
@@ -544,8 +508,8 @@ class SearchIndex:
         Find pairs of pages whose embeddings are close enough to suggest overlap.
 
         Compares every same-type embedded page by cosine similarity and returns
-        the closest pairs. Returns an empty list when the semantic layer is
-        disabled or nothing is embedded yet.
+        the closest pairs. Returns an empty list if storage is unavailable or
+        nothing is embedded yet.
 
         Parameters
         ----------
@@ -562,15 +526,13 @@ class SearchIndex:
         list[tuple[str, str, float]]
             ``(stem_a, stem_b, similarity)`` triples, most similar first.
         """
-        if not self._semantic:
-            return []
         try:
             with self._vec_conn() as conn:
                 rows = conn.execute(
                     "SELECT stem, embedding, content_type "
                     "FROM wiki_embedded_pages JOIN wiki_vec USING (stem)"
                 ).fetchall()
-        except sqlite3.Error as exc:
+        except (DependencyError, sqlite3.Error) as exc:
             logger.debug("Duplicate sweep unavailable: %s", exc)
             return []
         if len(rows) < 2:
@@ -850,14 +812,12 @@ class SearchIndex:
         return [(row["target"], row["refs"]) for row in rows]
 
     def _delete_page(self, stem: str) -> None:
-        """Remove a page from the FTS, metadata, link, and vector tables"""
-        with self._vec_conn() if self._semantic else self._conn() as conn:
+        """Remove a page from keyword, graph, and current-vector results."""
+        with self._conn() as conn:
             conn.execute("DELETE FROM wiki_fts WHERE stem = ?", (stem,))
             conn.execute("DELETE FROM wiki_meta WHERE stem = ?", (stem,))
             # only delete edges coming out of the page
             conn.execute("DELETE FROM wiki_links WHERE source = ?", (stem,))
-            if self._semantic:
-                conn.execute("DELETE FROM wiki_vec WHERE stem = ?", (stem,))
 
     def _touch_mtime(self, stem: str, mtime: float) -> None:
         """Refresh a page's stored mtime without re-indexing its content.
@@ -872,11 +832,9 @@ class SearchIndex:
         """
         Incrementally reconcile the index with the wiki on disk.
 
-        New and changed pages are (re)indexed and re-embedded; pages whose
-        content is unchanged are skipped (no embedding work); pages removed
-        from disk are dropped from the index. Change detection uses a cheap
-        mtime gate backed by a content hash, so an unchanged wiki costs only
-        a stat per file.
+        Index new or edited pages and mark them for the next embedding pass.
+        Removed pages leave search results immediately. An unchanged wiki costs
+        only a stat per file; changed mtimes are checked against the content hash.
 
         Parameters
         ----------
@@ -942,53 +900,3 @@ class SearchIndex:
                 removed_count,
             )
         return indexed_count
-
-    def rebuild_from_wiki(self, wiki_dir: Path) -> int:
-        """
-        Drop and recreate the entire search index from wiki files.
-
-        Unconditionally re-embeds every page; prefer :meth:`sync_from_wiki`
-        for routine refreshes. Use this only when a full rebuild is wanted.
-
-        Parameters
-        ----------
-        wiki_dir: Path
-            Root directory of the compiled wiki.
-
-        Returns
-        -------
-        int
-            Number of pages indexed.
-        """
-        from second_brain.apps.wiki.services.wiki_structure import CONTENT_DIRS, _parse_frontmatter
-
-        with self._vec_conn() if self._semantic else self._conn() as conn:
-            conn.execute("DELETE FROM wiki_fts")
-            conn.execute("DELETE FROM wiki_meta")
-            conn.execute("DELETE FROM wiki_links")
-            if self._semantic:
-                conn.execute("DELETE FROM wiki_vec")
-
-        count = 0
-        for content_dir in CONTENT_DIRS:
-            dir_path = wiki_dir / content_dir
-            if not dir_path.exists():
-                continue
-            for md_file in dir_path.glob("*.md"):
-                content = md_file.read_text(encoding="utf-8")
-                fm = _parse_frontmatter(content)
-                self.index_page(
-                    stem=md_file.stem,
-                    title=fm.get("title", md_file.stem),
-                    content=content,
-                    content_type=fm.get("type", "unknown"),
-                    domains=fm.get("domains", []),
-                    tags=fm.get("tags", []),
-                    word_count=len(content.split()),
-                    path=f"{content_dir}/{md_file.name}",
-                    mtime=md_file.stat().st_mtime,
-                )
-                count += 1
-
-        logger.info("Rebuilt search index: %d pages", count)
-        return count

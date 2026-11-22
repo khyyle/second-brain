@@ -1,8 +1,9 @@
-"""Tests for the optional semantic (embedding) search layer."""
+"""Embedding retrieval, page freshness, and keyword search during model outages."""
 
 from __future__ import annotations
 
 from pathlib import Path
+from unittest.mock import Mock
 
 import numpy as np
 import pytest
@@ -13,6 +14,7 @@ from second_brain.apps.inference.services.worker_client import EmbeddingRole
 from second_brain.apps.wiki.services import search_index as search_index_mod
 from second_brain.apps.wiki.services.assistant_tools import WikiTools
 from second_brain.apps.wiki.services.search_index import SearchIndex
+from second_brain.django_config.errors import DependencyError
 from second_brain.pipeline_config import SearchConfig
 
 # Tiny deterministic "embeddings": map keywords to fixed 3-d vectors so
@@ -61,10 +63,6 @@ def _index_sample(index: SearchIndex) -> None:
     )
 
 
-def test_semantic_enabled_when_configured(search_index: SearchIndex) -> None:
-    assert search_index.semantic_enabled is True
-
-
 def test_semantic_search_returns_nearest(search_index: SearchIndex) -> None:
     _index_sample(search_index)
     search_index.embed_pending()
@@ -78,11 +76,11 @@ def test_semantic_search_returns_nearest(search_index: SearchIndex) -> None:
 
 
 def test_changed_page_is_excluded_until_reembedded(
-    tmp_path: Path, search_index: SearchIndex
+    tmp_path: Path, search_index: SearchIndex, search_config: SearchConfig
 ) -> None:
     _index_sample(search_index)
     search_index.embed_pending()
-    keyword_index = SearchIndex(tmp_path / "search.db")
+    keyword_index = SearchIndex(tmp_path / "search.db", search_config)
     keyword_index.index_page(
         "gradient-descent", "Changed page", "penguin", "concept", [], [], 1, "concepts/g.md"
     )
@@ -128,10 +126,22 @@ def test_semantic_search_uses_retrieval_roles(
     ]
 
 
-def test_semantic_disabled_without_config(tmp_path: Path) -> None:
-    index = SearchIndex(tmp_path / "s.db")  # no SearchConfig -> keyword only
-    assert index.semantic_enabled is False
-    assert index.semantic_search("anything") == []
+def test_vector_storage_failure_is_visible_and_leaves_keyword_search_available(
+    tmp_path: Path, search_config: SearchConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with monkeypatch.context() as patch:
+        patch.setattr("sqlite_vec.load", Mock(side_effect=OSError("extension unavailable")))
+        index = SearchIndex(tmp_path / "search.db", search_config)
+        _index_sample(index)
+        assert index.search("penguin")[0].stem == "penguins"
+        with pytest.raises(DependencyError, match="vector index could not be initialized"):
+            index.embed_pending()
+        with pytest.raises(DependencyError, match="vector index could not be initialized"):
+            index.semantic_search("penguin")
+        assert index.has_pending_embeddings()
+
+    assert index.embed_pending() == 2
+    assert index.semantic_search("penguin", limit=1)[0].stem == "penguins"
 
 
 def test_query_embedding_failure_preserves_keyword_search(
@@ -172,7 +182,7 @@ def test_semantic_returns_empty_when_query_has_no_usable_embedding(
     assert search_index.semantic_search("gradient") == []
 
 
-def test_keyword_search_still_works_with_semantic_on(search_index: SearchIndex) -> None:
+def test_keyword_search_works_before_pages_are_embedded(search_index: SearchIndex) -> None:
     _index_sample(search_index)
     hits = search_index.search("penguin")
     assert any(h.stem == "penguins" for h in hits)
@@ -228,9 +238,9 @@ def test_near_duplicate_pairs_ignores_cross_type_matches(search_index: SearchInd
     assert search_index.near_duplicate_pairs(min_similarity=0.95) == []
 
 
-def test_near_duplicate_pairs_empty_without_semantic(tmp_path: Path) -> None:
-    index = SearchIndex(tmp_path / "s.db")
-    assert index.near_duplicate_pairs() == []
+def test_no_duplicate_pairs_before_pages_are_embedded(search_index: SearchIndex) -> None:
+    _index_sample(search_index)
+    assert search_index.near_duplicate_pairs() == []
 
 
 def test_near_duplicate_pairs_excludes_dismissed(search_index: SearchIndex) -> None:

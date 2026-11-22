@@ -33,10 +33,7 @@ def create_server(client: BackendClient | None = None) -> FastMCP:
         except BackendRequestError as error:
             if name != "semantic_search" or error.status_code != 503:
                 raise
-            return (
-                "The local embedding model is unavailable. Tell the "
-                "user, and use search_wiki for keyword search instead."
-            )
+            return f"{error} Tell the user, and use search_wiki for keyword search instead."
 
     server = FastMCP("second-brain")
     definitions = WikiToolDefinitions(dispatch)

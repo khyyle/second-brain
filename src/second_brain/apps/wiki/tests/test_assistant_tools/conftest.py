@@ -32,7 +32,6 @@ class WikiToolsHarness:
 def make_wiki_tools(
     tmp_path: Path,
     *,
-    semantic: bool = False,
     ingest_trigger: Callable[[Path], None] | None = None,
 ) -> WikiToolsHarness:
     """Construct an isolated WikiTools sandbox with raw and wiki directories."""
@@ -41,10 +40,7 @@ def make_wiki_tools(
     wiki_dir = data_dir / "wiki"
     raw_dir.mkdir(parents=True, exist_ok=True)
     wiki_dir.mkdir(parents=True, exist_ok=True)
-    index = SearchIndex(
-        data_dir / "search.db",
-        SearchConfig(embedding_dimensions=3, semantic_enabled=semantic),
-    )
+    index = SearchIndex(data_dir / "search.db", SearchConfig())
     ingested: list[Path] = []
     trigger = ingest_trigger or ingested.append
     tools = WikiTools(wiki_dir, raw_dir, index, ingest_trigger=trigger)

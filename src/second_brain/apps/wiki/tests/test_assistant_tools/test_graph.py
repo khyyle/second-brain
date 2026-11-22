@@ -192,10 +192,10 @@ def test_dependents_reports_none(wiki_harness: WikiToolsHarness) -> None:
     assert "Nothing depends on" in wiki_harness.tools.dependents("statistical-models")
 
 
-def test_find_related_falls_back_to_alphabetical_without_semantic(
+def test_find_related_falls_back_to_alphabetical_without_embeddings(
     wiki_harness: WikiToolsHarness,
 ) -> None:
-    # wiki_harness disables semantic by default, so ranking is alphabetical.
+    # Pages without embeddings are ordered by name.
     _write_page(wiki_harness.wiki_dir, "source", ["zeta", "alpha", "mid"])
     for stem in ("zeta", "alpha", "mid"):
         _write_page(wiki_harness.wiki_dir, stem, [])

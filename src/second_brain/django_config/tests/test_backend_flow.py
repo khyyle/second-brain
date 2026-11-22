@@ -50,7 +50,13 @@ def test_provider_model_patch_is_validated_after_merging(api_client):
 
 
 @pytest.mark.parametrize(
-    "patch", [{"data_dir": "/tmp/other"}, {"triage": None}, {"compilation": {"max_iterations": 0}}]
+    "patch",
+    [
+        {"data_dir": "/tmp/other"},
+        {"triage": None},
+        {"compilation": {"max_iterations": 0}},
+        {"search": {"embedding_dimension": 768}},
+    ],
 )
 def test_invalid_settings_do_not_replace_saved_file(api_client, config, patch):
     send(api_client, "patch", "/settings", {"triage": {"enabled": False}})
@@ -150,7 +156,9 @@ def test_index_job_retry_resumes_after_model_outage(
     first.refresh_from_db()
     assert first.status == "failed"
     assert first.error == "The embedding model stopped."
-    assert {hit.stem for hit in SearchIndex(config.search_db_path).search("care")} == {
+    assert {
+        hit.stem for hit in SearchIndex(config.search_db_path, config.search).search("care")
+    } == {
         "cats",
         "dogs",
     }
