@@ -1,9 +1,35 @@
 """Keep startup subprocesses independent of personal environment files and vaults."""
 
 import os
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
+
+from second_brain.apps.inference.catalog import DEFAULT_MODELS, ModelPurpose
+from second_brain.apps.inference.services.worker_status import WorkerStatus, write_worker_status
+from second_brain.django_config.paths import get_vault_paths
+from second_brain.pipeline_config import PipelineConfig
+
+
+@pytest.fixture
+def publish_ready_model(config: PipelineConfig) -> Callable[[ModelPurpose], None]:
+    """Publish a live status record for tests that supply the model response."""
+
+    def publish(purpose: ModelPurpose) -> None:
+        write_worker_status(
+            get_vault_paths().backend_dir,
+            WorkerStatus(
+                purpose=purpose,
+                model=DEFAULT_MODELS[purpose],
+                phase="ready",
+                pid=os.getpid(),
+                server_pid=os.getpid(),
+                port=50111,
+            ),
+        )
+
+    return publish
 
 
 @pytest.fixture

@@ -10,11 +10,15 @@ from second_brain.apps.preferences.services.user_settings import get_preferences
 from second_brain.django_config.errors import ConflictError, NotFoundError, ServiceError
 
 KINDS = {"ingest": "ingest", "build": "build", "preview": "build", "index": "build"}
-TERMINAL = {Job.Status.SUCCEEDED, Job.Status.FAILED, Job.Status.CANCELLED, Job.Status.INTERRUPTED}
 
 
 def enqueue_job(
-    kind: str, payload: dict, *, snapshot: dict | None = None, job_id: UUID | None = None
+    kind: str,
+    payload: dict,
+    *,
+    snapshot: dict | None = None,
+    job_id: UUID | None = None,
+    retry_of: Job | None = None,
 ) -> Job:
     """Persist a queued operation with its arguments and captured preferences.
 
@@ -28,6 +32,8 @@ def enqueue_job(
         Captured preferences, or None to capture current preferences.
     job_id: UUID | None
         Preallocated identity when a build's input directory has already been prepared.
+    retry_of: Job | None
+        Previous attempt whose unfinished work this job resumes.
 
     Returns
     -------
@@ -40,6 +46,7 @@ def enqueue_job(
         "kind": kind,
         "lane": KINDS[kind],
         "payload": payload,
+        "retry_of": retry_of,
         "config_snapshot": snapshot
         if snapshot is not None
         else get_preferences().model_dump(mode="json"),
@@ -190,13 +197,11 @@ def retry(job_id: UUID) -> Job:
             dry_run=old.payload.get("dry_run", False),
             preview=old.kind == "preview",
         )
-    elif old.kind == "ingest":
-        new = enqueue_job(old.kind, {**old.payload, "retry_failed": True})
-    else:
-        new = enqueue_job(old.kind, old.payload)
-    Job.objects.filter(pk=new.pk).update(retry_of=old)
-    new.retry_of = old
-    return new
+        Job.objects.filter(pk=new.pk).update(retry_of=old)
+        new.retry_of = old
+        return new
+    payload = {**old.payload, "retry_failed": True} if old.kind == "ingest" else old.payload
+    return enqueue_job(old.kind, payload, retry_of=old)
 
 
 def recover_lane(lane: str) -> int:

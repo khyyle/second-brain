@@ -2,7 +2,11 @@
 
 from pathlib import Path
 
-from second_brain.apps.jobs.services.automatic_jobs import schedule_for_file_change
+from second_brain.apps.jobs.services.automatic_jobs import (
+    ModelReadyTrigger,
+    schedule_for_file_change,
+)
+from second_brain.apps.wiki.services.search_index import SearchIndex
 from second_brain.pipeline_config import PipelineConfig
 
 # (path, last_modified_time, size_in_bytes)
@@ -29,9 +33,10 @@ class WikiIndexWatcher:
     def __init__(self) -> None:
         self._previous: WikiFingerprint | None = None
         self._scheduled: WikiFingerprint | None = None
+        self._embedding = ModelReadyTrigger("embedding")
 
     def scan(self, config: PipelineConfig) -> None:
-        """Queue an index pass for stable wiki edits or a missing search database.
+        """Queue stable wiki edits or a missing index; resume pending vectors on model readiness.
 
         Parameters
         ----------
@@ -55,3 +60,11 @@ class WikiIndexWatcher:
             if outcome != "busy":
                 self._scheduled = version
         self._previous = version
+        if self._embedding.schedule_pending(
+            lambda: (
+                index_exists
+                and SearchIndex(config.search_db_path, config.search).has_pending_embeddings()
+            ),
+            wiki_version=version,
+        ):
+            self._scheduled = version

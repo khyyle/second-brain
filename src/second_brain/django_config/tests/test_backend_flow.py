@@ -1,5 +1,6 @@
 """Exercise real API-to-service-to-worker flows in an isolated vault."""
 
+from collections.abc import Callable
 from uuid import uuid4
 
 import numpy as np
@@ -7,15 +8,17 @@ import pytest
 from django.test import Client
 from numpy.typing import NDArray
 
-from second_brain.apps.inference.errors import InferenceUnavailableError
+from second_brain.apps.inference.catalog import ModelPurpose
+from second_brain.apps.inference.errors import InferenceServerOfflineError
 from second_brain.apps.inference.services.worker_client import EmbeddingRole
 from second_brain.apps.jobs.models import Job
 from second_brain.apps.jobs.services import job_progress, job_queue
 from second_brain.apps.jobs.worker import run_attempt
 from second_brain.apps.library.models import Source
 from second_brain.apps.preferences.services.user_settings import get_preferences
+from second_brain.apps.wiki.services.index_watching import WikiIndexWatcher
 from second_brain.apps.wiki.services.search_index import SearchIndex
-from second_brain.apps.wiki.services.wiki_queries import refresh_index
+from second_brain.apps.wiki.services.wiki_queries import refresh_index, search_pages
 from second_brain.pipeline_config import PipelineConfig
 
 
@@ -133,19 +136,30 @@ def test_queued_cancellation_and_retry_create_distinct_attempts(api_client):
     assert Job.objects.get(pk=first_id).status == "cancelled"
 
 
+@pytest.mark.parametrize("automatic", [False, True], ids=["explicit-retry", "model-ready"])
 def test_index_job_retry_resumes_after_model_outage(
-    api_client: Client, config: PipelineConfig, monkeypatch: pytest.MonkeyPatch
+    api_client: Client,
+    config: PipelineConfig,
+    monkeypatch: pytest.MonkeyPatch,
+    publish_ready_model: Callable[[ModelPurpose], None],
+    automatic: bool,
 ) -> None:
     concepts = config.wiki_dir / "concepts"
     concepts.mkdir(exist_ok=True)
     for stem in ("cats", "dogs"):
         (concepts / f"{stem}.md").write_text(f"# {stem}\nPet care")
     requested: list[str] = []
+    watcher = WikiIndexWatcher()
 
     def embed(model: str, text: str, role: EmbeddingRole) -> NDArray[np.float32]:
         requested.append(text)
         if len(requested) == 2:
-            raise InferenceUnavailableError("The embedding model stopped.")
+            if automatic:
+                # Readiness can arrive before the old attempt has recorded its failure.
+                publish_ready_model("embedding")
+                watcher.scan(config)
+                assert Job.objects.count() == 1
+            raise InferenceServerOfflineError("The embedding model stopped.")
         return np.ones(config.search.embedding_dimensions, dtype=np.float32)
 
     monkeypatch.setattr("second_brain.apps.wiki.services.search_index.embed_text", embed)
@@ -163,8 +177,12 @@ def test_index_job_retry_resumes_after_model_outage(
         "dogs",
     }
 
-    response = api_client.post(f"/v1/jobs/{first.pk}/retry")
-    assert response.status_code == 202
+    if automatic:
+        watcher.scan(config)
+        watcher.scan(config)
+    else:
+        response = api_client.post(f"/v1/jobs/{first.pk}/retry")
+        assert response.status_code == 202
     retried = job_queue.claim_next_job("build")
     assert retried is not None and retried.retry_of_id == first.pk
     run_attempt(retried)
@@ -172,6 +190,60 @@ def test_index_job_retry_resumes_after_model_outage(
     assert retried.status == "succeeded", retried.error
     assert retried.result == {"embedded_pages": 1}
     assert requested[2:] == [requested[1]]
+    if automatic:
+        watcher.scan(config)
+        assert Job.objects.count() == 2
+
+
+@pytest.mark.parametrize("ready_at_restart", [False, True], ids=["offline", "already-ready"])
+def test_restart_rebuilds_deleted_index_after_offline_failure(
+    config: PipelineConfig,
+    monkeypatch: pytest.MonkeyPatch,
+    publish_ready_model: Callable[[ModelPurpose], None],
+    ready_at_restart: bool,
+) -> None:
+    (config.wiki_dir / "concepts" / "note.md").write_text("Notes on beekeeping")
+
+    def scan_and_work(watcher: WikiIndexWatcher) -> None:
+        watcher.scan(config)
+        watcher.scan(config)
+        if job := job_queue.claim_next_job("build"):
+            run_attempt(job)
+
+    def start_embeddings() -> None:
+        publish_ready_model("embedding")
+        monkeypatch.setattr(
+            "second_brain.apps.wiki.services.search_index.embed_text",
+            lambda *args, **kwargs: np.ones(config.search.embedding_dimensions, dtype=np.float32),
+        )
+
+    scan_and_work(WikiIndexWatcher())
+    assert Job.objects.get(kind="index").status == Job.Status.FAILED
+    assert search_pages("beekeeping")
+    config.search_db_path.unlink()
+
+    restarted = WikiIndexWatcher()
+    if ready_at_restart:
+        start_embeddings()
+    restarted.scan(config)
+    restarted.scan(config)
+    assert not config.search_db_path.exists()
+    repair = job_queue.claim_next_job("build")
+    assert repair is not None
+    run_attempt(repair)
+    assert [hit["path"] for hit in search_pages("beekeeping")] == ["concepts/note.md"]
+    if not ready_at_restart:
+        restarted = WikiIndexWatcher()
+        scan_and_work(restarted)
+        assert Job.objects.count() == 2
+        start_embeddings()
+        scan_and_work(restarted)
+
+    index = SearchIndex(config.search_db_path, config.search)
+    assert [hit.stem for hit in index.semantic_search("hives")] == ["note"]
+    attempts = Job.objects.count()
+    scan_and_work(restarted)
+    assert Job.objects.count() == attempts
 
 
 def test_recovery_marks_only_abandoned_running_lane_jobs(api_client, job_factory):
@@ -183,6 +255,38 @@ def test_recovery_marks_only_abandoned_running_lane_jobs(api_client, job_factory
     queued.refresh_from_db()
     other.refresh_from_db()
     assert (running.status, queued.status, other.status) == ("interrupted", "queued", "running")
+
+
+@pytest.mark.parametrize("stop", ["cancelled", "interrupted", "timeout", "cancel-during-outage"])
+def test_model_readiness_preserves_stopped_index_until_a_new_edit(
+    config, publish_ready_model, stop
+):
+    page = config.wiki_dir / "concepts" / "cats.md"
+    page.write_text("# Cats")
+    refresh_index(config)
+    job = Job.objects.get()
+    if stop == "cancelled":
+        job_queue.cancel(job.pk)
+    else:
+        job_queue.claim_next_job("build")
+        if stop == "interrupted":
+            job_queue.recover_lane("build")
+        elif stop == "timeout":
+            Job.objects.update(status=Job.Status.FAILED, error="Local inference timed out.")
+        else:
+            job_queue.cancel(job.pk)
+            Job.objects.update(status=Job.Status.FAILED, result={"waiting_for": "embedding"})
+
+    publish_ready_model("embedding")
+    watcher = WikiIndexWatcher()
+    watcher.scan(config)
+    watcher.scan(config)
+    assert Job.objects.count() == 1
+
+    page.write_text("# Cats\nAn edit made after the stopped attempt.")
+    watcher.scan(config)
+    watcher.scan(config)
+    assert Job.objects.filter(kind="index", status=Job.Status.QUEUED).count() == 1
 
 
 def test_progress_and_cancellation_are_attempt_scoped(api_client, job_factory):

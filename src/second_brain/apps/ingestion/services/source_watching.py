@@ -1,7 +1,12 @@
 """Detect stable source changes and queue ingestion."""
 
 from second_brain.apps.ingestion.services.source_staging import SUPPORTED_EXTENSIONS
-from second_brain.apps.jobs.services.automatic_jobs import schedule_for_file_change
+from second_brain.apps.ingestion.services.triage.pipeline import find_untriaged_sources
+from second_brain.apps.ingestion.services.triage.triage_decisions import TriageStore
+from second_brain.apps.jobs.services.automatic_jobs import (
+    ModelReadyTrigger,
+    schedule_for_file_change,
+)
 from second_brain.pipeline_config import PipelineConfig
 
 FileVersions = tuple[tuple[str, int, int], ...]
@@ -55,9 +60,10 @@ class SourceWatcher:
     def __init__(self) -> None:
         self._previous: tuple[str, FileVersions, FileVersions] | None = None
         self._scheduled: tuple[str, FileVersions, FileVersions] | None = None
+        self._generation = ModelReadyTrigger("generation")
 
     def scan(self, config: PipelineConfig) -> None:
-        """Queue stable input changes when no ingest job is active.
+        """Queue stable input changes and resume undecided chats when generation recovers.
 
         Parameters
         ----------
@@ -83,3 +89,8 @@ class SourceWatcher:
             if outcome != "busy":
                 self._scheduled = fingerprint
         self._previous = fingerprint
+        if config.triage.enabled:
+            # Triage recovery covers parsed chats, not these observed input files.
+            self._generation.schedule_pending(
+                lambda: bool(find_untriaged_sources(config, TriageStore()))
+            )

@@ -1,12 +1,17 @@
-"""Explicit job retries recover failed work without repeating successful parsing."""
+"""Exercise explicit ingestion retries and automatic triage recovery in a disposable vault."""
 
 import json
+from collections.abc import Callable
 from pathlib import Path
 from unittest.mock import Mock
 
 import pytest
 
-from second_brain.apps.inference.errors import InferenceUnavailableError
+from second_brain.apps.inference.catalog import ModelPurpose
+from second_brain.apps.inference.errors import (
+    InferenceServerOfflineError,
+    InferenceUnavailableError,
+)
 from second_brain.apps.ingestion.services.parsing import text_handler
 from second_brain.apps.ingestion.services.source_manifest import Manifest
 from second_brain.apps.ingestion.services.source_watching import SourceWatcher
@@ -138,7 +143,10 @@ def test_job_retry_recovers_unchanged_failure_and_preserves_success(
     assert failed.payload == original_payload
 
 
-def test_triage_retry_does_not_reparse_completed_export(api_client, config, tmp_path, monkeypatch):
+@pytest.mark.parametrize("automatic", [False, True], ids=["explicit-retry", "model-ready"])
+def test_triage_retry_does_not_reparse_completed_export(
+    api_client, config, tmp_path, monkeypatch, publish_ready_model, automatic
+):
     export = tmp_path / "conversations.json"
     export.write_text(
         json.dumps(
@@ -165,7 +173,7 @@ def test_triage_retry_does_not_reparse_completed_export(api_client, config, tmp_
     def generate(model, prompt, **options):
         attempts.append(prompt)
         if len(attempts) == 1:
-            raise InferenceUnavailableError("Local inference is still loading.")
+            raise InferenceServerOfflineError("Local inference is still loading.")
         return '{"decision": "worthwhile", "confidence": 1.0}'
 
     monkeypatch.setattr(
@@ -191,19 +199,152 @@ def test_triage_retry_does_not_reparse_completed_export(api_client, config, tmp_
     monkeypatch.setattr(
         "second_brain.apps.ingestion.services.ingestion_runs.ingest_file", unexpected_parse
     )
-    job_queue.retry(failed.pk)
+    if automatic:
+        watcher = SourceWatcher()
+        publish_ready_model("generation")
+        watcher.scan(config)
+        watcher.scan(config)
+    else:
+        job_queue.retry(failed.pk)
     retried = _run_next_ingestion()
 
     assert retried.status == "succeeded", retried.error
     assert retried.result == {"completed": 0, "failed": 0}
     assert StoredTriageDecision.objects.get().decision == "worthwhile"
     assert len(attempts) == 2
+    if automatic:
+        watcher.scan(config)
+        assert Job.objects.count() == 2
+
+
+def test_ingest_queued_during_empty_triage_scan_can_still_resume(
+    config: PipelineConfig,
+    publish_ready_model: Callable[[ModelPurpose], None],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    watcher = SourceWatcher()
+    publish_ready_model("generation")
+
+    def enqueue_during_scan(*_: object) -> list[Path]:
+        job_queue.enqueue_job("ingest", {"paths": []})
+        return []  # The scan hasn't seen any chats yet.
+
+    with monkeypatch.context() as patch:
+        patch.setattr(
+            "second_brain.apps.ingestion.services.source_watching.find_untriaged_sources",
+            enqueue_during_scan,
+        )
+        watcher.scan(config)
+
+    chat = config.raw_dir / "chatgpt" / "late.md"
+    chat.parent.mkdir()
+    chat.write_text("triage " * 500)
+    monkeypatch.setattr(
+        "second_brain.apps.ingestion.services.triage.classification.generate_json",
+        Mock(side_effect=InferenceServerOfflineError("Model is not responding.")),
+    )
+    failed = _run_next_ingestion()
+    assert failed.result["waiting_for"] == "generation"
+    watcher.scan(config)
+    assert Job.objects.get(status="queued").retry_of_id == failed.pk
+
+
+def test_ready_generation_only_triages_while_a_new_drop_is_still_being_written(
+    config: PipelineConfig, publish_ready_model: Callable[[ModelPurpose], None]
+) -> None:
+    chat = config.raw_dir / "chatgpt" / "short.md"
+    chat.parent.mkdir()
+    chat.write_text("Short chat below the automatic skip threshold.")
+    drop = config.drops_dir / "documents" / "draft.txt"
+    watcher = SourceWatcher()
+    publish_ready_model("generation")
+    with drop.open("w") as writer:
+        writer.write("first part")
+        writer.flush()
+        watcher.scan(config)
+        recovered = _run_next_ingestion()
+        assert recovered.status == "succeeded"
+        assert StoredTriageDecision.objects.get().decision == "skip"
+        assert drop.is_file()
+        writer.write(" and the rest")
+
+    watcher.scan(config)
+    assert not Job.objects.filter(status="queued").exists()
+    watcher.scan(config)
+    assert _run_next_ingestion().result["completed"] == 1
+    assert "first part and the rest" in (config.raw_dir / "documents" / "draft.md").read_text()
+
+
+@pytest.mark.parametrize("cancel_before_failure", [True, False])
+def test_cancelled_request_does_not_hide_another_jobs_deferred_triage(
+    config: PipelineConfig,
+    publish_ready_model: Callable[[ModelPurpose], None],
+    cancel_before_failure: bool,
+) -> None:
+    chat = config.raw_dir / "chatgpt" / "deferred.md"
+    chat.parent.mkdir()
+    chat.write_text("chat " * 500)
+    first = job_queue.enqueue_job("ingest", {"drops_only": True})
+    # A scan cancelled before the outage cannot supersede it. Nor can a
+    # later cancellation of an unrelated, unstarted file selection.
+    payload = (
+        {"drops_only": True}
+        if cancel_before_failure
+        else {"paths": [str(config.drops_dir / "other.md")]}
+    )
+    other = job_queue.enqueue_job("ingest", payload)
+    if cancel_before_failure:
+        job_queue.cancel(other.pk)
+    failed = _run_next_ingestion()
+    assert failed.pk == first.pk and failed.result["waiting_for"] == "generation"
+    if not cancel_before_failure:
+        job_queue.cancel(other.pk)
+
+    publish_ready_model("generation")
+    watcher = SourceWatcher()
+    watcher.scan(config)
+    recovery = Job.objects.get(status="queued")
+    assert recovery.retry_of_id == failed.pk
+    # Cancelling the recovery itself *does* stop this work, including after restart.
+    job_queue.cancel(recovery.pk)
+    SourceWatcher().scan(config)
+    assert not Job.objects.filter(status="queued").exists()
+
+
+def test_unchanged_watched_original_does_not_revive_stopped_triage(
+    config: PipelineConfig,
+    tmp_path: Path,
+    publish_ready_model: Callable[[ModelPurpose], None],
+) -> None:
+    watched = tmp_path / "watched"
+    watched.mkdir()
+    (watched / "original.txt").write_text("An original retained after ingestion")
+    update_preferences({"sources": {"notes": {"path": str(watched), "file_types": ["txt"]}}})
+    config = get_pipeline_config()
+    watcher = SourceWatcher()
+    watcher.scan(config)
+    watcher.scan(config)
+    assert _run_next_ingestion().status == "succeeded"
+
+    chat = config.raw_dir / "chatgpt" / "unfinished.md"
+    chat.parent.mkdir()
+    chat.write_text("triage " * 500)
+    publish_ready_model("generation")
+    watcher.scan(config)
+    recovery = Job.objects.get(status="queued")
+    job_queue.cancel(recovery.pk)
+
+    restarted = SourceWatcher()
+    restarted.scan(config)
+    restarted.scan(config)
+    assert not Job.objects.filter(status="queued").exists()
 
 
 def test_consuming_a_drop_does_not_retry_a_timeout_until_a_new_input_arrives(
     config: PipelineConfig,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    publish_ready_model: Callable[[ModelPurpose], None],
 ) -> None:
     watched = tmp_path / "watched"
     watched.mkdir()
@@ -213,6 +354,7 @@ def test_consuming_a_drop_does_not_retry_a_timeout_until_a_new_input_arrives(
     drop = config.drops_dir / "documents" / "one.txt"
     drop.write_text("Consumed by the first pass")
     watcher = SourceWatcher()
+    publish_ready_model("generation")
     watcher.scan(config)
     watcher.scan(config)
     chat = config.raw_dir / "chatgpt" / "long.md"
