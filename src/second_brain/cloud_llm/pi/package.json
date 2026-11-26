@@ -1,0 +1,11 @@
+{
+  "name": "second-brain-pi-helper",
+  "private": true,
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "dependencies": {
+    "@earendil-works/pi-ai": "1.6.0",
+    "@napi-rs/keyring": "2.1.2"
+  }
+}
