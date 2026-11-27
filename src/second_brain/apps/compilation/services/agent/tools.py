@@ -686,7 +686,7 @@ _PROTECTED_SOURCE_CHARS = 48_000
 
 
 def _protected_source_read_ids(messages: list[dict], max_chars: int) -> set[str]:
-    """Tool-use ids of recent raw-source reads to keep resident, within a budget.
+    """Tool-call ids of recent raw-source reads to keep resident, within a budget.
 
     The latest read of each distinct ``(path, offset)`` page is a candidate;
     candidates are kept newest-first until their combined size would exceed
@@ -694,40 +694,27 @@ def _protected_source_read_ids(messages: list[dict], max_chars: int) -> set[str]
     source content for the rest of the run.
     """
     latest_by_page: dict[tuple[str, int], tuple[int, str]] = {}
-    for index, message in enumerate(messages):
-        if message.get("role") != "assistant":
-            continue
-        content = message.get("content")
-        if not isinstance(content, list):
-            continue
-        for block in content:
-            if getattr(block, "type", None) != "tool_use" or block.name != "read_file":
-                continue
-            args = block.input or {}
-            path = args.get("path", "")
-            if _is_raw_path(path):
-                latest_by_page[(path, args.get("offset", 0))] = (index, block.id)
-
     result_sizes: dict[str, int] = {}
-    for message in messages:
-        if message.get("role") != "user":
+    for index, message in enumerate(messages):
+        if message["role"] == "toolResult":
+            result_sizes[message["toolCallId"]] = sum(len(b["text"]) for b in message["content"])
+        if message["role"] != "assistant":
             continue
-        content = message.get("content")
-        if not isinstance(content, list):
-            continue
-        for block in content:
-            if isinstance(block, dict) and block.get("type") == "tool_result":
-                body = block.get("content")
-                if isinstance(body, str):
-                    result_sizes[block.get("tool_use_id")] = len(body)
+        for block in message["content"]:
+            if block["type"] != "toolCall" or block["name"] != "read_file":
+                continue
+            # The model chose these arguments, so they can be any JSON.
+            path, offset = block["arguments"].get("path"), block["arguments"].get("offset", 0)
+            if isinstance(path, str) and isinstance(offset, int) and _is_raw_path(path):
+                latest_by_page[(path, offset)] = (index, block["id"])
 
     protected: set[str] = set()
     used = 0
-    for _index, tool_use_id in sorted(latest_by_page.values(), reverse=True):
-        size = result_sizes.get(tool_use_id, 0)
+    for _index, call_id in sorted(latest_by_page.values(), reverse=True):
+        size = result_sizes.get(call_id, 0)
         if protected and used + size > max_chars:
             break
-        protected.add(tool_use_id)
+        protected.add(call_id)
         used += size
     return protected
 
@@ -735,16 +722,17 @@ def _protected_source_read_ids(messages: list[dict], max_chars: int) -> set[str]
 def compact_history(messages: list[dict], keep_last: int = 2, max_chars: int = 600) -> None:
     """Shrink older tool outputs in place while retaining recent source context.
 
-    Preserves the most recent user turns and the newest raw-source reads within a
-    character budget. Replaces other oversized results with a placeholder. This
-    bounds repeated input when a conversation is sent on successive model turns.
+    Preserves the tool results of the most recent model turns and the newest raw-source
+    reads within a character budget. Replaces other oversized results with a
+    placeholder. This bounds repeated input when a conversation is sent on successive
+    model turns.
 
     Parameters
     ----------
     messages: list[dict]
-        The running conversation, mutated in place.
+        The running conversation as Pi messages, mutated in place.
     keep_last: int
-        Number of most-recent user turns to leave untouched.
+        Number of most-recent model turns whose tool results are left untouched.
     max_chars: int
         Tool-result size above which an old result is collapsed.
 
@@ -754,20 +742,12 @@ def compact_history(messages: list[dict], keep_last: int = 2, max_chars: int = 6
     """
     placeholder = "[earlier output omitted to save context — re-read if needed]"
     protected_ids = _protected_source_read_ids(messages, _PROTECTED_SOURCE_CHARS)
-    user_indices = [i for i, m in enumerate(messages) if m.get("role") == "user"]
-    protected_turns = set(user_indices[-keep_last:])
-    for i, message in enumerate(messages):
-        if message.get("role") != "user" or i in protected_turns:
+    replies = [i for i, message in enumerate(messages) if message["role"] == "assistant"]
+    # Tool results follow the reply that asked for them, so the recent ones start here.
+    recent_from = replies[-keep_last] if len(replies) >= keep_last else 0
+    for message in messages[:recent_from]:
+        if message["role"] != "toolResult" or message["toolCallId"] in protected_ids:
             continue
-        content = message.get("content")
-        if not isinstance(content, list):  # a plain-string message has no blocks
-            continue
-        for block in content:
-            if (
-                isinstance(block, dict)
-                and block.get("type") == "tool_result"
-                and block.get("tool_use_id") not in protected_ids
-                and isinstance(block.get("content"), str)
-                and len(block["content"]) > max_chars
-            ):
-                block["content"] = placeholder
+        for block in message["content"]:
+            if len(block["text"]) > max_chars:
+                block["text"] = placeholder

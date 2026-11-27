@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 import logging
+import time
 from collections.abc import Callable
 from enum import Enum
 from pathlib import Path
 from typing import NamedTuple
-
-from anthropic.types import ContentBlock
 
 from second_brain.apps.compilation.services.agent.prompt import (
     COMPILATION_SYSTEM_PROMPT,
@@ -30,21 +29,12 @@ from second_brain.apps.wiki.services.wiki_structure import (
     discover_all_pages,
     rank_gaps,
 )
-from second_brain.cloud_llm import (
-    ModelError,
-    ModelErrorKind,
-    ProviderProfile,
-    create_client,
-    request_turn,
-    resolve_profile,
-)
+from second_brain.cloud_llm.pi import pi_helper
 from second_brain.pipeline_config import PipelineConfig
 
 logger = logging.getLogger(__name__)
 
-_MAX_OUTPUT_TOKENS_PER_TURN = 16384
 _SOURCE_TOKENS_PER_EXTRA_ITERATION = 4000
-_MODEL_CONTEXT_WINDOW_EXCEEDED = "model_context_window_exceeded"
 
 READING_SOURCES_ACTIVITY = "Reading the sources"
 
@@ -60,17 +50,31 @@ class RunOutcome(Enum):
 
 
 class RunResult(NamedTuple):
-    cost: float
+    cost: float | None  # None when the provider's charge for some turn is unknown.
     outcome: RunOutcome
     reason: str = ""
     changes: tuple[dict, ...] = ()
 
 
-class _AgentRequest(NamedTuple):
-    system: str | list[dict]
-    tools: list[dict]
-    messages: list[dict]
-    source_tokens: int
+# Turns that produced no reply to act on: how the conversation ends, and what the person
+# can do about it.
+_PROVIDER_FAILED = (RunOutcome.PROVIDER_FAILED, "The model provider did not answer. Build again.")
+_TURN_FAILURES = {
+    "not_connected": (RunOutcome.FAILED, "Connect a provider in Settings."),
+    "model_unavailable": (RunOutcome.FAILED, "Choose a model on the Build tab."),
+    "error": _PROVIDER_FAILED,
+    "incomplete": (RunOutcome.EXHAUSTED, "The model stopped before finishing this source."),
+}
+
+
+def add_cost(total: float | None, cost: float | None) -> float | None:
+    """Add a cost to a running total. An unknown cost makes the total unknown, not smaller."""
+    return None if total is None or cost is None else total + cost
+
+
+def describe_cost(cost: float | None) -> str:
+    """Format a cost for the log."""
+    return "an unknown cost" if cost is None else f"~${cost:.2f}"
 
 
 def too_large_reason(estimated_tokens: int) -> str:
@@ -131,10 +135,12 @@ def _create_executor(config: PipelineConfig, sources: list[str]) -> WikiToolExec
     )
 
 
-def _prepare_request(
-    config: PipelineConfig, sources: list[str], profile: ProviderProfile
-) -> _AgentRequest:
-    """Prepare the source context and provider-specific prompt caching.
+def _now_ms() -> int:
+    return time.time_ns() // 1_000_000
+
+
+def _prepare_request(config: PipelineConfig, sources: list[str]) -> tuple[dict, int]:
+    """Prepare the opening Pi context for one conversation.
 
     Parameters
     ----------
@@ -142,13 +148,12 @@ def _prepare_request(
         Wiki paths and enabled tools.
     sources: list[str]
         Raw-relative paths compiled in this conversation.
-    profile: ProviderProfile
-        Provider caching capabilities.
 
     Returns
     -------
-    _AgentRequest
-        Initial messages, system prompt, tools, and estimated source tokens.
+    tuple[dict, int]
+        Pi context (system prompt, tools, and the first user message) and the
+        estimated source tokens.
     """
     pages = discover_all_pages(config.wiki_dir)
     instructions = build_compilation_prompt(
@@ -156,64 +161,86 @@ def _prepare_request(
         gaps=rank_gaps(pages, build_link_graph(pages)),
         domains=[domain.name for domain in list_domains(config.wiki_dir)],
     )
-    explore_schemas: list[dict] = []
+    schemas = list(WIKI_TOOLS)
     if config.compilation.explore_tools:
         instructions = f"{instructions}\n\n{EXPLORE_TOOLS_GUIDANCE}"
-        explore_schemas = explore_tool_schemas()
+        schemas += explore_tool_schemas()
     source_block = build_source_block(sources, config.raw_dir)
-    source_tokens = len(source_block) // 4
-    user_content: list[dict] = [
-        {"type": "text", "text": instructions},
-        {"type": "text", "text": f"Source documents:\n\n{source_block}"},
-    ]
-    tools = [dict(tool) for tool in (*WIKI_TOOLS, *explore_schemas)]
-    system: str | list[dict] = COMPILATION_SYSTEM_PROMPT
-    if profile.prompt_caching:
-        # Static instructions survive gaps between groups; source text changes
-        # per group and uses the provider's shorter default cache lifetime.
-        system = [
+    context = {
+        "systemPrompt": COMPILATION_SYSTEM_PROMPT,
+        "tools": [
             {
-                "type": "text",
-                "text": COMPILATION_SYSTEM_PROMPT,
-                "cache_control": {"type": "ephemeral", "ttl": "1h"},
+                "name": schema["name"],
+                "description": schema["description"],
+                "parameters": schema["input_schema"],
             }
-        ]
-        tools[-1] = {**tools[-1], "cache_control": {"type": "ephemeral", "ttl": "1h"}}
-        if source_tokens >= profile.min_cacheable_tokens:
-            user_content[-1]["cache_control"] = {"type": "ephemeral"}
-    return _AgentRequest(system, tools, [{"role": "user", "content": user_content}], source_tokens)
+            for schema in schemas
+        ],
+        # Instructions and sources stay separate blocks, so a provider can cache the
+        # prefix they form without the conversation that follows.
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": instructions},
+                    {"type": "text", "text": f"Source documents:\n\n{source_block}"},
+                ],
+                "timestamp": _now_ms(),
+            }
+        ],
+    }
+    return context, len(source_block) // 4
 
 
 def _execute_tools(
     executor: WikiToolExecutor,
-    content: list[ContentBlock],
+    reply: dict,
     report: Callable[[str], None],
+    stop_requested: Callable[[], bool],
 ) -> list[dict]:
-    """Execute requested tools in order and collect their replies.
+    """Execute requested tools in order and collect their results.
 
     Parameters
     ----------
     executor: WikiToolExecutor
         Wiki tools scoped to the current sources.
-    content: list[ContentBlock]
-        Model response blocks, including any tool requests.
+    reply: dict
+        Pi assistant message from a tool-use turn.
     report: Callable[[str], None]
         Publish the activity before each tool executes.
+    stop_requested: Callable[[], bool]
+        Checked before each tool. Once true, the remaining tools do not run.
 
     Returns
     -------
     list[dict]
-        Tool results to include in the next model turn.
+        Pi tool-result messages to include in the next model turn.
     """
-    replies: list[dict] = []
-    for block in content:
-        if block.type != "tool_use":
+    results: list[dict] = []
+    for call in reply["content"]:
+        if call["type"] != "toolCall":
             continue
-        report(describe_tool_call(block.name, block.input))
-        reply = executor.execute(block.name, block.input)
-        logger.debug("Tool %s(%s) -> %s", block.name, block.input, reply[:200])
-        replies.append({"type": "tool_result", "tool_use_id": block.id, "content": reply})
-    return replies
+        if stop_requested():
+            break
+        if "argumentsError" in call:
+            # Pi could not read these arguments, so there is nothing to run. The model
+            # gets the parse error back and can ask again.
+            text, failed = call["argumentsError"], True
+        else:
+            report(describe_tool_call(call["name"], call["arguments"]))
+            text, failed = executor.execute(call["name"], call["arguments"]), False
+            logger.debug("Tool %s(%s) -> %s", call["name"], call["arguments"], text[:200])
+        results.append(
+            {
+                "role": "toolResult",
+                "toolCallId": call["id"],
+                "toolName": call["name"],
+                "content": [{"type": "text", "text": text}],
+                "isError": failed,
+                "timestamp": _now_ms(),
+            }
+        )
+    return results
 
 
 def run_agent(
@@ -221,7 +248,7 @@ def run_agent(
     sources: list[str],
     *,
     started_at: str,
-    base_cost: float = 0.0,
+    base_cost: float | None = 0.0,
     progress: tuple[int, int] | None = None,
     unit_started_at: str = "",
 ) -> RunResult:
@@ -230,13 +257,13 @@ def run_agent(
     Parameters
     ----------
     config: PipelineConfig
-        Provider, source paths, and conversation limits.
+        Provider, model, source paths, and conversation limits.
     sources: list[str]
         Raw-relative paths of one document, chat, or chat group.
     started_at: str
         Start time of the overall build.
-    base_cost: float
-        Cost spent by earlier conversations in this build.
+    base_cost: float | None
+        Cost spent by earlier conversations in this build, or None if unknown.
     progress: tuple[int, int] | None
         Current conversation index and total count for progress reporting.
     unit_started_at: str
@@ -250,19 +277,14 @@ def run_agent(
     """
     from second_brain.apps.jobs.services.job_progress import stop_requested, update_progress
 
-    profile = resolve_profile(config.compilation.provider, config.compilation.model)
-    client = create_client(profile)
     executor = _create_executor(config, sources)
-    request = _prepare_request(config, sources, profile)
+    context, source_tokens = _prepare_request(config, sources)
+    messages: list[dict] = context["messages"]
     max_iterations = max(
         config.compilation.max_iterations,
-        request.source_tokens // _SOURCE_TOKENS_PER_EXTRA_ITERATION,
+        source_tokens // _SOURCE_TOKENS_PER_EXTRA_ITERATION,
     )
-    total_input_tokens = 0
-    total_output_tokens = 0
-    total_cache_read_tokens = 0
-    total_cache_write_tokens = 0
-    cost = 0.0
+    cost: float | None = 0.0
     activity = READING_SOURCES_ACTIVITY
     current, total = progress if progress else (0, 0)
 
@@ -274,7 +296,7 @@ def run_agent(
             current=current,
             total=total,
             started_at=started_at,
-            cost_usd=base_cost + cost,
+            cost_usd=add_cost(base_cost, cost),
             current_sources=tuple(sources),
             current_started_at=unit_started_at,
             current_cost_usd=cost,
@@ -288,82 +310,60 @@ def run_agent(
         if stop_requested():
             logger.info("Stop requested after %d model turns", iteration)
             break
-        compact_history(request.messages)
+        compact_history(messages)
         try:
-            response = request_turn(
-                client,
-                model=profile.model,
-                max_tokens=_MAX_OUTPUT_TOKENS_PER_TURN,
-                system=request.system,
-                tools=request.tools,
-                messages=request.messages,
+            turn = pi_helper.run_turn(
+                config.compilation.provider, config.compilation.model, context, stop_requested
             )
-        except ModelError as error:
-            if error.kind is ModelErrorKind.TOO_LARGE:
-                outcome = RunOutcome.TOO_LARGE
-                reason = too_large_reason(estimate_source_tokens(config.raw_dir, sources))
-            else:
-                outcome = RunOutcome.PROVIDER_FAILED
-                reason = error.reason
-            logger.warning("Provider error for %s: %s", ", ".join(sources), reason)
+        except pi_helper.PiHelperError as error:
+            outcome, reason = RunOutcome.PROVIDER_FAILED, error.reason
+            logger.warning("Provider helper failed for %s: %s", ", ".join(sources), reason)
+            break
+        if turn is None:
+            logger.info("Stop requested during model turn %d", iteration + 1)
             break
 
-        total_input_tokens += response.usage.input_tokens
-        total_output_tokens += response.usage.output_tokens
-        total_cache_read_tokens += getattr(response.usage, "cache_read_input_tokens", 0) or 0
-        total_cache_write_tokens += getattr(response.usage, "cache_creation_input_tokens", 0) or 0
-        cost = profile.estimate_cost(
-            total_input_tokens,
-            total_output_tokens,
-            cache_read_tokens=total_cache_read_tokens,
-            cache_write_tokens=total_cache_write_tokens,
-        )
+        # The helper reports no cost when it sent nothing, and null when the cost is unknown.
+        cost = add_cost(cost, turn.get("cost_usd", 0.0))
         report(activity)
-        logger.debug(
-            "Turn %d: +%d in (+%d cached), +%d out (~$%.2f)",
-            iteration + 1,
-            response.usage.input_tokens,
-            getattr(response.usage, "cache_read_input_tokens", 0) or 0,
-            response.usage.output_tokens,
-            cost,
-        )
-        if response.stop_reason == _MODEL_CONTEXT_WINDOW_EXCEEDED:
+        logger.debug("Turn %d: %s (%s)", iteration + 1, turn["outcome"], describe_cost(cost))
+        if turn["outcome"] == "too_large":
             outcome = RunOutcome.TOO_LARGE
             reason = too_large_reason(estimate_source_tokens(config.raw_dir, sources))
             break
-        request.messages.append({"role": "assistant", "content": response.content})
-        if response.stop_reason == "end_turn":
+        if turn["outcome"] == "stop":
             outcome = RunOutcome.COMPLETED
             reason = ""
             logger.info("Agent completed after %d model turns", iteration + 1)
             break
-        if cost_cap > 0 and base_cost + cost >= cost_cap:
+        spent = add_cost(base_cost, cost)
+        # An unknown cost cannot be held to the cap.
+        if cost_cap > 0 and spent is not None and spent >= cost_cap:
             outcome = RunOutcome.COST_CAPPED
             reason = "Reached the spend cap per build."
-            logger.warning("Build cost cap reached (~$%.2f >= $%.2f)", base_cost + cost, cost_cap)
+            logger.warning("Build cost cap reached (~$%.2f >= $%.2f)", spent, cost_cap)
+            break
+        if turn["outcome"] != "toolUse":
+            # Only a tool-use turn carries calls to run. Anything else ends the conversation.
+            outcome, reason = _TURN_FAILURES.get(turn["outcome"], _PROVIDER_FAILED)
+            logger.warning("No usable reply for %s: %s", ", ".join(sources), turn["outcome"])
             break
 
+        # Appended as Pi returned it: its thinking blocks and signatures must be replayed intact.
+        messages.append(turn["message"])
         try:
-            tool_results = _execute_tools(executor, response.content, report)
+            messages += _execute_tools(executor, turn["message"], report, stop_requested)
         except InferenceUnavailableError as exc:
             outcome = RunOutcome.FAILED
             reason = exc.reason
             logger.warning("Local inference failed for %s: %s", ", ".join(sources), reason)
             break
-        if not tool_results:
-            reason = "The model stopped before finishing this source."
-            logger.warning("Model stopped early (stop_reason=%s)", response.stop_reason)
-            break
-        request.messages.append({"role": "user", "content": tool_results})
 
     executor.finalize_provenance()
     logger.info(
-        "Agent finished (%s): %d changes, %d in + %d out tokens (%d cache read), ~$%.2f",
+        "Agent finished (%s): %d changes, %s",
         outcome.value,
         len(executor.changes),
-        total_input_tokens,
-        total_output_tokens,
-        total_cache_read_tokens,
-        cost,
+        describe_cost(cost),
     )
     return RunResult(cost, outcome, reason, tuple(executor.changes))

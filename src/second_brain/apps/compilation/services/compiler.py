@@ -9,10 +9,14 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import assert_never
 
+from asgiref.sync import async_to_sync
+
 from second_brain.apps.compilation.services.agent.loop import (
     READING_SOURCES_ACTIVITY,
     RunOutcome,
     RunResult,
+    add_cost,
+    describe_cost,
     estimate_source_tokens,
     run_agent,
     too_large_reason,
@@ -22,8 +26,8 @@ from second_brain.apps.compilation.services.build_records import BuildStore
 from second_brain.apps.compilation.services.staging import find_new_sources
 from second_brain.apps.ingestion.services.triage.skipped import purge_skipped
 from second_brain.apps.jobs.outcomes import CRASH_REASON, StageOutcome
+from second_brain.apps.preferences.services.agent_provider import model_selection
 from second_brain.apps.wiki.services.wiki_structure import rebuild_structure
-from second_brain.cloud_llm import require_api_key, resolve_profile
 from second_brain.errors import SecondBrainError
 from second_brain.file_hashing import hash_file
 from second_brain.pipeline_config import PipelineConfig
@@ -189,7 +193,7 @@ def _run_unit(
     sources: list[str],
     *,
     started_at: str,
-    base_cost: float,
+    base_cost: float | None,
     progress: tuple[int, int],
 ) -> RunResult:
     """Run a conversation with progress and recoverable failure reporting.
@@ -202,8 +206,8 @@ def _run_unit(
         Sources in this conversation.
     started_at: str
         Overall build start time.
-    base_cost: float
-        Cost spent by earlier conversations.
+    base_cost: float | None
+        Cost spent by earlier conversations, or None if unknown.
     progress: tuple[int, int]
         Conversation index and total count.
 
@@ -259,6 +263,7 @@ def _compile_work_units(
     work_units: list[list[str]],
     build_store: BuildStore,
     *,
+    context_window: int,
     started_at: str,
     on_unit_finished: Callable[[], None] | None,
 ) -> dict:
@@ -272,6 +277,8 @@ def _compile_work_units(
         Source groups, in build order.
     build_store: BuildStore
         Compiled and set-aside source records.
+    context_window: int
+        Tokens the chosen model accepts in one request.
     started_at: str
         Overall build start time.
     on_unit_finished: Callable[[], None] | None
@@ -286,15 +293,12 @@ def _compile_work_units(
 
     compiled_count = 0
     deferred_count = 0
-    cumulative_cost = 0.0
+    cumulative_cost: float | None = 0.0
     outcome = StageOutcome.OK
     reason = ""
     total = len(work_units)
     staged_count = sum(len(unit) for unit in work_units)
     cost_cap = config.compilation.max_cost_per_build_usd
-    window = resolve_profile(
-        config.compilation.provider, config.compilation.model
-    ).context_window_tokens
 
     with _build_progress():
         for index, unit in enumerate(work_units):
@@ -302,14 +306,15 @@ def _compile_work_units(
                 logger.info("Stop requested before group %d/%d", index + 1, total)
                 outcome = StageOutcome.STOPPED
                 break
-            if cost_cap > 0 and cumulative_cost >= cost_cap:
+            # An unknown cost cannot be held to the cap.
+            if cost_cap > 0 and cumulative_cost is not None and cumulative_cost >= cost_cap:
                 logger.info("Build cost cap reached before group %d/%d", index + 1, total)
                 outcome = StageOutcome.CAPPED
                 break
             # An edit made after this snapshot remains staged for a later build.
             unit_hashes = _hash_sources(config.raw_dir, unit)
             estimated_tokens = estimate_source_tokens(config.raw_dir, unit)
-            if estimated_tokens > int(window * _INLINE_SOURCE_WINDOW_FRACTION):
+            if estimated_tokens > int(context_window * _INLINE_SOURCE_WINDOW_FRACTION):
                 build_store.defer_sources(
                     unit_hashes, too_large_reason(estimated_tokens), retryable=False
                 )
@@ -326,7 +331,7 @@ def _compile_work_units(
                 base_cost=cumulative_cost,
                 progress=(index, total),
             )
-            cumulative_cost += result.cost
+            cumulative_cost = add_cost(cumulative_cost, result.cost)
             if result.outcome is not RunOutcome.COMPLETED:
                 _git_restore(config.wiki_dir)
             match result.outcome:
@@ -362,7 +367,7 @@ def _compile_work_units(
             if on_unit_finished is not None:
                 on_unit_finished()
 
-    logger.info("Compiled %d sources for ~$%.2f", compiled_count, cumulative_cost)
+    logger.info("Compiled %d sources for %s", compiled_count, describe_cost(cumulative_cost))
     left_count = staged_count - compiled_count - deferred_count
     outcome, reason = _finalize_outcome(outcome, reason, deferred_count, left_count)
     # Incomplete builds leave curation open for a later attempt.
@@ -456,7 +461,6 @@ def run_compilation(
         stats = rebuild_structure(wiki_dir)
         return {**stats, "sources_compiled": 0, **_outcome_fields(StageOutcome.OK, "")}
 
-    profile = resolve_profile(config.compilation.provider, config.compilation.model)
     logger.info("Compiling %d worthwhile sources", len(new_sources))
     summary = {"sources_compiled": 0, **_outcome_fields(StageOutcome.OK, "")}
     if dry_run:
@@ -464,7 +468,10 @@ def run_compilation(
     else:
         from second_brain.apps.jobs.services.job_progress import now_iso
 
-        require_api_key(profile)
+        # The login or its models can change after the build was queued.
+        model = async_to_sync(model_selection.chosen_model)(
+            config.compilation.provider, config.compilation.model
+        )
         _git_commit(wiki_dir)
 
         started_at = now_iso()
@@ -474,6 +481,7 @@ def run_compilation(
             config,
             work_units,
             build_store,
+            context_window=model["context_window"],
             started_at=started_at,
             on_unit_finished=on_unit_finished,
         )

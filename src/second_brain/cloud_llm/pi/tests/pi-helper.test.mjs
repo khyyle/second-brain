@@ -65,7 +65,7 @@ test('login, list from a fresh collection, and disconnect without exposing crede
   await f.run('connection-status');
   assert.deepEqual(f.output.at(-1), { connected: true });
   await f.run('list-models');
-  assert.ok(f.output.at(-1).some(m => m.id && m.name));
+  assert.ok(f.output.at(-1).length > 0 && f.output.at(-1).every(m => m.id && m.name && m.contextWindow > 0));
   assert.doesNotMatch(JSON.stringify(f.output), /private-/);
   await f.run('logout');
   await f.run('connection-status');
@@ -240,7 +240,7 @@ test('OAuth model choices respect the saved account catalog without refreshing',
   const [allowed] = provider.getModels();
   f.options.entry.setPassword(JSON.stringify({ ...credential, availableModelIds: [allowed.id] }));
   await f.run('list-models');
-  assert.deepEqual(f.output.at(-1), [{ id: allowed.id, name: allowed.name }]);
+  assert.deepEqual(f.output.at(-1), [{ id: allowed.id, name: allowed.name, contextWindow: allowed.contextWindow }]);
   f.options.entry.setPassword(JSON.stringify({ type: 'oauth' }));
   await assert.rejects(f.run('list-models'));
 });
@@ -451,8 +451,10 @@ test('build-turn keeps provider error text to itself and recognizes a request th
   // Bedrock reports an overflowing request as a stop reason, not as an error.
   f.replies.push({ api: 'bedrock-converse-stream', stopReason: 'length', rawStopReason: 'model_context_window_exceeded', content: [] });
   assert.equal((await f.turn()).outcome, 'too_large');
-  // A reply that died after the provider took the request may still be charged for.
-  f.replies.push({ stopReason: 'error', rawStopReason: undefined, content: [], errorMessage: 'private-provider-body' });
+  // A reply that died after the provider took the request, or after it began, may still be charged for.
+  const died = { stopReason: 'error', rawStopReason: undefined, errorMessage: 'private-provider-body' };
+  f.replies.push({ ...died, content: [] }, { ...died, status: null });
+  assert.deepEqual(await f.turn(), { outcome: 'error', cost_usd: null });
   assert.deepEqual(await f.turn(), { outcome: 'error', cost_usd: null });
 });
 

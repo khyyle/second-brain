@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-import dataclasses
 import json
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -15,18 +13,21 @@ from second_brain.apps.compilation.services.agent.loop import RunOutcome, RunRes
 from second_brain.apps.compilation.services.build_log import BUILD_LOG_FILENAME
 from second_brain.apps.compilation.services.build_records import BuildStore
 from second_brain.apps.compilation.tests.fakes import (
-    FakeResponse,
-    FakeUsage,
+    Turn,
+    finished,
     install_fake,
-    status_error,
+    no_reply,
+    tool_call,
+    tool_use,
 )
 from second_brain.apps.jobs.outcomes import CRASH_REASON, StageOutcome
+from second_brain.apps.preferences.services.agent_provider import model_selection
 from second_brain.apps.wiki.services.git_history import commit_all
 from second_brain.apps.wiki.services.wiki_structure import serialize_page
 from second_brain.django_config.errors import DependencyError
 from second_brain.pipeline_config import CompilationConfig, PipelineConfig, TriageConfig
 
-pytestmark = pytest.mark.django_db(transaction=True)
+pytestmark = [pytest.mark.django_db(transaction=True), pytest.mark.usefixtures("connected_model")]
 
 
 def test_expected_failure_inside_a_conversation_keeps_its_reason(
@@ -88,36 +89,34 @@ def test_tool_turns_stay_uncommitted_until_the_conversation_finishes(
         return {}
 
     monkeypatch.setattr(compiler, "rebuild_structure", rebuild)
-    finished = FakeResponse("end_turn", FakeUsage(10, 10), [])
-    client = install_fake(monkeypatch, finished)
 
-    def respond(**_kwargs: Any) -> FakeResponse:
-        client.messages.calls += 1
-        title = "Alpha" if client.messages.calls <= 2 else "Beta"
-        if client.messages.calls in (1, 3):
-            write_page = SimpleNamespace(
-                type="tool_use",
-                id=f"write-{title.lower()}",
-                name="write_page",
-                input={
-                    "type": "concept",
-                    "title": title,
-                    "domains": ["testing"],
-                    "body": f"# {title}\n\nSource content.",
-                },
-            )
-            return FakeResponse("tool_use", FakeUsage(10, 10), [write_page])
+    def write(title: str) -> Turn:
+        page = {
+            "type": "concept",
+            "title": title,
+            "domains": ["testing"],
+            "body": f"# {title}\n\nSource content.",
+        }
+        return tool_use(tool_call("write_page", page, f"write-{title.lower()}"))
+
+    def finish(title: str, compiled: set[str], commits: list[set[str]]) -> Turn:
         assert (config.wiki_dir / "concepts" / f"{title.lower()}.md").exists()
-        assert set(build_store.get_compiled()) == (set() if title == "Alpha" else {"a.md"})
-        assert checkpoints == ([set()] if title == "Alpha" else [set(), set()])
+        assert set(build_store.get_compiled()) == compiled
+        assert checkpoints == commits
         assert rebuilds == []
-        return finished
+        return finished()
 
-    monkeypatch.setattr(client.messages, "create", respond)
+    turns = install_fake(
+        monkeypatch,
+        write("Alpha"),
+        lambda _context: finish("Alpha", set(), [set()]),
+        write("Beta"),
+        lambda _context: finish("Beta", {"a.md"}, [set(), set()]),
+    )
 
     stats = compiler.run_compilation(config)
 
-    assert client.messages.calls == 4
+    assert len(turns.contexts) == 4
     assert stats["sources_compiled"] == 2
     assert checkpoints == [set(), set(), {"a.md"}, {"a.md", "b.md"}]
     assert rebuilds == [config.wiki_dir]
@@ -344,13 +343,12 @@ def test_over_window_unit_defers_preflight_without_api_call(
 
     monkeypatch.setattr(compiler, "rebuild_structure", lambda *_: {})
     monkeypatch.setattr(compiler, "_git_commit", lambda *_: None)
-    # Shrink the window so an ordinary temp file crosses the 60% line.
-    profile = compiler.resolve_profile(config.compilation.provider, config.compilation.model)
-    monkeypatch.setattr(
-        compiler,
-        "resolve_profile",
-        lambda *a, **k: dataclasses.replace(profile, context_window_tokens=1000),
-    )
+
+    # A window small enough that an ordinary temp file crosses the 60% line.
+    async def small_model(_provider: str, model_id: str) -> model_selection.ModelChoice:
+        return {"id": model_id, "name": model_id, "context_window": 1000}
+
+    monkeypatch.setattr(model_selection, "chosen_model", small_model)
     (config.raw_dir / "huge.md").write_text("x" * 10_000, encoding="utf-8")
     _stage(monkeypatch, config, ["huge.md"])
 
@@ -400,10 +398,10 @@ def test_unexpected_failure_stops_build_and_keeps_units_staged(
     assert build_store.get_compiled() == {}
 
 
-def test_prompt_too_long_rejection_defers_not_retries(
+def test_a_request_the_provider_finds_too_large_defers_not_retries(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, read_job_progress
 ) -> None:
-    """The API's own too-long rejection parks the unit instead of retry-looping."""
+    """The provider's own too-long rejection parks the unit instead of retry-looping."""
     config = _build_config(tmp_path)
     build_store = BuildStore()
 
@@ -412,16 +410,11 @@ def test_prompt_too_long_rejection_defers_not_retries(
     monkeypatch.setattr(compiler, "_git_commit", lambda *_: None)
     (config.raw_dir / "a.md").write_text("body", encoding="utf-8")
 
-    error = status_error(400, "prompt is too long: 210000 tokens > 200000 maximum")
-    client = install_fake(
-        monkeypatch,
-        FakeResponse("end_turn", FakeUsage(0, 0), []),
-        error=error,
-    )
+    turns = install_fake(monkeypatch, no_reply("too_large"))
 
     stats = compiler.run_compilation(config)
 
-    assert client.messages.calls == 1
+    assert len(turns.contexts) == 1
     assert stats["sources_compiled"] == 0
     assert set(build_store.get_deferred()) == {"a.md"}
 
@@ -429,7 +422,7 @@ def test_prompt_too_long_rejection_defers_not_retries(
 def test_provider_failure_stops_build_and_keeps_curation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, read_job_progress
 ) -> None:
-    """An account failure stops the build and leaves skipped files and the preview."""
+    """A provider failure stops the build and leaves skipped files and the preview."""
     config = _build_config(tmp_path)
     build_store = BuildStore()
     skipped = config.raw_dir / ".skipped" / "chatgpt"
@@ -445,21 +438,17 @@ def test_provider_failure_stops_build_and_keeps_curation(
     monkeypatch.setattr(compiler, "_git_commit", lambda *_: None)
     monkeypatch.setattr(compiler, "_git_restore", lambda *_: None)
 
-    client = install_fake(
-        monkeypatch,
-        FakeResponse("end_turn", FakeUsage(0, 0), []),
-        error=status_error(402, "credit balance is too low"),
-    )
+    turns = install_fake(monkeypatch, no_reply("error"))
 
     stats = compiler.run_compilation(config)
 
-    assert client.messages.calls == 1
+    assert len(turns.contexts) == 1
     assert build_store.get_compiled() == {}
     assert build_store.get_deferred() == {}
     assert (config.raw_dir / ".skipped" / "chatgpt" / "junk.md").is_file()
     assert (config.data_dir / ".clusters.json").is_file()
     assert stats["outcome"] is StageOutcome.FAILED
-    assert stats["reason"] == "Your API account is out of credits."
+    assert stats["reason"] == "The model provider did not answer. Build again."
     assert stats["counts"] == {"completed": 0, "deferred": 0, "left": 2}
 
 

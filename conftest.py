@@ -32,15 +32,23 @@ def _block_real_keychain(monkeypatch):
     )
 
 
+@pytest.fixture(autouse=True)
+def _block_real_pi_helper(monkeypatch):
+    """Tests never run the real provider helper, which reads the user's Keychain."""
+    from second_brain.cloud_llm.pi import pi_helper
+
+    monkeypatch.setattr(pi_helper, "PI_HELPER", pi_helper.PI_HELPER.with_name("no-helper.mjs"))
+
+
 @pytest.fixture
-def provider_key(monkeypatch, _block_real_keychain):
-    """A fake Keychain credential shared by compilation and API-to-worker tests."""
-    key = "test-only-provider-key"
-    monkeypatch.setattr(
-        "second_brain.apps.preferences.services.provider_credentials.read_api_key",
-        lambda provider: key,
-    )
-    return key
+def connected_model(monkeypatch):
+    """A saved login that offers whichever model is chosen, for tests that reach a build."""
+    from second_brain.apps.preferences.services.agent_provider import model_selection
+
+    async def offered(provider_id: str, model_id: str) -> model_selection.ModelChoice:
+        return {"id": model_id, "name": model_id, "context_window": 1_000_000}
+
+    monkeypatch.setattr(model_selection, "chosen_model", offered)
 
 
 @pytest.fixture

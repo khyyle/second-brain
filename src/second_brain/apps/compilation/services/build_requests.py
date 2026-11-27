@@ -4,6 +4,8 @@ import json
 import shutil
 from uuid import uuid4
 
+from asgiref.sync import async_to_sync
+
 from second_brain.apps.compilation.services.build_curation import capture_curation_version
 from second_brain.apps.compilation.services.clustering import preview as clustering
 from second_brain.apps.compilation.services.staging import find_new_sources
@@ -11,14 +13,12 @@ from second_brain.apps.ingestion.services.triage.pipeline import worthwhile_sour
 from second_brain.apps.jobs.models import Job
 from second_brain.apps.jobs.services.job_queue import enqueue_job
 from second_brain.apps.library.services.source_files import checked_path
+from second_brain.apps.preferences.services.agent_provider import model_selection
 from second_brain.apps.preferences.services.user_settings import (
     get_pipeline_config,
     get_preferences,
 )
-from second_brain.cloud_llm.client import require_api_key
-from second_brain.cloud_llm.errors import ModelError
-from second_brain.cloud_llm.providers import resolve_profile
-from second_brain.django_config.errors import ConflictError, ServiceError
+from second_brain.django_config.errors import ServiceError
 from second_brain.django_config.paths import get_vault_paths
 from second_brain.django_config.vault_storage import atomic_write, vault_lock
 from second_brain.file_hashing import hash_file
@@ -47,9 +47,10 @@ def request_build(*, full: bool = False, dry_run: bool = False, preview: bool = 
     -----
     Inputs are copied before the job row becomes visible. An unsuccessful enqueue
     removes the copies. Crash-orphaned directories are harmless and retained for review.
-    Builds with eligible inputs check local credential availability before enqueueing.
-    This does not contact the provider or prove the key is valid. The worker reads
-    Keychain again at execution time; secrets are never captured with these inputs.
+    Builds with eligible inputs check before enqueueing that a provider login is saved
+    and offers the chosen model. This does not contact the provider or prove the login
+    works. The worker checks again at execution time; secrets are never captured with
+    these inputs.
     """
     preferences = get_preferences().model_dump(mode="json")
     config = get_pipeline_config(preferences)
@@ -72,12 +73,9 @@ def request_build(*, full: bool = False, dry_run: bool = False, preview: bool = 
             if config.triage.enabled:
                 sources = worthwhile_sources(config, sources)
             if sources and not dry_run and not preview:
-                profile = resolve_profile(config.compilation.provider, config.compilation.model)
-                try:
-                    require_api_key(profile)
-                except ModelError as exc:
-                    # Missing local credentials are a correctable setup conflict.
-                    raise ConflictError(exc.reason) from exc
+                async_to_sync(model_selection.chosen_model)(
+                    config.compilation.provider, config.compilation.model
+                )
             hashes = {}
             for relative in sources:
                 source = checked_path(config.data_dir, "raw", relative)

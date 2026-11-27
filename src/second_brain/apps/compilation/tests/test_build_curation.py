@@ -13,7 +13,7 @@ from second_brain.django_config.vault_storage import vault_lock
 
 
 @pytest.fixture
-def curation(config):
+def curation(config, connected_model):
     source = config.raw_dir / "documents" / "notes.md"
     source.parent.mkdir(parents=True, exist_ok=True)
     source.write_text("An eligible source")

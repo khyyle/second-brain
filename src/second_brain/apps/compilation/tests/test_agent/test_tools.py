@@ -276,24 +276,14 @@ def test_resolve_rejects_path_traversal_outside_raw(tmp_path: Path) -> None:
     assert "Path escapes raw directory" in read_out
 
 
-class _FakeToolUse:
-    type = "tool_use"
-
-    def __init__(self, block_id: str, name: str, tool_input: dict) -> None:
-        self.id = block_id
-        self.name = name
-        self.input = tool_input
+def _assistant(call_id: str, name: str, arguments: dict) -> dict:
+    call = {"type": "toolCall", "id": call_id, "name": name, "arguments": arguments}
+    return {"role": "assistant", "content": [call]}
 
 
-def _assistant(block_id: str, name: str, tool_input: dict) -> dict:
-    return {"role": "assistant", "content": [_FakeToolUse(block_id, name, tool_input)]}
-
-
-def _tool_result(tool_use_id: str, content: str) -> dict:
-    return {
-        "role": "user",
-        "content": [{"type": "tool_result", "tool_use_id": tool_use_id, "content": content}],
-    }
+def _tool_result(call_id: str, text: str) -> dict:
+    content = [{"type": "text", "text": text}]
+    return {"role": "toolResult", "toolCallId": call_id, "content": content}
 
 
 def test_compact_keeps_only_latest_source_read(tmp_path: Path) -> None:
@@ -311,10 +301,10 @@ def test_compact_keeps_only_latest_source_read(tmp_path: Path) -> None:
     compact_history(messages, keep_last=1)
 
     # Older duplicate source read is collapsed; the latest is preserved.
-    assert messages[2]["content"][0]["content"] != big
-    assert messages[4]["content"][0]["content"] == big
-    # Most recent user turn stays intact regardless of content.
-    assert messages[6]["content"][0]["content"] == big
+    assert messages[2]["content"][0]["text"] != big
+    assert messages[4]["content"][0]["text"] == big
+    # The most recent turn's result stays intact regardless of content.
+    assert messages[6]["content"][0]["text"] == big
 
 
 def test_compact_keeps_every_page_of_a_paged_source() -> None:
@@ -332,8 +322,8 @@ def test_compact_keeps_every_page_of_a_paged_source() -> None:
     compact_history(messages, keep_last=1)
 
     # Both pages of the same source survive; only the unrelated old result is cut.
-    assert messages[2]["content"][0]["content"] == big
-    assert messages[4]["content"][0]["content"] == big
+    assert messages[2]["content"][0]["text"] == big
+    assert messages[4]["content"][0]["text"] == big
 
 
 def test_compact_bounds_protected_source_reads_by_char_budget() -> None:
@@ -356,9 +346,23 @@ def test_compact_bounds_protected_source_reads_by_char_budget() -> None:
     compact_history(messages, keep_last=1)
 
     # Oldest read is evicted; the two newest stay within budget.
-    assert messages[2]["content"][0]["content"] != page
-    assert messages[4]["content"][0]["content"] == page
-    assert messages[6]["content"][0]["content"] == page
+    assert messages[2]["content"][0]["text"] != page
+    assert messages[4]["content"][0]["text"] == page
+    assert messages[6]["content"][0]["text"] == page
+
+
+def test_compact_tolerates_read_arguments_the_tool_itself_rejects() -> None:
+    messages = [
+        {"role": "user", "content": "prompt"},
+        _assistant("bad-path", "read_file", {"path": None}),
+        _tool_result("bad-path", "Error: path"),
+        _assistant("bad-offset", "read_file", {"path": "raw/chatgpt/a.md", "offset": [1]}),
+        _tool_result("bad-offset", "Error: offset"),
+    ]
+
+    compact_history(messages)
+
+    assert messages[4]["content"][0]["text"] == "Error: offset"
 
 
 def test_build_source_block_labels_each_source(tmp_path: Path) -> None:

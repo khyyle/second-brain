@@ -34,8 +34,8 @@ class PipelineStatus:
         UTC ISO 8601 timestamp of this progress snapshot.
     started_at: str
         ISO 8601 timestamp when this phase's run began.
-    cost_usd: float
-        Accumulated provider API cost in US dollars for this run.
+    cost_usd: float | None
+        Accumulated provider API cost in US dollars for this run, or None if unknown.
     current_sources: tuple[str, ...]
         Paths relative to raw/ for the sources currently being processed;
         empty when individual sources are not reported.
@@ -44,8 +44,9 @@ class PipelineStatus:
         the queue is exhausted or not reported.
     current_started_at: str
         ISO 8601 start time of the current sources, or an empty string if unreported.
-    current_cost_usd: float
-        Provider API cost for the current sources, already included in cost_usd.
+    current_cost_usd: float | None
+        Provider API cost for the current sources, already included in cost_usd, or
+        None if unknown.
     current_activity: str
         Short description of the current activity, or an empty string if unreported.
     """
@@ -56,11 +57,11 @@ class PipelineStatus:
     total: int
     updated_at: str
     started_at: str
-    cost_usd: float
+    cost_usd: float | None
     current_sources: tuple[str, ...]
     queued_sources: tuple[str, ...]
     current_started_at: str
-    current_cost_usd: float
+    current_cost_usd: float | None
     current_activity: str
 
 
@@ -81,9 +82,9 @@ def update_progress(
     total: int,
     started_at: str,
     current_sources: tuple[str, ...] = (),
-    cost_usd: float = 0.0,
+    cost_usd: float | None = 0.0,
     current_started_at: str = "",
-    current_cost_usd: float = 0.0,
+    current_cost_usd: float | None = 0.0,
     current_activity: str = "",
     queued_sources: tuple[str, ...] = (),
 ) -> None:
@@ -103,12 +104,12 @@ def update_progress(
         ISO timestamp when this run began.
     current_sources: tuple[str, ...]
         Paths relative to raw/ for the sources currently being processed.
-    cost_usd: float
-        Accumulated API cost so far this run.
+    cost_usd: float | None
+        Accumulated API cost so far this run, or None if unknown.
     current_started_at: str
         ISO timestamp when processing of the current sources began.
-    current_cost_usd: float
-        API cost so far for the sources being compiled.
+    current_cost_usd: float | None
+        API cost so far for the sources being compiled, or None if unknown.
     current_activity: str
         What the build agent is doing for them, as a short phrase.
     queued_sources: tuple[str, ...]

@@ -381,7 +381,7 @@ def test_worker_retains_counts_and_marks_failed_results(api_client, monkeypatch)
 
 
 def test_build_worker_commits_captured_version_and_leaves_newer_version_staged(
-    api_client, config, monkeypatch, provider_key
+    api_client, config, monkeypatch, connected_model
 ):
     from second_brain.apps.compilation.models import CompiledSource
     from second_brain.apps.compilation.services.agent.loop import RunOutcome, RunResult

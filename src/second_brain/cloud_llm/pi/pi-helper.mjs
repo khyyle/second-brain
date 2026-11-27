@@ -166,7 +166,7 @@ function modelsForSavedLogin(provider, entry) {
 async function listModels(provider, entry) {
   // Listing checks the login but sends nothing, so it never refreshes a token.
   const available = await modelsForSavedLogin(provider, entry)?.getAvailable(provider.id) ?? [];
-  return available.map(({ id, name }) => ({ id, name }));
+  return available.map(({ id, name, contextWindow }) => ({ id, name, contextWindow }));
 }
 
 // Python checks the spend cap between turns, so asking for at most this much output bounds
@@ -238,14 +238,15 @@ async function buildTurn(provider, { entry, input, modelId }) {
   const reply = await stream.result();
 
   // Pi prices a turn from its catalog unless the provider reports the bill. Its $0 is real
-  // only then, or when the request failed without the provider taking it. Otherwise the catalog
-  // has no price for the model or the provider sent no usage: an unknown cost, not a free turn.
+  // only then, or when the request failed with no sign that the provider took it. Otherwise
+  // the catalog has no price for the model or the provider sent no usage: an unknown cost,
+  // not a free turn.
   const { cost } = reply.usage;
-  const unbilled = reply.stopReason === 'error' && !accepted;
+  const unbilled = reply.stopReason === 'error' && !accepted && reply.content.length === 0;
   const cost_usd = cost.total > 0 || cost.totalFromProvider || unbilled ? cost.total : null;
 
   if (isContextOverflow(reply, model.contextWindow) || reply.rawStopReason === 'model_context_window_exceeded') {
-    return { outcome: 'too_large', cost_usd };
+    return { outcome: 'too_large', cost_usd }; // TODO: add auto compacting
   }
   if (!isComplete(reply, closedCalls)) return { outcome: reply.stopReason === 'error' ? 'error' : 'incomplete', cost_usd };
   // Diagnostics can quote transport errors. Every other field may be needed to replay the reply.

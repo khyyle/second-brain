@@ -18,7 +18,9 @@ async def test_picker_discovers_providers_and_lists_the_selected_models(
                 {"id": "new-vendor", "name": "New Vendor", "loginMethods": ["api_key"]},
                 {"id": "other", "name": "Other", "loginMethods": []},
             ],
-            ("list-models", "new-vendor"): [{"id": "group/model", "name": "Model"}],
+            ("list-models", "new-vendor"): [
+                {"id": "group/model", "name": "Model", "contextWindow": 200_000}
+            ],
             ("list-models", "other"): [],
         }[args]
 

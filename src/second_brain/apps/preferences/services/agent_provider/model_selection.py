@@ -4,14 +4,16 @@ from typing import TypedDict
 
 from pydantic import BaseModel, Field, ValidationError
 
+from second_brain.apps.preferences.services.agent_provider import provider_auth
 from second_brain.apps.preferences.services.agent_provider._errors import settings_errors
 from second_brain.cloud_llm.pi import pi_helper
-from second_brain.django_config.errors import DependencyError
+from second_brain.django_config.errors import ConflictError, DependencyError
 
 
 class ModelChoice(TypedDict):
     id: str
     name: str
+    context_window: int  # Tokens the model accepts in one request.
 
 
 class ProviderChoice(BaseModel):
@@ -60,10 +62,42 @@ async def list_models(provider_id: str) -> list[ModelChoice]:
 
     choices: list[ModelChoice] = []
     for item in items:
-        if isinstance(item, dict):
-            model_id, name = item.get("id"), item.get("name")
-            if isinstance(model_id, str) and model_id and isinstance(name, str) and name:
-                choices.append({"id": model_id, "name": name})
-                continue
-        raise DependencyError("Invalid model choice from the provider helper.")
+        match item:
+            case {"id": str(model_id), "name": str(name), "contextWindow": int(window)} if (
+                model_id and name and window > 0
+            ):
+                choices.append({"id": model_id, "name": name, "context_window": window})
+            case _:
+                raise DependencyError("Invalid model choice from the provider helper.")
     return choices
+
+
+async def chosen_model(provider_id: str, model_id: str) -> ModelChoice:
+    """Find the model chosen on the Build tab among those the saved login offers.
+
+    Parameters
+    ----------
+    provider_id : str
+        Provider ID saved in Settings.
+    model_id : str
+        Model ID saved on the Build tab, or empty if none is chosen yet.
+
+    Returns
+    -------
+    ModelChoice
+        The chosen model as Pi's catalog describes it for this login.
+
+    Raises
+    ------
+    ConflictError
+        No login is saved for the provider, or the login does not offer the model.
+        The reason says which screen fixes it.
+    DependencyError
+        The helper could not start or read the saved login.
+    """
+    for choice in await list_models(provider_id):
+        if choice["id"] == model_id:
+            return choice
+    if not await provider_auth.is_connected(provider_id):
+        raise ConflictError("Connect a provider in Settings.")
+    raise ConflictError("Choose a model on the Build tab.")
