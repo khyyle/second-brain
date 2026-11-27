@@ -17,7 +17,7 @@ struct FooterStatus: View {
                                 } else {
                                     ProgressView().controlSize(.small).scaleEffect(0.7)
                                 }
-                                Text(status.footerDetail(at: context.date))
+                                Text(status.footerDetail(at: context.date, subscription: store.compilationSubscription))
                                     .font(Theme.Font.meta(10.5))
                                     .monospacedDigit()
                             }

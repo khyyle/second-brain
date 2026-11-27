@@ -14,11 +14,14 @@ from second_brain.apps.compilation.services.clustering.preview import (
     OVERRIDES_FILENAME,
     apply_overrides,
     clear_preview,
+    group_cost_usd,
     load_preview,
     preview_members,
     reconcile_work_units,
+    with_estimates,
     work_units_from_preview,
 )
+from second_brain.apps.preferences.services.agent_provider.model_selection import ModelPrice
 
 
 def _group(group_id: str, *rels: str) -> dict:
@@ -26,7 +29,6 @@ def _group(group_id: str, *rels: str) -> dict:
         "id": group_id,
         "title": rels[0],
         "members": [{"rel": rel, "bytes": 100} for rel in rels],
-        "estimated_cost_usd": 0.1,
     }
 
 
@@ -109,7 +111,31 @@ def test_load_preview_invalid_json_returns_none(tmp_path: Path) -> None:
     assert load_preview(tmp_path) is None
 
 
-def test_build_preview_groups_and_costs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_estimates_follow_the_chosen_models_price_and_stay_unknown_without_one() -> None:
+    plan = {"groups": [_group("big", "a.md", "b.md", "c.md", "d.md"), _group("small", "e.md")]}
+    cheap, dear = ModelPrice(input=1, output=1), ModelPrice(input=10, output=50)
+
+    priced = with_estimates(plan, dear)
+    big, small = (group["estimated_cost_usd"] for group in priced["groups"])
+    assert big > small > 0
+    assert priced["estimated_cost_usd"] == pytest.approx(big + small, abs=0.01)
+    assert with_estimates(plan, cheap)["estimated_cost_usd"] < priced["estimated_cost_usd"]
+    # 400 bytes are about 100 tokens, read four times, plus 4,000 tokens of pages.
+    assert group_cost_usd(400, dear) == pytest.approx((400 * 10 + 4000 * 50) / 1e6)
+    # A source longer than a tier's threshold is priced at that tier for every read.
+    tiered = ModelPrice(
+        input=1, output=1, tiers=[{"inputTokensAbove": 100, "input": 10, "output": 50}]
+    )
+    assert group_cost_usd(400, tiered) == group_cost_usd(400, cheap)
+    assert group_cost_usd(404, tiered) == pytest.approx(group_cost_usd(404, dear))
+
+    unknown = with_estimates(plan, None)
+    assert unknown["estimated_cost_usd"] is None
+    assert [group["estimated_cost_usd"] for group in unknown["groups"]] == [None, None]
+    assert "estimated_cost_usd" not in plan  # The saved plan itself carries no prices.
+
+
+def test_build_preview_groups_sources(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     raw = tmp_path / "raw"
     (raw / "chatgpt").mkdir(parents=True)
     for name, body in [
@@ -131,7 +157,6 @@ def test_build_preview_groups_and_costs(tmp_path: Path, monkeypatch: pytest.Monk
         clustering=SimpleNamespace(
             algorithm="threshold", signature_chars=8000, sources=("chatgpt",), enabled=True
         ),
-        compilation=SimpleNamespace(provider="anthropic", model="claude-sonnet-4-6"),
     )
 
     monkeypatch.setattr(preview_mod, "get_clusterer", lambda config: object())
@@ -146,11 +171,7 @@ def test_build_preview_groups_and_costs(tmp_path: Path, monkeypatch: pytest.Monk
     assert artifact["source_count"] == 3
     assert artifact["group_count"] == 2
     assert artifact["enabled"] is True
-    assert artifact["estimated_cost_usd"] > 0
-    group_costs = artifact["groups"][0]["costs"]
-    assert group_costs["deepseek-v4-flash"] > 0
-    assert group_costs["deepseek-v4-flash"] < group_costs["claude-sonnet-4-6"]
-    assert set(artifact["costs"]) == set(group_costs)
+    assert [len(group["members"]) for group in artifact["groups"]] == [2, 1]
     # Largest group first; its representative title comes from front matter.
     assert artifact["groups"][0]["title"] in {"Alpha", "Beta"}
     assert len(artifact["groups"][0]["members"]) == 2

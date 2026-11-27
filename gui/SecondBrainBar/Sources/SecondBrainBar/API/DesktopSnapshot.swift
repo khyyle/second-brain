@@ -10,6 +10,7 @@ struct DesktopSnapshot: Decodable {
     let build_actions: [BuildActionResponse]
     let compilation_provider: String
     let compilation_model: String
+    let compilation_subscription: Bool
     let inference: InferenceStatusResponse
 }
 

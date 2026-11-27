@@ -11,11 +11,12 @@ struct PipelineStatus: Identifiable {
     let total: Int
     let updatedAt: Date
     let startedAt: Date
-    let costUSD: Double
+    /// Nil when a build has reported progress but what it has spent is unknown.
+    let costUSD: Double?
     let currentSources: [String]
     let queuedSources: [String]
     let currentStartedAt: Date?
-    let currentCostUSD: Double
+    let currentCostUSD: Double?
     let currentActivity: String
     var isActive: Bool { running }
     var elapsed: TimeInterval { max(0, Date().timeIntervalSince(startedAt)) }
@@ -31,17 +32,19 @@ struct PipelineStatus: Identifiable {
         total = p.total ?? 0
         updatedAt = backendDate(job.heartbeat_at) ?? Date()
         startedAt = backendDate(job.started_at ?? job.created_at) ?? Date()
-        costUSD = p.cost_usd ?? 0
+        // Only a compile reports costs, and it always does: a missing one there is unknown.
+        let reportsCost = p.phase == "compile"
+        costUSD = p.cost_usd ?? (reportsCost ? nil : 0)
         currentSources = p.current_sources ?? []
         queuedSources = p.queued_sources ?? []
         currentStartedAt = backendDate(p.current_started_at)
-        currentCostUSD = p.current_cost_usd ?? 0
+        currentCostUSD = p.current_cost_usd ?? (reportsCost ? nil : 0)
         currentActivity = job.status == "queued" ? "Queued" : p.current_activity ?? ""
     }
 
     /// Local display time derives from the server start timestamp, so reconnects
     /// and sleep do not reset it. No heartbeat or HTTP request advances the clock.
-    func footerDetail(at now: Date) -> String {
+    func footerDetail(at now: Date, subscription: Bool = false) -> String {
         if queued {
             switch kind {
             case "build": return "Build queued"
@@ -60,7 +63,11 @@ struct PipelineStatus: Identifiable {
         }
         var parts = [total > 0 ? "\(verb) \(min(current + 1, total))/\(total)" : verb]
         parts.append(formatElapsed(max(0, now.timeIntervalSince(startedAt))))
-        if costUSD > 0 { parts.append(String(format: "$%.2f", costUSD)) }
+        if let costUSD {
+            if costUSD > 0 { parts.append(String(format: "$%.2f", costUSD) + (subscription ? atAPIPrices : "")) }
+        } else {
+            parts.append("cost unknown")
+        }
         return parts.joined(separator: " · ")
     }
 }

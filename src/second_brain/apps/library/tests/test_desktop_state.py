@@ -154,3 +154,84 @@ def test_snapshot_ignores_clock_only_changes(config, job_factory):
     second_payload, second_signature = desktop_events.read_snapshot()
     assert first_payload != second_payload
     assert first_signature == second_signature
+
+
+def test_estimates_use_the_chosen_models_price_and_stay_unknown_without_one(
+    api_client, config, monkeypatch
+):
+    from second_brain.apps.preferences.services.agent_provider import model_selection
+    from second_brain.apps.preferences.services.user_settings import update_preferences
+    from second_brain.cloud_llm.pi import pi_helper
+
+    facts = {"contextWindow": 200_000, "subscription": True}
+    offered = [
+        {
+            "id": "claude-sonnet-4-6",
+            "name": "Sonnet",
+            "price": {"input": 3, "output": 15},
+            **facts,
+        },
+        {"id": "unpriced", "name": "Unpriced", "price": None, **facts},
+    ]
+    lookups = []
+
+    async def helper(command: str, provider: str) -> object:
+        lookups.append(command)
+        return offered if command == "list-models" else {"connected": True}
+
+    monkeypatch.setattr(pi_helper, "run_json", helper)
+    documents = config.raw_dir / "documents"
+    documents.mkdir(parents=True)
+    members = []
+    for name in ("a.md", "b.md"):
+        (documents / name).write_text("A source worth building. " * 40)
+        members.append({"rel": f"documents/{name}", "bytes": (documents / name).stat().st_size})
+    plan = {
+        "generated_at": "2026-01-01T00:00:00+00:00",
+        "algorithm": "threshold",
+        "enabled": True,
+        "source_count": 2,
+        "group_count": 1,
+        # A plan saved by an earlier version carried prices for a fixed list of models.
+        "estimated_cost_usd": 99.0,
+        "costs": {"claude-sonnet-4-6": 99.0},
+        "groups": [{"id": "group", "title": "A", "members": members, "costs": {}}],
+    }
+    (config.data_dir / ".clusters.json").write_text(json.dumps(plan))
+
+    def estimates() -> tuple[list, bool]:
+        body = api_client.get("/v1/desktop-state").json()
+        state, grouping = body["state"], body["grouping_plan"]
+        figures = [
+            state["estimated_cost_usd"],
+            grouping["estimated_cost_usd"],
+            grouping["groups"][0]["estimated_cost_usd"],
+            *(source["estimated_cost_usd"] for source in state["staged"]),
+        ]
+        return figures, body["compilation_subscription"]
+
+    figures, subscription = estimates()
+    assert len(figures) == 5 and all(0 < figure < 1 for figure in figures)
+    assert subscription is True
+    # Snapshots are frequent; the helper is asked once per choice, not once per snapshot.
+    assert estimates() == (figures, True)
+    assert lookups == ["list-models"]
+
+    update_preferences({"compilation": {"model": "unpriced"}})
+    assert estimates() == ([None] * 5, True)
+    update_preferences({"compilation": {"model": "not-offered"}})
+    assert estimates() == ([None] * 5, False)
+    assert lookups == ["list-models"] * 3
+
+    # With no model chosen there is nothing to look up, and a stuck helper is not waited for.
+    update_preferences({"compilation": {"provider": "deepseek"}})
+    assert estimates() == ([None] * 5, False)
+    assert lookups == ["list-models"] * 3
+
+    async def stuck(command: str, provider: str) -> object:
+        await asyncio.sleep(30)
+
+    monkeypatch.setattr(pi_helper, "run_json", stuck)
+    monkeypatch.setattr(model_selection, "_ESTIMATE_LOOKUP_SECONDS", 0.05)
+    update_preferences({"compilation": {"model": "claude-sonnet-4-6"}})
+    assert estimates() == ([None] * 5, False)

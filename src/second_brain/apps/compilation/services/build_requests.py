@@ -110,12 +110,18 @@ def get_grouping() -> dict | None:
     Returns
     -------
     dict | None
-        Saved grouping preview with current overrides, or None if no valid preview exists.
+        Saved grouping preview with current overrides and what it would cost to build
+        with the model chosen now, or None if no valid preview exists.
     """
     root = get_vault_paths().data_dir
     with vault_lock("grouping"):
         plan = clustering.load_preview(root)
-        return {**plan, "overrides": clustering._load_overrides(root)} if plan else None
+        if plan is None:
+            return None
+        overrides = clustering._load_overrides(root)
+    compilation = get_pipeline_config().compilation
+    model = model_selection.model_for_estimates(compilation.provider, compilation.model)
+    return {**clustering.with_estimates(plan, model and model.price), "overrides": overrides}
 
 
 def update_grouping(overrides: dict) -> dict:

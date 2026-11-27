@@ -22,8 +22,7 @@ class Group(Schema):
     id: str
     title: str
     members: list[GroupMember]
-    estimated_cost_usd: float
-    costs: dict[str, float]
+    estimated_cost_usd: float | None  # None when the chosen model has no known price.
 
 
 class GroupingOverrides(RequestSchema):
@@ -37,8 +36,7 @@ class GroupingPlan(Schema):
     enabled: bool
     source_count: int
     group_count: int
-    estimated_cost_usd: float
-    costs: dict[str, float]
+    estimated_cost_usd: float | None
     groups: list[Group]
     overrides: GroupingOverrides
 

@@ -163,10 +163,22 @@ function modelsForSavedLogin(provider, entry) {
   });
 }
 
+/** The login's models with the facts a build needs. Prices are US dollars per million tokens. */
 async function listModels(provider, entry) {
   // Listing checks the login but sends nothing, so it never refreshes a token.
-  const available = await modelsForSavedLogin(provider, entry)?.getAvailable(provider.id) ?? [];
-  return available.map(({ id, name, contextWindow }) => ({ id, name, contextWindow }));
+  const models = modelsForSavedLogin(provider, entry);
+  if (!models) return [];
+  // A plan charges a flat fee, so Pi's prices say what the usage is worth, not what it costs.
+  const subscription = (await models.checkAuth(provider.id))?.type === 'oauth' && provider.auth.oauth.isSubscription === true;
+  return (await models.getAvailable(provider.id)).map(({ id, name, contextWindow, cost }) => ({
+    id, name, contextWindow, subscription,
+    // Pi lists $0 for a model it has no price for. That is an unknown price, not a free model.
+    // Tiers are the rates for a request above some input size.
+    price: cost.input > 0 || cost.output > 0 ? {
+      input: cost.input, output: cost.output,
+      tiers: (cost.tiers ?? []).map(({ inputTokensAbove, input, output }) => ({ inputTokensAbove, input, output })),
+    } : null,
+  }));
 }
 
 // Python checks the spend cap between turns, so asking for at most this much output bounds

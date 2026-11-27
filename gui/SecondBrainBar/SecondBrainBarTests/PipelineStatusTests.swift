@@ -2,12 +2,24 @@ import XCTest
 @testable import SecondBrainBar
 
 final class PipelineStatusTests: XCTestCase {
-    private func detail(kind: String = "build", status: String = "running", result: [String: Any] = [:]) throws -> JobDetail {
+    private func detail(kind: String = "build", status: String = "running", result: [String: Any] = [:],
+                        progress: [String: Any] = [:]) throws -> JobDetail {
         let data = try JSONSerialization.data(withJSONObject: [
             "job": APIFixtures.job(kind: kind, status: status, result: result),
-            "progress": ["current": 0, "total": 2],
+            "progress": ["current": 0, "total": 2].merging(progress) { $1 },
         ])
         return try JSONDecoder().decode(JobDetail.self, from: data)
+    }
+
+    func testABuildShowsWhatItHasSpentOrThatTheCostIsUnknown() throws {
+        func footer(_ cost: Any, subscription: Bool = false) throws -> String {
+            let status = PipelineStatus(try detail(progress: ["phase": "compile", "cost_usd": cost]))
+            return status.footerDetail(at: status.startedAt.addingTimeInterval(5), subscription: subscription)
+        }
+        XCTAssertEqual(try footer(0.5), "Building 1/2 · 5s · $0.50")
+        XCTAssertEqual(try footer(0.5, subscription: true), "Building 1/2 · 5s · $0.50 at API prices")
+        XCTAssertEqual(try footer(0), "Building 1/2 · 5s")
+        XCTAssertEqual(try footer(NSNull()), "Building 1/2 · 5s · cost unknown")
     }
 
     func testElapsedTimeAdvancesWithoutAnotherBackendSnapshot() throws {

@@ -1,13 +1,15 @@
 import Foundation
 
 /// The derived state returned by GET /state: the authoritative
-/// staged set, per-model build cost, count of built pages, needs-review and
+/// staged set, estimated build cost, count of built pages, needs-review and
 /// skipped counts, whether a reviewed grouping has drifted from staging, and
 /// why each failed file failed. The app renders this rather than recomputing it.
 struct AppState: Decodable {
     let staged: [StagedSource]
     let builtCount: Int
-    let costs: [String: Double]
+    /// What building everything staged would cost with the chosen model, or nil when
+    /// that model has no known price.
+    let estimatedCostUSD: Double?
     let stale: Bool
     let needsReviewCount: Int
     let skippedCount: Int
@@ -19,7 +21,7 @@ struct AppState: Decodable {
     private enum CodingKeys: String, CodingKey {
         case staged
         case stale
-        case costs
+        case estimatedCostUSD = "estimated_cost_usd"
         case builtCount = "built_count"
         case needsReviewCount = "needs_review"
         case skippedCount = "skipped"
@@ -30,7 +32,7 @@ struct AppState: Decodable {
 
     private struct RawStaged: Decodable {
         let rel: String
-        let costs: [String: Double]?
+        let estimated_cost_usd: Double?
         let defer_reason: String?
         let retryable: Bool?
     }
@@ -42,13 +44,13 @@ struct AppState: Decodable {
             return StagedSource(
                 id: raw.rel,
                 displayName: stem,
-                costs: raw.costs ?? [:],
+                estimatedCostUSD: raw.estimated_cost_usd,
                 deferReason: raw.defer_reason,
                 canRetry: raw.retryable ?? false
             )
         }
         builtCount = try container.decode(Int.self, forKey: .builtCount)
-        costs = try container.decode([String: Double].self, forKey: .costs)
+        estimatedCostUSD = try container.decodeIfPresent(Double.self, forKey: .estimatedCostUSD)
         stale = try container.decode(Bool.self, forKey: .stale)
         needsReviewCount = try container.decodeIfPresent(Int.self, forKey: .needsReviewCount) ?? 0
         skippedCount = try container.decodeIfPresent(Int.self, forKey: .skippedCount) ?? 0
@@ -67,12 +69,10 @@ struct AppState: Decodable {
 struct StagedSource: Identifiable, Hashable {
     let id: String          // path relative to raw/
     let displayName: String
-    /// Model name to the estimated cost of building this source on its own.
-    let costs: [String: Double]
+    /// Estimated cost of building this source on its own, or nil when unknown.
+    let estimatedCostUSD: Double?
     var deferReason: String? = nil
     /// Whether a set-aside source could build on a retry. Too-large sources
     /// can't; only splitting the file helps.
     var canRetry = false
-
-    func cost(for model: String) -> Double { costs[model] ?? 0 }
 }

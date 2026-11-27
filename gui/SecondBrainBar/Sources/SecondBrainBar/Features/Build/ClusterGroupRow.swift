@@ -4,7 +4,6 @@ import SwiftUI
 /// per-source pop-out tuning), or a plain row for a single-source unit.
 struct ClusterGroupRow: View {
     let group: ClusterGroup
-    let model: String
     @Binding var overrides: ClusterOverrides
     let onCommit: () -> Void
     let onRemove: (String) -> Void
@@ -130,7 +129,7 @@ struct ClusterGroupRow: View {
         if isBuilding {
             BuildElapsed()
         } else {
-            Text(formatEstimate(group.cost(for: model)))
+            Text(group.estimatedCostUSD.map(formatEstimate) ?? "")
                 .font(Theme.Font.meta(9.5))
                 .foregroundStyle(Theme.Colors.textTertiary)
                 .monospacedDigit()

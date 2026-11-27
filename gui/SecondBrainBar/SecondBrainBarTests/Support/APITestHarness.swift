@@ -65,6 +65,7 @@ enum APIFixtures {
                         workers: [String: Any] = ["generation": NSNull(), "embedding": NSNull()]) -> [String: Any] {
         ["state": state(staged: staged), "jobs": jobs, "imports": [], "triage": [],
          "grouping_plan": NSNull(), "build_actions": [], "compilation_provider": "test-provider", "compilation_model": "test-model",
+         "compilation_subscription": false,
          "inference": ["worker_statuses": workers]]
     }
     static let timestamp = "2026-10-23T12:00:00.000000Z"
@@ -76,7 +77,7 @@ enum APIFixtures {
          "heartbeat_at": timestamp]
     }
     static func state(staged: [String] = []) -> [String: Any] {
-        ["staged": staged.map { ["rel": $0] }, "built_count": 2, "costs": [:], "stale": false,
+        ["staged": staged.map { ["rel": $0] }, "built_count": 2, "estimated_cost_usd": NSNull(), "stale": false,
          "needs_review": 0, "skipped": 0, "ingest_failures": [:], "generated_at": timestamp, "pending_triage": []]
     }
     static func importFile(path: String = "/vault/drops/documents/a.md", status: String = "pending") -> [String: Any] {

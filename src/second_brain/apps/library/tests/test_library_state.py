@@ -38,11 +38,10 @@ def test_state_reads_orm_in_bulk_and_does_not_write_artifacts(
     assert response.status_code == 200
     state = response.json()
     assert [row["rel"] for row in state["staged"]] == ["documents/a.md", "documents/b.md"]
-    assert all(row["bytes"] > 0 and row["costs"] for row in state["staged"])
+    assert all(row["bytes"] > 0 for row in state["staged"])
     assert state["pending_triage"] == ["chatgpt/pending.md"]
     assert state["ingest_failures"] == {"/watched/documents/failed.md": "OCR failed"}
     assert state["built_count"] == 0 and state["stale"] is False
-    assert state["costs"] and all(cost >= 0 for cost in state["costs"].values())
     assert not (config.data_dir / ".state.json").exists()
     # The Django test database is separate; the service must not open a raw-SQL store.
     assert not (config.data_dir / "manifest.db").exists()

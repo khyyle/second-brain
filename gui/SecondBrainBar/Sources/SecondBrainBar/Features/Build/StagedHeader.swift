@@ -1,10 +1,10 @@
 import SwiftUI
 
 /// "Staged for build" heading. The first row names the model the build uses. The
-/// second shows the cost (the plan's when a cluster preview is active, else a
-/// per-source estimate) beside the Group and Build actions, or Stop while compiling.
+/// second shows the estimated cost beside the Group and Build actions, or Stop while
+/// compiling. The rows below leave an unknown cost blank; this line says so once.
 struct StagedHeader: View {
-    let cost: Double
+    let cost: Double?
     let sourceCount: Int
     let stale: Bool
     let hasPlan: Bool
@@ -60,7 +60,7 @@ struct StagedHeader: View {
     }
 
     private var costLine: some View {
-        Text(formatEstimate(cost))
+        Text(cost.map { formatEstimate($0) + (store.compilationSubscription ? atAPIPrices : "") } ?? "cost unknown")
             .font(Theme.Font.meta(10))
             .foregroundStyle(Theme.Colors.textTertiary)
             .monospacedDigit()

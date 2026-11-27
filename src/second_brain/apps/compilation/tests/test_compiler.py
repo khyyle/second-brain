@@ -346,7 +346,9 @@ def test_over_window_unit_defers_preflight_without_api_call(
 
     # A window small enough that an ordinary temp file crosses the 60% line.
     async def small_model(_provider: str, model_id: str) -> model_selection.ModelChoice:
-        return {"id": model_id, "name": model_id, "context_window": 1000}
+        return model_selection.ModelChoice(
+            id=model_id, name=model_id, contextWindow=1000, price=None, subscription=False
+        )
 
     monkeypatch.setattr(model_selection, "chosen_model", small_model)
     (config.raw_dir / "huge.md").write_text("x" * 10_000, encoding="utf-8")

@@ -26,7 +26,7 @@ router = Router(tags=["Preferences"])
 
 @router.get("/catalog", response={200: Catalog, 400: ErrorResponse, 503: ErrorResponse})
 def get_catalog(request: HttpRequest) -> dict:
-    """List supported models, prices, file types, triage profiles, and grouping algorithms.
+    """List supported file types, triage profiles, and grouping algorithms.
 
     Parameters
     ----------
@@ -36,8 +36,7 @@ def get_catalog(request: HttpRequest) -> dict:
     Returns
     -------
     dict
-        Providers and models with prices and context limits, accepted file types,
-        triage profiles, and clustering algorithms.
+        Accepted file types, triage profiles, and clustering algorithms.
     """
     return catalog.get_catalog()
 

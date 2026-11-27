@@ -16,8 +16,6 @@ struct BuildTab: View {
     @State private var groupingError: String?
     @EnvironmentObject private var store: PipelineStore
 
-    private var compilationModel: String { store.compilationModel }
-
     // The reviewed plan drives the view while it still covers staging; the
     // pipeline's stale flag (via the store) is the authority on that.
     private var activePlan: ClusterPlan? {
@@ -33,7 +31,7 @@ struct BuildTab: View {
     var body: some View {
         VStack(spacing: 1) {
             StagedHeader(
-                cost: store.cost(for: compilationModel),
+                cost: store.estimatedCostUSD,
                 sourceCount: store.stagedForBuild.count,
                 stale: store.stale,
                 hasPlan: plan != nil,
@@ -84,7 +82,6 @@ struct BuildTab: View {
             ) { group in
                 ClusterGroupRow(
                     group: group,
-                    model: compilationModel,
                     overrides: $overrides,
                     onCommit: writeOverrides,
                     onRemove: remove,
@@ -96,7 +93,7 @@ struct BuildTab: View {
             PaginatedList(items: store.stagedForBuild, expansionKey: "build.staged") { source in
                 StagedRow(
                     name: source.displayName,
-                    costText: formatEstimate(source.cost(for: compilationModel)),
+                    costText: source.estimatedCostUSD.map(formatEstimate) ?? "",
                     isChat: isConversation(source.id),
                     onSkip: isConversation(source.id) ? { skip(source.id) } : nil,
                     isBuilding: building.contains(source.id),
@@ -118,7 +115,7 @@ struct BuildTab: View {
             PaginatedList(items: store.setAside, expansionKey: "build.setAside") { source in
                 StagedRow(
                     name: source.displayName,
-                    costText: formatEstimate(source.cost(for: compilationModel)),
+                    costText: source.estimatedCostUSD.map(formatEstimate) ?? "",
                     deferReason: source.deferReason,
                     onRetry: source.canRetry ? { retry(source.id) } : nil,
                     isChat: isConversation(source.id),

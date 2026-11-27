@@ -28,8 +28,16 @@ def live_gui_backend(pytestconfig, backend_env, tmp_path):
     with socket.socket() as listener:
         listener.bind(("127.0.0.1", 0))
         port = listener.getsockname()[1]
+    # The backend and its workers are separate interpreters, out of reach of the conftest
+    # fixture that keeps tests away from the real provider helper and so from Keychain.
+    # Python imports sitecustomize at startup in each of them.
+    (tmp_path / "sitecustomize.py").write_text(
+        "from second_brain.cloud_llm.pi import pi_helper\n"
+        "pi_helper.PI_HELPER = pi_helper.PI_HELPER.with_name('no-helper.mjs')\n"
+    )
     env = {
         **backend_env,
+        "PYTHONPATH": str(tmp_path),
         "SECOND_BRAIN_PORT": str(port),
         "SECOND_BRAIN_DEBUG": "false",
         "SECOND_BRAIN_LIVE_TEST_VAULT": str(vault),

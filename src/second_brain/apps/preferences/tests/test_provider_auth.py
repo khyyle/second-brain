@@ -68,7 +68,8 @@ elif command == 'connection-status':
     sys.exit(0)
 elif command == 'list-models':
     choices = {
-        'connected': [{'id': 'model/a', 'name': 'A', 'contextWindow': 1000, 'extra': 'unused'}],
+        'connected': [{'id': 'model/a', 'name': 'A', 'contextWindow': 1000, 'subscription': True,
+                       'price': {'input': 3, 'output': 15}, 'extra': 'unused'}],
         'disconnected': [],
         'bad-list': {'error': 'private diagnostic'},
         'bad-choice': [{'id': 'missing-name'}],
@@ -198,9 +199,14 @@ async def test_model_picker_runs_without_interrupting_a_pending_login() -> None:
     login_id = await auth.start_login("provider")
     try:
         assert (await auth.read_login_event(login_id))["type"] == "prompt"
-        assert await model_selection.list_models("connected") == [
-            {"id": "model/a", "name": "A", "context_window": 1000}
-        ]
+        [model] = await model_selection.list_models("connected")
+        assert model.model_dump() == {
+            "id": "model/a",
+            "name": "A",
+            "context_window": 1000,
+            "price": {"input": 3, "output": 15, "tiers": []},
+            "subscription": True,
+        }
         assert await model_selection.list_models("disconnected") == []
     finally:
         await auth.cancel_login(login_id)

@@ -7,7 +7,6 @@ struct ClusterPlan: Decodable {
     let enabled: Bool
     let sourceCount: Int
     let groupCount: Int
-    let costs: [String: Double]
     let groups: [ClusterGroup]
     let overrides: ClusterOverrides
 
@@ -17,12 +16,8 @@ struct ClusterPlan: Decodable {
         case enabled
         case sourceCount = "source_count"
         case groupCount = "group_count"
-        case costs
         case groups, overrides
     }
-
-    /// Total estimated cost for `model`, from the plan's per-model map.
-    func cost(for model: String) -> Double { costs[model] ?? 0 }
 
     /// The raw paths of every source the plan covers.
     var memberPaths: Set<String> {
@@ -36,14 +31,13 @@ struct ClusterGroup: Decodable, Identifiable {
     let id: String
     let title: String
     let members: [ClusterMember]
-    let costs: [String: Double]
+    /// Estimated cost of building the group with the chosen model, or nil when unknown.
+    let estimatedCostUSD: Double?
 
     enum CodingKeys: String, CodingKey {
         case id, title, members
-        case costs
+        case estimatedCostUSD = "estimated_cost_usd"
     }
-
-    func cost(for model: String) -> Double { costs[model] ?? 0 }
 
     func containsAny(of rawPaths: Set<String>) -> Bool {
         members.contains { rawPaths.contains($0.rel) }
@@ -53,7 +47,7 @@ struct ClusterGroup: Decodable, Identifiable {
     func narrowed(to rawPaths: Set<String>) -> ClusterGroup? {
         let staged = members.filter { rawPaths.contains($0.rel) }
         guard !staged.isEmpty else { return nil }
-        return ClusterGroup(id: id, title: title, members: staged, costs: costs)
+        return ClusterGroup(id: id, title: title, members: staged, estimatedCostUSD: estimatedCostUSD)
     }
 }
 

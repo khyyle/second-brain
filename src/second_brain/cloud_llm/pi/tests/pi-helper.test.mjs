@@ -65,7 +65,7 @@ test('login, list from a fresh collection, and disconnect without exposing crede
   await f.run('connection-status');
   assert.deepEqual(f.output.at(-1), { connected: true });
   await f.run('list-models');
-  assert.ok(f.output.at(-1).length > 0 && f.output.at(-1).every(m => m.id && m.name && m.contextWindow > 0));
+  assert.ok(f.output.at(-1).length > 0 && f.output.at(-1).every(m => m.id && m.name && m.contextWindow > 0 && m.subscription));
   assert.doesNotMatch(JSON.stringify(f.output), /private-/);
   await f.run('logout');
   await f.run('connection-status');
@@ -150,8 +150,10 @@ for (const [provider, method] of [[deepseekProvider(), undefined], [openaiProvid
     assert.deepEqual(JSON.parse(f.options.entry.getPassword()), { type: 'api_key', key: 'private-api-key' });
     await f.run('list-models');
     const choices = f.output.at(-1);
-    const catalog = new Set(provider.getModels().map(m => m.id));
-    assert.ok(choices.length > 0 && choices.every(m => catalog.has(m.id)));
+    const catalog = new Map(provider.getModels().map(m => [m.id, m.cost]));
+    assert.ok(choices.length > 0 && choices.every(m => catalog.has(m.id) && !m.subscription));
+    const priced = choices.find(m => m.price);
+    assert.deepEqual(priced.price, { input: catalog.get(priced.id).input, output: catalog.get(priced.id).output, tiers: [] });
     assert.doesNotMatch(JSON.stringify(f.output), /private-api-key/);
   });
 }
@@ -240,7 +242,8 @@ test('OAuth model choices respect the saved account catalog without refreshing',
   const [allowed] = provider.getModels();
   f.options.entry.setPassword(JSON.stringify({ ...credential, availableModelIds: [allowed.id] }));
   await f.run('list-models');
-  assert.deepEqual(f.output.at(-1), [{ id: allowed.id, name: allowed.name, contextWindow: allowed.contextWindow }]);
+  const { input, output } = allowed.cost;
+  assert.deepEqual(f.output.at(-1), [{ id: allowed.id, name: allowed.name, contextWindow: allowed.contextWindow, subscription: true, price: { input, output, tiers: [] } }]);
   f.options.entry.setPassword(JSON.stringify({ type: 'oauth' }));
   await assert.rejects(f.run('list-models'));
 });
@@ -462,6 +465,12 @@ test('build-turn reports an unknown cost, not $0, without a price or usage, unle
   const unpriced = buildFixture({ cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } });
   unpriced.replies.push(completion('end_turn'));
   assert.equal((await unpriced.turn()).cost_usd, null);
+  await unpriced.run('list-models');
+  assert.deepEqual(unpriced.output.at(-1).map(m => m.price), [null, null]);
+  const tier = { inputTokensAbove: 100000, input: 4, output: 20, cacheRead: 2, cacheWrite: 5 };
+  const tiered = buildFixture({ cost: { ...rates, tiers: [tier] } });
+  await tiered.run('list-models');
+  assert.deepEqual(tiered.output.at(-1)[0].price, { input: 2, output: 10, tiers: [{ inputTokensAbove: 100000, input: 4, output: 20 }] });
   const f = buildFixture();
   // No usage reported, with and without the adapter reporting the response; then a free turn.
   f.replies.push({}, { status: null }, { usage: { cost: { total: 0, totalFromProvider: true } } });

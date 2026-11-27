@@ -22,9 +22,12 @@ def pytest_addoption(parser):
 @pytest.fixture(autouse=True)
 def _block_real_pi_helper(monkeypatch):
     """Tests never run the real provider helper, which reads the user's Keychain."""
+    from second_brain.apps.preferences.services.agent_provider import model_selection
     from second_brain.cloud_llm.pi import pi_helper
 
     monkeypatch.setattr(pi_helper, "PI_HELPER", pi_helper.PI_HELPER.with_name("no-helper.mjs"))
+    # Nor does one test's login price the next test's estimates.
+    monkeypatch.setattr(model_selection, "_estimate_model", None)
 
 
 @pytest.fixture
@@ -33,7 +36,9 @@ def connected_model(monkeypatch):
     from second_brain.apps.preferences.services.agent_provider import model_selection
 
     async def offered(provider_id: str, model_id: str) -> model_selection.ModelChoice:
-        return {"id": model_id, "name": model_id, "context_window": 1_000_000}
+        return model_selection.ModelChoice(
+            id=model_id, name=model_id, contextWindow=1_000_000, price=None, subscription=False
+        )
 
     monkeypatch.setattr(model_selection, "chosen_model", offered)
 

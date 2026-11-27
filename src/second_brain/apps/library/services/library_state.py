@@ -9,7 +9,6 @@ from second_brain.apps.compilation.models import CompiledSource, DeferredSource
 from second_brain.apps.compilation.services.clustering.preview import (
     group_cost_usd,
     load_preview,
-    model_prices,
     preview_members,
     reconcile_work_units,
 )
@@ -20,36 +19,26 @@ from second_brain.apps.compilation.services.staging import (
 from second_brain.apps.ingestion.services.triage.skipped import SKIPPED_DIRNAME
 from second_brain.apps.library.models import Source, TriageDecision
 from second_brain.apps.library.services.source_files import existing_source, validate_raw_path
+from second_brain.apps.preferences.services.agent_provider import model_selection
+from second_brain.apps.preferences.services.agent_provider.model_selection import ModelPrice
 from second_brain.apps.wiki.services.wiki_structure import CONTENT_DIRS
 from second_brain.pipeline_config import PipelineConfig
 
 
-def _source_costs(size_bytes: int, prices: dict[str, tuple[float, float]]) -> dict[str, float]:
-    """Per-model USD estimate for building one source on its own."""
-    return {
-        model: round(group_cost_usd(size_bytes, input_price, output_price), 4)
-        for model, (input_price, output_price) in prices.items()
-    }
-
-
-def _staged_entries(
-    raw_dir: Path, rels: list[str], prices: dict[str, tuple[float, float]]
-) -> list[dict]:
-    """Staged-list entries, each with its byte size and per-model cost estimate."""
+def _staged_entries(raw_dir: Path, rels: list[str], price: ModelPrice | None) -> list[dict]:
+    """Staged-list entries, each with its byte size and the estimated cost of building it alone."""
     entries: list[dict] = []
     for rel in rels:
         path = raw_dir / rel
         size_bytes = path.stat().st_size if path.exists() else 0
         entries.append(
-            {"rel": rel, "bytes": size_bytes, "costs": _source_costs(size_bytes, prices)}
+            {"rel": rel, "bytes": size_bytes, "estimated_cost_usd": _estimate(size_bytes, price)}
         )
     return entries
 
 
 def _deferred_entries(
-    raw_dir: Path,
-    deferred_sources: dict[str, DeferredSource],
-    prices: dict[str, tuple[float, float]],
+    raw_dir: Path, deferred_sources: dict[str, DeferredSource], price: ModelPrice | None
 ) -> list[dict]:
     """Staged-list entries for set-aside sources, each with its reason, whether
     a retry could succeed, and what building it again would cost."""
@@ -60,7 +49,7 @@ def _deferred_entries(
             {
                 "rel": rel,
                 "bytes": size_bytes,
-                "costs": _source_costs(size_bytes, prices),
+                "estimated_cost_usd": _estimate(size_bytes, price),
                 "defer_reason": deferred.reason,
                 "retryable": deferred.retryable,
             }
@@ -68,17 +57,24 @@ def _deferred_entries(
     return entries
 
 
-def _build_costs(raw_dir: Path, work_units: list[list[str]]) -> dict[str, float]:
-    """Per-model USD estimate for compiling the work units, summed over groups."""
-    prices = model_prices()
-    totals = dict.fromkeys(prices, 0.0)
+def _estimate(size_bytes: int, price: ModelPrice | None, digits: int = 4) -> float | None:
+    cost = group_cost_usd(size_bytes, price)
+    return None if cost is None else round(cost, digits)
+
+
+def _build_cost(
+    raw_dir: Path, work_units: list[list[str]], price: ModelPrice | None
+) -> float | None:
+    """Estimated USD cost of compiling the work units, or None when the price is unknown."""
+    if price is None:
+        return None
+    total = 0.0
     for unit in work_units:
         total_bytes = sum(
             (raw_dir / rel).stat().st_size for rel in unit if (raw_dir / rel).exists()
         )
-        for model, (input_price, output_price) in prices.items():
-            totals[model] += group_cost_usd(total_bytes, input_price, output_price)
-    return {model: round(value, 2) for model, value in totals.items()}
+        total += group_cost_usd(total_bytes, price) or 0.0
+    return round(total, 2)
 
 
 def _built_count(wiki_dir: Path) -> int:
@@ -118,16 +114,19 @@ def _assemble_state(
     # Sources built or removed since the grouping leave it valid for the rest;
     # only a staged source it never covered makes it stale.
     stale = preview is not None and not set(queue) <= preview_members(preview)
-    prices = model_prices()
-    staged = _staged_entries(config.raw_dir, queue, prices) + _deferred_entries(
-        config.raw_dir, deferred, prices
+    model = model_selection.model_for_estimates(
+        config.compilation.provider, config.compilation.model
+    )
+    price = model and model.price
+    staged = _staged_entries(config.raw_dir, queue, price) + _deferred_entries(
+        config.raw_dir, deferred, price
     )
     needs_review, skipped = _triage_counts(config.raw_dir, decisions)
     return {
         "generated_at": datetime.now(UTC).isoformat(),
         "staged": staged,
         "built_count": _built_count(config.wiki_dir),
-        "costs": _build_costs(config.raw_dir, work_units),
+        "estimated_cost_usd": _build_cost(config.raw_dir, work_units, price),
         "stale": stale,
         "needs_review": needs_review,
         "skipped": skipped,
@@ -148,10 +147,11 @@ def get_state(config: PipelineConfig) -> dict:
     Returns
     -------
     dict
-        generated_at timestamp; staged source entries with byte sizes, per-model cost
-        estimates and optional deferral details; built wiki-page count; total build
-        costs; grouping staleness; review/skipped counts; ingestion failure messages;
-        and undecided chat paths. The view serializes this through LibraryState.
+        generated_at timestamp; staged source entries with byte sizes, cost estimates
+        for the chosen model (None when its price is unknown) and optional deferral
+        details; built wiki-page count; the estimated cost of the whole build; grouping
+        staleness; review/skipped counts; ingestion failure messages; and undecided
+        chat paths. The view serializes this through LibraryState.
 
     Raises
     ------

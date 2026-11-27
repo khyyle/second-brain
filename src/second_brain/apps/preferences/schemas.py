@@ -50,21 +50,7 @@ class ModelChoiceResponse(Schema):
     name: str
 
 
-class ModelInfo(Schema):
-    id: str
-    input_price_per_mtok: float
-    output_price_per_mtok: float
-    context_window_tokens: int
-
-
-class ProviderInfo(Schema):
-    id: str
-    name: str
-    models: list[ModelInfo]
-
-
 class Catalog(Schema):
-    providers: list[ProviderInfo]
     file_types: list[str]
     triage_profiles: list[str]
     clustering_algorithms: list[str]

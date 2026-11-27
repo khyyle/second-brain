@@ -34,8 +34,8 @@ struct BuildElapsed: View {
         if let started = progress.currentStartedAt {
             parts.append(formatElapsed(max(0, now.timeIntervalSince(started))))
         }
-        if progress.currentCostUSD > 0 {
-            parts.append(String(format: "$%.2f", progress.currentCostUSD))
+        if let cost = progress.currentCostUSD, cost > 0 {
+            parts.append(String(format: "$%.2f", cost))
         }
         return parts.joined(separator: " · ")
     }

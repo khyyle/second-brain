@@ -11,7 +11,7 @@ from pathlib import Path
 
 from second_brain.apps.compilation.services.clustering import get_clusterer
 from second_brain.apps.compilation.services.clustering.sources import cluster_scoped_sources
-from second_brain.cloud_llm import SUPPORTED_MODELS, resolve_profile
+from second_brain.apps.preferences.services.agent_provider.model_selection import ModelPrice
 from second_brain.pipeline_config import PipelineConfig
 
 logger = logging.getLogger(__name__)
@@ -70,46 +70,59 @@ def _read_title(path: Path) -> str:
     return path.stem
 
 
-def group_cost_usd(
-    total_bytes: int, input_usd_per_mtok: float, output_usd_per_mtok: float
-) -> float:
+def group_cost_usd(total_bytes: int, price: ModelPrice | None) -> float | None:
     """Estimate the USD cost of compiling one group from its total bytes.
 
     Parameters
     ----------
     total_bytes: int
         Combined size of source text in bytes.
-    input_usd_per_mtok: float
-        Input price in USD per million tokens.
-    output_usd_per_mtok: float
-        Output price in USD per million tokens.
+    price: ModelPrice | None
+        The chosen model's price, or None when it is unknown.
 
     Returns
     -------
-    float
-        Estimated compilation cost using the configured token and turn assumptions.
+    float | None
+        Estimated compilation cost using the configured token and turn assumptions,
+        or None when the price is unknown. An unknown cost is not a free build.
     """
-    input_tokens = max(total_bytes / _CHARS_PER_TOKEN, 1) * _INPUT_TURNS
+    if price is None:
+        return None
+    tokens_per_read = max(total_bytes / _CHARS_PER_TOKEN, 1)
+    input_rate, output_rate = price.rates_for(tokens_per_read)
     return (
-        input_tokens / 1_000_000 * input_usd_per_mtok
-        + _OUTPUT_TOKENS_PER_GROUP / 1_000_000 * output_usd_per_mtok
+        tokens_per_read * _INPUT_TURNS / 1_000_000 * input_rate
+        + _OUTPUT_TOKENS_PER_GROUP / 1_000_000 * output_rate
     )
 
 
-def model_prices() -> dict[str, tuple[float, float]]:
-    """Read input and output token prices for supported compilation models.
+def with_estimates(plan: dict, price: ModelPrice | None) -> dict:
+    """Add what each group, and the whole plan, would cost to build with the chosen model.
+
+    The saved plan holds no prices: the model can change after the grouping was made.
+
+    Parameters
+    ----------
+    plan: dict
+        Preview artifact from :func:`load_preview`.
+    price: ModelPrice | None
+        The chosen model's price, or None when it is unknown.
 
     Returns
     -------
-    dict[str, tuple[float, float]]
-        Model name mapped to input and output prices in USD per million tokens.
+    dict
+        The plan with ``estimated_cost_usd`` on it and on each group, None when unknown.
     """
-    prices: dict[str, tuple[float, float]] = {}
-    for provider, models in SUPPORTED_MODELS.items():
-        for model in models:
-            profile = resolve_profile(provider, model)
-            prices[model] = (profile.input_price_per_mtok, profile.output_price_per_mtok)
-    return prices
+    costs = [
+        group_cost_usd(sum(member["bytes"] for member in group["members"]), price)
+        for group in plan["groups"]
+    ]
+    groups = [
+        {**group, "estimated_cost_usd": None if cost is None else round(cost, 4)}
+        for group, cost in zip(plan["groups"], costs, strict=True)
+    ]
+    total = None if price is None else round(sum(costs), 2)
+    return {**plan, "groups": groups, "estimated_cost_usd": total}
 
 
 def _staged_sources(config: PipelineConfig) -> list[str]:
@@ -145,7 +158,7 @@ def build_preview(
     Parameters
     ----------
     config: PipelineConfig
-        Vault paths, clustering settings, and compilation model for cost estimates.
+        Vault paths and clustering settings.
     progress: Callable[[int, int], None] | None
         Called with `(done, total)` as sources are embedded.
     sources: list[str] | None
@@ -155,11 +168,9 @@ def build_preview(
     -------
     dict
         The preview artifact: metadata plus a list of group descriptors,
-        each with a stable id, representative title, members, and cost.
+        each with a stable id, representative title, and members.
     """
     staged = _staged_sources(config) if sources is None else sources
-    profile = resolve_profile(config.compilation.provider, config.compilation.model)
-    prices = model_prices()
     if config.clustering.enabled:
         clusters = cluster_scoped_sources(
             staged,
@@ -174,24 +185,14 @@ def build_preview(
         clusters = [[source] for source in staged]
 
     groups: list[dict] = []
-    total_costs: dict[str, float] = dict.fromkeys(prices, 0.0)
     for members in clusters:
         sized = [(rel, (config.raw_dir / rel).stat().st_size) for rel in members]
-        total_bytes = sum(size for _, size in sized)
         representative = max(sized, key=lambda pair: pair[1])[0]
-        costs = {
-            model: group_cost_usd(total_bytes, input_price, output_price)
-            for model, (input_price, output_price) in prices.items()
-        }
-        for model, cost in costs.items():
-            total_costs[model] += cost
         groups.append(
             {
                 "id": _group_id(members),
                 "title": _read_title(config.raw_dir / representative),
                 "members": [{"rel": rel, "bytes": size} for rel, size in sized],
-                "estimated_cost_usd": round(costs[profile.model], 4),
-                "costs": {model: round(cost, 4) for model, cost in costs.items()},
             }
         )
 
@@ -202,42 +203,8 @@ def build_preview(
         "enabled": config.clustering.enabled,
         "source_count": len(staged),
         "group_count": len(groups),
-        "estimated_cost_usd": round(total_costs[profile.model], 2),
-        "costs": {model: round(cost, 2) for model, cost in total_costs.items()},
         "groups": groups,
     }
-
-
-def write_preview(
-    config: PipelineConfig,
-    progress: Callable[[int, int], None] | None = None,
-) -> dict:
-    """Compute the preview, write it to the vault, and clear stale overrides.
-
-    Parameters
-    ----------
-    config: PipelineConfig
-        Application configuration.
-    progress: Callable[[int, int], None] | None
-        Forwarded to :func:`build_preview` for a live progress readout.
-
-    Returns
-    -------
-    dict
-        The grouping artifact written to disk.
-    """
-    artifact = build_preview(config, progress=progress)
-    path = config.data_dir / CLUSTERS_FILENAME
-    path.write_text(json.dumps(artifact, indent=2), encoding="utf-8")
-    # A fresh grouping invalidates corrections aimed at the previous one.
-    (config.data_dir / OVERRIDES_FILENAME).unlink(missing_ok=True)
-    logger.info(
-        "Cluster preview: %d sources -> %d groups (~$%.2f)",
-        artifact["source_count"],
-        artifact["group_count"],
-        artifact["estimated_cost_usd"],
-    )
-    return artifact
 
 
 def load_preview(data_dir: Path) -> dict | None:

@@ -89,7 +89,7 @@ class SourceContent(Schema):
 class StagedSource(Schema):
     rel: str
     bytes: int
-    costs: dict[str, float]
+    estimated_cost_usd: float | None  # None when the chosen model has no known price.
     defer_reason: str | None = None
     retryable: bool | None = None
 
@@ -98,7 +98,7 @@ class LibraryState(Schema):
     generated_at: datetime
     staged: list[StagedSource]
     built_count: int
-    costs: dict[str, float]
+    estimated_cost_usd: float | None
     stale: bool
     needs_review: int
     skipped: int

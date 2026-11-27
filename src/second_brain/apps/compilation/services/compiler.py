@@ -481,7 +481,7 @@ def run_compilation(
             config,
             work_units,
             build_store,
-            context_window=model["context_window"],
+            context_window=model.context_window,
             started_at=started_at,
             on_unit_finished=on_unit_finished,
         )
