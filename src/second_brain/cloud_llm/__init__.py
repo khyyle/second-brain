@@ -1,17 +1,9 @@
-"""Model provider profiles, the Messages API client, and classified provider errors."""
+"""Model provider profiles for cost estimates. Requests go through the Pi helper in ``pi``."""
 
-from second_brain.cloud_llm.client import create_client, request_turn, require_api_key
-from second_brain.cloud_llm.errors import ModelError, ModelErrorKind, classify_status
 from second_brain.cloud_llm.providers import SUPPORTED_MODELS, ProviderProfile, resolve_profile
 
 __all__ = [
     "SUPPORTED_MODELS",
-    "ModelError",
-    "ModelErrorKind",
     "ProviderProfile",
-    "classify_status",
-    "create_client",
-    "request_turn",
-    "require_api_key",
     "resolve_profile",
 ]

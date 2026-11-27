@@ -16,7 +16,6 @@ dependencies = [
     "pydantic>=2.0",
     "watchdog",
     "pymupdf",
-    "anthropic",
     # PDF parsing (local)
     "docling",
     "chandra-ocr[hf]",

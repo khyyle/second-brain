@@ -20,19 +20,6 @@ def pytest_addoption(parser):
 
 
 @pytest.fixture(autouse=True)
-def _block_real_keychain(monkeypatch):
-    """Unit tests must explicitly supply credentials; never read the user's Keychain."""
-
-    def unexpected_read(provider):
-        raise AssertionError("Use provider_key or mock read_api_key in this test.")
-
-    monkeypatch.setattr(
-        "second_brain.apps.preferences.services.provider_credentials.read_api_key",
-        unexpected_read,
-    )
-
-
-@pytest.fixture(autouse=True)
 def _block_real_pi_helper(monkeypatch):
     """Tests never run the real provider helper, which reads the user's Keychain."""
     from second_brain.cloud_llm.pi import pi_helper

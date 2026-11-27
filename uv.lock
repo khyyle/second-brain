@@ -101,25 +101,6 @@ wheels = [
 ]
 
 [[package]]
-name = "anthropic"
-version = "0.93.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "anyio" },
-    { name = "distro" },
-    { name = "docstring-parser" },
-    { name = "httpx" },
-    { name = "jiter" },
-    { name = "pydantic" },
-    { name = "sniffio" },
-    { name = "typing-extensions" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/c2/70/2429d6f7c2516db99fb342c3ad89575ab3e0cd31d3d2f6cba5fdf5e9c65b/anthropic-0.93.0.tar.gz", hash = "sha256:fea8376f7d5cdf99d5e8e85a48fe7a7bd8ab307cdfee4b1e8283a18b1c0ce1b5", size = 654155, upload-time = "2026-04-09T18:13:53.522Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/c9/7b/5b2c11902707c49c7a99418eb027ed3eb63876193fee5c80b5c878e3a673/anthropic-0.93.0-py3-none-any.whl", hash = "sha256:2c20b2ce6d305564c66a6cbaedddee8efdd3b9753098bf314093fcf4c662d04c", size = 627482, upload-time = "2026-04-09T18:13:51.606Z" },
-]
-
-[[package]]
 name = "antlr4-python3-runtime"
 version = "4.9.3"
 source = { registry = "https://pypi.org/simple" }
@@ -764,15 +745,6 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/28/53/2695c70945835c07b13d5a943566531ca8bf7796ece25dc1719f4cfec4a5/docling_parse-5.8.0-cp314-cp314-manylinux_2_26_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:7f2d38c1d3a53ddf395e8bee8d2ea4be02c1f625a6cb4204a0a9976ad4a2b884", size = 9269751, upload-time = "2026-04-08T09:41:31.568Z" },
     { url = "https://files.pythonhosted.org/packages/f6/e6/6a6d84c7ba818319e4fe7f2ff849deec6d47dd92d8c2b12bec7e0ee2a485/docling_parse-5.8.0-cp314-cp314-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:79eae11ceb79700555020072fa75fec3d0dd2a532cf1b3c9fff3e328682bb93f", size = 9604514, upload-time = "2026-04-08T09:41:33.509Z" },
     { url = "https://files.pythonhosted.org/packages/0c/81/207d6fc97a9018084bcf6f9a417f874485502508ba53012e6eb019318a96/docling_parse-5.8.0-cp314-cp314-win_amd64.whl", hash = "sha256:55277e276ad858b985af5b371c5f376dccdd3da32dc6b3ebbb8f94b887dbc722", size = 10753611, upload-time = "2026-04-08T09:41:35.622Z" },
-]
-
-[[package]]
-name = "docstring-parser"
-version = "0.17.0"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/b2/9d/c3b43da9515bd270df0f80548d9944e389870713cc1fe2b8fb35fe2bcefd/docstring_parser-0.17.0.tar.gz", hash = "sha256:583de4a309722b3315439bb31d64ba3eebada841f2e2cee23b99df001434c912", size = 27442, upload-time = "2025-07-21T07:35:01.868Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/55/e2/2537ebcff11c1ee1ff17d8d0b6f4db75873e3b0fb32c2d4a2ee31ecb310a/docstring_parser-0.17.0-py3-none-any.whl", hash = "sha256:cf2569abd23dce8099b300f9b4fa8191e9582dda731fd533daf54c4551658708", size = 36896, upload-time = "2025-07-21T07:35:00.684Z" },
 ]
 
 [[package]]
@@ -3350,7 +3322,6 @@ name = "second-brain"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
-    { name = "anthropic" },
     { name = "chandra-ocr", extra = ["hf"] },
     { name = "click" },
     { name = "django" },
@@ -3383,7 +3354,6 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "anthropic" },
     { name = "chandra-ocr", extras = ["hf"] },
     { name = "click" },
     { name = "django", specifier = ">=5.2,<5.3" },
