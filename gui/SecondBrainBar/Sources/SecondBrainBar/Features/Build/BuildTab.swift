@@ -7,14 +7,16 @@ struct BuildTab: View {
     let config: AppConfig
     let onBuild: () -> Void
     let canBuild: Bool
+    let onOpenSettings: () -> Void
     @State private var plan: ClusterPlan?
     @State private var overrides = ClusterOverrides.empty
     @State private var entries: [BuildLogEntry] = []
     @State private var loaded = false
     @State private var savingOverrides = false
-    @State private var compilationModel = "claude-sonnet-4-6"
     @State private var groupingError: String?
     @EnvironmentObject private var store: PipelineStore
+
+    private var compilationModel: String { store.compilationModel }
 
     // The reviewed plan drives the view while it still covers staging; the
     // pipeline's stale flag (via the store) is the authority on that.
@@ -39,7 +41,8 @@ struct BuildTab: View {
                     && store.stagedForBuild.filter { isConversation($0.id) }.count >= 2,
                 onPreview: previewGrouping,
                 onBuild: onBuild,
-                canBuild: canBuild
+                canBuild: canBuild,
+                onOpenSettings: onOpenSettings
             )
             stagedSection
             setAsideSection
@@ -142,7 +145,6 @@ struct BuildTab: View {
         plan = store.groupingPlan
         overrides = plan?.overrides ?? .empty
         entries = store.buildActions
-        compilationModel = store.compilationModel
         loaded = store.hasState
     }
 

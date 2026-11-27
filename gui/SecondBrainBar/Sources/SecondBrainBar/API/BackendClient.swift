@@ -2,6 +2,7 @@ import Foundation
 
 struct BackendError: LocalizedError {
     let message: String
+    var statusCode: Int? = nil
     var errorDescription: String? { message }
 }
 
@@ -13,7 +14,7 @@ final class BackendClient {
     private static let sharedSession: URLSession = {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.timeoutIntervalForRequest = 30
-        configuration.timeoutIntervalForResource = 120
+        configuration.timeoutIntervalForResource = 370 // A provider login event can wait up to six minutes.
         configuration.httpShouldSetCookies = false
         configuration.connectionProxyDictionary = [:]
         return URLSession(configuration: configuration, delegate: redirects, delegateQueue: nil)
@@ -33,15 +34,17 @@ final class BackendClient {
     }
 
     func request<T: Decodable>(_ path: String, method: String = "GET",
-                               query: [String: String] = [:], body: [String: Any]? = nil) async throws -> T {
-        let data = try await send(path, method: method, query: query, body: body)
+                               query: [String: String] = [:], body: [String: Any]? = nil,
+                               timeout: TimeInterval? = nil) async throws -> T {
+        let data = try await send(path, method: method, query: query, body: body, timeout: timeout)
         return try decodeResponse(T.self, from: data, path: path)
     }
 
     @discardableResult
     func send(_ path: String, method: String = "GET", query: [String: String] = [:],
-              body: [String: Any]? = nil) async throws -> Data {
+              body: [String: Any]? = nil, timeout: TimeInterval? = nil) async throws -> Data {
         var request = try authorizedRequest(path, query: query)
+        if let timeout { request.timeoutInterval = timeout }
         request.httpMethod = method
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         if let body {
@@ -56,7 +59,7 @@ final class BackendClient {
             let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
             let validation = (object?["detail"] as? [[String: Any]])?.compactMap { $0["msg"] as? String }.joined(separator: "; ")
             let detail = object?["detail"] as? String ?? validation
-            throw BackendError(message: detail ?? "Backend request failed (HTTP \(http.statusCode)).")
+            throw BackendError(message: detail ?? "Backend request failed (HTTP \(http.statusCode)).", statusCode: http.statusCode)
         }
         return data
     }

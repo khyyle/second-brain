@@ -6,7 +6,11 @@ import asyncio
 import json
 from asyncio.subprocess import Process
 from contextlib import suppress
+from typing import Annotated, Literal, NotRequired
 from uuid import uuid4
+
+from pydantic import Field, TypeAdapter
+from typing_extensions import TypedDict
 
 from second_brain.apps.preferences.services.agent_provider._errors import settings_errors
 from second_brain.cloud_llm.pi import pi_helper
@@ -20,6 +24,80 @@ from second_brain.django_config.errors import (
 # Pi times out after five minutes. Release the pipes even if Settings never reads the result.
 _LOGIN_LIFETIME_SECONDS = 6 * 60
 _sessions: dict[str, _LoginSession] = {}
+
+
+# Only these Pi interaction fields may cross from the private helper to an HTTP client.
+class _AuthUrl(TypedDict):
+    type: Literal["auth_url"]
+    url: str
+    instructions: NotRequired[str]
+
+
+class _DeviceCode(TypedDict):
+    type: Literal["device_code"]
+    userCode: str
+    verificationUri: str
+    openBrowserOnConfirm: NotRequired[bool]
+    copyCodeOnConfirm: NotRequired[bool]
+    intervalSeconds: NotRequired[int | float]
+    expiresInSeconds: NotRequired[int | float]
+
+
+class _InfoLink(TypedDict):
+    url: str
+    label: NotRequired[str]
+
+
+class _Info(TypedDict):
+    type: Literal["info"]
+    message: str
+    links: NotRequired[list[_InfoLink]]
+
+
+class _Progress(TypedDict):
+    type: Literal["progress"]
+    message: str
+
+
+class _Prompt(TypedDict):
+    type: Literal["prompt"]
+    id: Annotated[int, Field(gt=0)]
+    message: str
+
+
+class _InputPrompt(_Prompt):
+    kind: Literal["text", "secret", "manual_code"]
+    placeholder: NotRequired[str]
+    callback_listening: NotRequired[bool]
+
+
+class _SelectOption(TypedDict):
+    id: str
+    label: str
+    description: NotRequired[str]
+
+
+class _SelectPrompt(_Prompt):
+    kind: Literal["select"]
+    options: list[_SelectOption]
+
+
+class _Terminal(TypedDict):
+    type: Literal["done", "cancelled"]
+
+
+LoginEvent = _AuthUrl | _DeviceCode | _Info | _Progress | _InputPrompt | _SelectPrompt | _Terminal
+_login_event: TypeAdapter[LoginEvent] = TypeAdapter(LoginEvent)
+
+
+async def is_connected(provider_id: str) -> bool:
+    """Check for a saved credential without retrieving its value or querying models."""
+    with settings_errors():
+        result = await pi_helper.run_json("connection-status", provider_id)
+    match result:
+        case {"connected": bool() as connected}:
+            return connected
+    raise DependencyError("Invalid connection status from the provider helper.")
 
 
 async def start_login(provider_id: str, auth_method: str | None = None) -> str:
@@ -55,7 +133,7 @@ async def start_login(provider_id: str, auth_method: str | None = None) -> str:
     return login_id
 
 
-async def read_login_event(login_id: str) -> dict[str, object]:
+async def read_login_event(login_id: str) -> LoginEvent:
     """Wait for and consume the next event for a login.
 
     Parameters
@@ -65,7 +143,7 @@ async def read_login_event(login_id: str) -> dict[str, object]:
 
     Returns
     -------
-    dict[str, object]
+    LoginEvent
         ``type`` identifies the event. ``auth_url``, ``device_code``, ``info`` and
         ``progress`` carry provider instructions or status. URLs and codes are sensitive.
         A ``prompt`` includes a ``kind`` and the integer ``id`` accepted by ``answer_login``.
@@ -180,7 +258,7 @@ class _LoginSession:
         self._save_reported = False
         self._expiry = asyncio.get_running_loop().call_later(_LOGIN_LIFETIME_SECONDS, self.close)
 
-    async def read_event(self) -> dict[str, object]:
+    async def read_event(self) -> LoginEvent:
         if self._reading:
             raise ConflictError("Already waiting for the next login event.")
         self._reading = True
@@ -213,22 +291,12 @@ class _LoginSession:
         finally:
             self._reading = False
 
-    def _decode_event(self, line: bytes) -> dict[str, object]:
-        event = json.loads(line)
-        if not isinstance(event, dict) or event.get("type") not in (
-            "auth_url",
-            "device_code",
-            "info",
-            "progress",
-            "prompt",
-            "done",
-        ):
+    def _decode_event(self, line: bytes) -> LoginEvent:
+        event = _login_event.validate_json(line, strict=True)
+        if event["type"] == "cancelled":  # Only a confirmed helper exit can produce this event.
             raise ValueError
         if event["type"] == "prompt":
-            prompt_id = event.get("id")
-            if type(prompt_id) is not int or prompt_id < 1:
-                raise ValueError
-            self._prompt_id = prompt_id
+            self._prompt_id = event["id"]
         return event
 
     async def answer(self, prompt_id: int, value: str) -> None:

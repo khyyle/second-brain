@@ -74,6 +74,7 @@ def update_preferences(changes: dict) -> Preferences:
     changes: dict
         Nested dictionaries merge, except sources replaces the entire watched-folder
         map. Null sections, runtime paths, credentials, and unknown fields are rejected.
+        Changing compilation.provider clears compilation.model unless both are supplied.
 
     Returns
     -------
@@ -87,6 +88,12 @@ def update_preferences(changes: dict) -> Preferences:
     """
     with vault_lock("preferences"), _cache_lock:
         current = get_preferences().model_dump(mode="json")
+        compilation = changes.get("compilation")
+        if isinstance(compilation, dict) and "model" not in compilation:
+            saved = current["compilation"]["provider"]
+            if compilation.get("provider", saved) != saved:
+                # A model ID belongs to one provider's catalog.
+                changes = {**changes, "compilation": {**compilation, "model": ""}}
         for key, value in changes.items():
             if value is None:
                 raise ServiceError(f"{key} cannot be null.")

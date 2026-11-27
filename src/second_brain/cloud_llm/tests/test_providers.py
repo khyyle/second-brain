@@ -3,10 +3,8 @@
 from __future__ import annotations
 
 import pytest
-from pydantic import ValidationError
 
 from second_brain.cloud_llm import SUPPORTED_MODELS, resolve_profile
-from second_brain.pipeline_config import CompilationConfig
 
 
 def test_anthropic_profile_defaults() -> None:
@@ -43,23 +41,6 @@ def test_mismatched_model_raises() -> None:
 def test_supported_models_default_is_first_entry() -> None:
     for provider, models in SUPPORTED_MODELS.items():
         assert resolve_profile(provider, None).model == models[0]
-
-
-def test_config_rejects_mismatched_provider_model() -> None:
-    # Switching provider without updating the (Claude) default model fails fast.
-    with pytest.raises(ValidationError):
-        CompilationConfig(provider="deepseek")
-
-
-def test_config_rejects_unknown_provider() -> None:
-    with pytest.raises(ValidationError):
-        CompilationConfig(provider="gpt", model="gpt-5")
-
-
-def test_config_accepts_valid_deepseek_pair() -> None:
-    cfg = CompilationConfig(provider="deepseek", model="deepseek-v4-flash")
-    assert cfg.provider == "deepseek"
-    assert cfg.model == "deepseek-v4-flash"
 
 
 def test_unknown_provider_raises() -> None:

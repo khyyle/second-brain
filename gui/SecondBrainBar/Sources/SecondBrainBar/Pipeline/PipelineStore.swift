@@ -13,7 +13,9 @@ final class PipelineStore: ObservableObject {
     @Published private(set) var runRecord: RunRecord?
     @Published private(set) var groupingPlan: ClusterPlan?
     @Published private(set) var buildActions: [BuildLogEntry] = []
+    @Published private(set) var compilationProvider = ""
     @Published private(set) var compilationModel = ""
+    @Published private(set) var buildModels = BuildModels.loading
     @Published var inferenceStatus: InferenceStatusResponse?
     @Published private(set) var connected = false
     @Published private(set) var connectionError: String?
@@ -24,6 +26,7 @@ final class PipelineStore: ObservableObject {
     private var updates: Task<Void, Never>?
     private var refreshing = false
     private var startingBuild = false
+    private var buildModelsProvider = "" // The provider `buildModels` was read for.
     private static let dismissedKey = "dismissedJobOutcomes"
 
     init(config: AppConfig, api: BackendClient? = nil) {
@@ -77,6 +80,14 @@ final class PipelineStore: ObservableObject {
     var buildProgress: PipelineStatus? { isCompiling ? buildStatus : nil }
     var triageProgress: PipelineStatus? { ingestStatus?.phase == "triage" ? ingestStatus : nil }
     func cost(for model: String) -> Double { state?.costs[model] ?? 0 }
+    /// A saved model the connected provider still offers. Assumed usable until the first read lands.
+    var hasBuildModel: Bool {
+        switch buildModels {
+        case .loading: return !compilationModel.isEmpty
+        case .available(let models): return models.contains { $0.id == compilationModel }
+        case .disconnected, .failed: return false
+        }
+    }
     func ingestFailureReason(for path: String) -> String? { state?.ingestFailures[path] }
     func isRemoving(_ path: String) -> Bool { removingSources.contains(path) }
 
@@ -107,6 +118,7 @@ final class PipelineStore: ObservableObject {
         buildStatus = active("build")
         groupingPlan = snapshot.grouping_plan
         buildActions = snapshot.build_actions.compactMap(\.entry)
+        compilationProvider = snapshot.compilation_provider
         compilationModel = snapshot.compilation_model
         inferenceStatus = snapshot.inference
         runRecord = RunRecord(
@@ -135,6 +147,47 @@ final class PipelineStore: ObservableObject {
             catch { actionError = error.localizedDescription }
         }
     }
+    /// Settings can connect or disconnect the provider. Don't show the old answer while rereading.
+    func forgetBuildModels() { buildModels = .loading }
+
+    /// Reread what the saved provider offers. The last answer stays on screen meanwhile.
+    func refreshBuildModels() async {
+        let provider = compilationProvider
+        guard !provider.isEmpty else { return } // No snapshot yet.
+        if provider != buildModelsProvider {
+            buildModelsProvider = provider
+            buildModels = .loading
+        }
+        struct Connection: Decodable { let connected: Bool }
+        let read: BuildModels
+        do {
+            let models: [ModelChoiceResponse] = try await api.request("/providers/\(provider)/models")
+            // A missing login and a connected account without models both list nothing.
+            let connection: Connection? = models.isEmpty ? try await api.request("/providers/\(provider)/connection") : nil
+            read = connection?.connected == false ? .disconnected : .available(models)
+        } catch {
+            guard !Task.isCancelled else { return }
+            read = .failed(error.localizedDescription)
+        }
+        if provider == compilationProvider { buildModels = read }
+    }
+
+    func selectBuildModel(_ id: String) {
+        let previous = compilationModel
+        guard id != previous else { return }
+        compilationModel = id // Show the choice at once; the next snapshot confirms it.
+        actionError = nil
+        Task {
+            do {
+                try await api.send("/settings", method: "PATCH", body: ["compilation": ["model": id]])
+                await refreshNow()
+            } catch {
+                compilationModel = previous
+                actionError = error.localizedDescription
+            }
+        }
+    }
+
     func previewGrouping() { perform { try await self.api.send("/grouping-plan/preview", method: "POST") } }
     func requestStop() {
         guard let job = jobs.first(where: { $0.lane == "build" && $0.status == "running" })

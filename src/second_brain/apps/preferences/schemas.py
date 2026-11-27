@@ -1,22 +1,26 @@
 """User-editable settings and public catalog entries; secrets are write-only."""
 
+from typing import Literal
+
 from ninja import Schema
-from pydantic import ConfigDict, Field
+from pydantic import ConfigDict, Field, SecretStr
 
 from second_brain.pipeline_config import (
     ClusteringConfig,
+    ModelID,
     ParsingConfig,
+    ProviderID,
     SourceConfig,
     TriageConfig,
 )
 
 
 class CompilationUpdate(Schema):
-    """Partial fields; provider/model compatibility is checked after merging settings."""
+    """Partial fields. Settings saves the provider; the Build tab saves that provider's model."""
 
     model_config = ConfigDict(extra="forbid")
-    provider: str | None = None
-    model: str | None = None
+    provider: ProviderID | None = None
+    model: ModelID | None = None
     max_tokens_per_page: int | None = None
     max_iterations: int | None = None
     max_cost_per_build_usd: float | None = None
@@ -39,11 +43,6 @@ class WatchedFolder(Schema):
     enabled: bool = True
     file_types: list[str] = Field(default_factory=lambda: ["pdf", "md", "txt"])
     force_parse_lane: str | None = None
-
-
-class CredentialStatus(Schema):
-    provider: str
-    configured: bool
 
 
 class ModelChoiceResponse(Schema):
@@ -69,3 +68,20 @@ class Catalog(Schema):
     file_types: list[str]
     triage_profiles: list[str]
     clustering_algorithms: list[str]
+
+
+class ConnectionStatus(Schema):
+    connected: bool
+
+
+class LoginRequest(Schema):
+    method: Literal["api_key", "oauth"]
+
+
+class LoginStarted(Schema):
+    login_id: str
+
+
+class LoginAnswer(Schema):
+    prompt_id: int = Field(strict=True, gt=0)
+    answer: SecretStr

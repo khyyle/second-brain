@@ -3,16 +3,15 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Annotated
 
 from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
     field_validator,
-    model_validator,
 )
 
-from second_brain.cloud_llm import SUPPORTED_MODELS
 from second_brain.errors import SecondBrainError
 
 
@@ -82,6 +81,10 @@ class ParsingConfig(BaseModel):
         return v
 
 
+ProviderID = Annotated[str, Field(max_length=128, pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]*$")]
+ModelID = Annotated[str, Field(max_length=256, pattern=r"^(\S(.*\S)?)?$")]
+
+
 class CompilationConfig(BaseModel):
     """
     Settings for the LLM-driven wiki compilation stage.
@@ -89,9 +92,11 @@ class CompilationConfig(BaseModel):
     Fields:
     -------
     provider: str, default="anthropic"
-        Which LLM provider runs the compilation agent
+        Pi catalog ID of the provider connected in Settings. It is one URL path segment.
     model: str, default="claude-sonnet-4-6"
-        Model the compilation agent runs on. Must be in a supported provider.
+        That provider's ID for the model chosen on the Build tab, or empty until one
+        is chosen. Neither ID is checked against a catalog here: the provider's
+        offering can change after the choice is saved.
     max_tokens_per_page: int, default=4000
         Soft target for the length of a generated wiki page.
     max_iterations: int, default=100
@@ -112,26 +117,12 @@ class CompilationConfig(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    provider: str = "anthropic"
-    model: str = "claude-sonnet-4-6"
+    provider: ProviderID = "anthropic"
+    model: ModelID = "claude-sonnet-4-6"
     max_tokens_per_page: int = Field(default=4000, gt=0)
     max_iterations: int = Field(default=100, gt=0)
     max_cost_per_build_usd: float = Field(default=0.0, ge=0.0)
     explore_tools: bool = True
-
-    @model_validator(mode="after")
-    def _validate_provider_model(self) -> CompilationConfig:
-        if self.provider not in SUPPORTED_MODELS:
-            raise ValueError(
-                f"compilation.provider must be one of {', '.join(SUPPORTED_MODELS)}, "
-                f"not '{self.provider}'"
-            )
-        if self.model not in SUPPORTED_MODELS[self.provider]:
-            raise ValueError(
-                f"compilation.model must be one of {', '.join(SUPPORTED_MODELS[self.provider])} "
-                f"for {self.provider}, not '{self.model}'"
-            )
-        return self
 
 
 _CLUSTERING_ALGORITHMS = ("threshold", "hdbscan")

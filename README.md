@@ -53,13 +53,13 @@ cd second-brain
 
 Launch Second Brain from Applications, then click its menu bar icon:
 
-1. Open Settings, select a cloud model for compilation, and add its corresponding API key. You can set a per-build spend cap to keep cloud costs bounded.
+1. Open Settings and connect a model provider by signing in or adding an API key. You can set a per-build spend cap to keep cloud costs bounded.
 2. Select files to add into the knowledge base on the Ingest tab (or drag a file anywhere in the app window). These files will be parsed and subsequently staged for compilation.
-3. Switch to the Build tab to review staged sources and estimated costs. You can inspect parsed files or remove anything you do not want to compile.
+3. Switch to the Build tab, choose a model, and review staged sources and estimated costs. You can inspect parsed files or remove anything you do not want to compile.
 4. Click **Build wiki** to compile your staged sources into pages.
 5. Open `~/second-brain/wiki/` in Obsidian, or connect Claude Desktop, ChatGPT Desktop, or Cursor over MCP.
 
-See [Using the app](docs/using-the-app.md) for a complete walkthrough of the menu bar app.
+See [Using the app](docs/using-the-app.md) for a complete walkthrough .
 
 ## Supported sources
 

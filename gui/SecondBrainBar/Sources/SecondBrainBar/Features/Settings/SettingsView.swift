@@ -1,20 +1,16 @@
 import SwiftUI
 import AppKit
 
-/// API-backed preferences and integrations; provider secrets are stored in Keychain.
+/// API-backed preferences and integrations. Sign-in takes effect at once; the rest waits for Save.
 struct SettingsView: View {
-    let config: AppConfig
     let onClose: () -> Void
     @EnvironmentObject private var store: PipelineStore
 
     @State private var catalog: ApplicationCatalog?
     @State private var provider = ""
-    @State private var model = ""
     @State private var triageEnabled = true
     @State private var triageProfile = ""
     @State private var costCap = ""
-    @State private var apiKeys: [String: String] = [:]
-    @State private var configured: [String: Bool] = [:]
     @State private var watched: [WatchedFolder] = []
     @State private var connectStatus: [String: ConnectStatus] = [:]
     @State private var connectError: String?
@@ -22,17 +18,7 @@ struct SettingsView: View {
     @State private var loaded = false
     @State private var saving = false
     @State private var errorMessage: String?
-    private var api: BackendClient { BackendClient(config: config) }
-    private var selectedProvider: ProviderInfo? { catalog?.providers.first { $0.id == provider } }
-    private var keyBinding: Binding<String> {
-        Binding(get: { apiKeys[provider] ?? "" }, set: { apiKeys[provider] = $0 })
-    }
-    private var providerBinding: Binding<String> {
-        Binding(get: { provider }, set: { value in
-            provider = value
-            model = catalog?.providers.first { $0.id == value }?.models.first?.id ?? ""
-        })
-    }
+    private var api: BackendClient { store.api }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -87,40 +73,10 @@ struct SettingsView: View {
     private var groups: some View {
         SettingsGroup(
             title: "Build",
-            help: "The cloud model that writes your wiki pages on a build."
+            help: "The provider account that writes your wiki pages. "
+                + "Choose which of its models to use on the Build tab."
         ) {
-            fieldLabel("Provider")
-            SegmentedPicker(
-                options: (catalog?.providers ?? []).map { ($0.name, $0.id) },
-                selection: providerBinding
-            )
-            if (selectedProvider?.models.count ?? 0) > 1 {
-                SettingsRow("Model") {
-                    Picker("", selection: $model) {
-                        ForEach(selectedProvider?.models ?? [], id: \.id) { model in
-                            Text(model.id).tag(model.id)
-                        }
-                    }
-                    .labelsHidden()
-                    .pickerStyle(.menu)
-                    .font(Theme.Font.body(11.5))
-                    .tint(Theme.Colors.textSecondary)
-                }
-            }
-            FloatingLabelSecureField(
-                title: "\(selectedProvider?.name ?? provider) API key",
-                text: keyBinding
-            )
-            .id(provider)
-            .help("Leave blank to keep the saved key.")
-            if configured[provider] == true {
-                HStack(spacing: 3) {
-                    Image(systemName: "checkmark.circle.fill").font(.system(size: 9))
-                    Text("Saved in Keychain")
-                }
-                .font(Theme.Font.meta(9.5))
-                .foregroundStyle(Theme.Colors.success)
-            }
+            PiProviderSettings(api: api, selection: $provider)
             SettingsRow("Spend cap per build",
                 help: "When a build's estimated cost surpasses this limit, "
                     + "wiki compilation will be stopped, rolling back any partially "
@@ -244,13 +200,6 @@ struct SettingsView: View {
     }
 
     @ViewBuilder
-    private func fieldLabel(_ text: String) -> some View {
-        Text(text)
-            .font(Theme.Font.meta(10))
-            .foregroundStyle(Theme.Colors.textSecondary)
-    }
-
-    @ViewBuilder
     private func subhead(_ title: String, help: String? = nil) -> some View {
         HStack(spacing: 5) {
             Text(title)
@@ -296,16 +245,11 @@ struct SettingsView: View {
                 let (c, p, f) = try await (fetchedCatalog, preferences, folders)
                 catalog = c
                 provider = p.compilation.provider
-                model = p.compilation.model
                 costCap = p.compilation.max_cost_per_build_usd > 0 ? String(p.compilation.max_cost_per_build_usd) : ""
                 triageEnabled = p.triage.enabled
                 triageProfile = p.triage.profile
                 watched = f
                 loaded = true
-                for provider in c.providers {
-                    let status: CredentialStatus = try await api.request("/credentials/\(provider.id)")
-                    configured[provider.id] = status.configured
-                }
                 for target in ["claude-desktop", "chatgpt-desktop", "cursor"] {
                     let status: IntegrationStatus = try await api.request("/integrations/mcp/\(target)")
                     connectStatus[target] = status.configured ? .done : .idle
@@ -345,12 +289,10 @@ struct SettingsView: View {
                 })
                 // One validated settings write preserves unrelated preferences and saves folders atomically.
                 try await api.send("/settings", method: "PATCH", body: [
-                    "compilation": ["provider": provider, "model": model, "max_cost_per_build_usd": Double(text) ?? 0],
+                    "compilation": ["provider": provider, "max_cost_per_build_usd": Double(text) ?? 0],
                     "triage": ["enabled": triageEnabled, "profile": triageProfile], "sources": sources
                 ])
-                for (provider, key) in apiKeys where !key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    try ProviderKeychain.save(key, provider: provider)
-                }
+                await store.refreshNow() // The Build tab reads the provider from the snapshot.
                 onClose()
             } catch { errorMessage = error.localizedDescription }
         }

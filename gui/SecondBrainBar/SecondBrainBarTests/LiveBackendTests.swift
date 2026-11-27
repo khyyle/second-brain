@@ -53,7 +53,7 @@ final class LiveBackendTests: XCTestCase {
         let api = BackendClient(config: config)
         let _: PreferencesResponse = try await api.request("/settings")
         let catalog: ApplicationCatalog = try await api.request("/catalog")
-        XCTAssertFalse(catalog.providers.isEmpty)
+        XCTAssertFalse(catalog.triage_profiles.isEmpty)
         try await api.send("/settings", method: "PATCH", body: [
             "triage": ["enabled": false],
             "compilation": ["max_cost_per_build_usd": 1.25]

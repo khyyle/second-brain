@@ -1,8 +1,8 @@
 # Command line
 
-The `second-brain` command calls the same local HTTP backend as the menu bar app. Open the app or run `make backend` first.
-
-To list every command and its options, from the repository root run:
+> Remarks:
+> The `second-brain` command calls the same local HTTP backend as the menu bar app. Open the app or run `make backend` first.
+> The below commands also assume a source checkout.
 
 ```bash
 uv run second-brain --help

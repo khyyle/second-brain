@@ -10,6 +10,7 @@ final class StatusBarController: NSObject, NSApplicationDelegate, NSMenuItemVali
     private var store: PipelineStore?
     private lazy var intake = DropIntake(config: config)
     private let backend = BackendProcess()
+    private var quitDeadline: DispatchWorkItem?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         statusItem = NSStatusBar.system.statusItem(
@@ -38,12 +39,42 @@ final class StatusBarController: NSObject, NSApplicationDelegate, NSMenuItemVali
         }
     }
 
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        prepareToQuit { sender.reply(toApplicationShouldTerminate: true) }
+    }
+
+    func prepareToQuit(timeout: TimeInterval = 20, reply: @escaping () -> Void) -> NSApplication.TerminateReply {
+        guard quitDeadline == nil else { return .terminateLater }
+        guard let cleanup = ProviderLoginSession.active?.abandon() else { return .terminateNow }
+
+        // Bound the whole wait (start plus DELETE), even if a backend stops responding.
+        let deadline = DispatchWorkItem {
+            self.quitDeadline = nil
+            reply()
+        }
+        quitDeadline = deadline
+        DispatchQueue.main.asyncAfter(deadline: .now() + timeout, execute: deadline)
+        Task {
+            await cleanup.value
+            guard quitDeadline === deadline else { return } // Deadline already replied.
+            deadline.cancel()
+            quitDeadline = nil
+            reply()
+        }
+        return .terminateLater
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
         store?.setWindowVisible(false)
         backend.stop()
     }
 
-    func windowWillClose(_ notification: Notification) { store?.setWindowVisible(false) }
+    func windowWillClose(_ notification: Notification) { panelDidHide() }
+
+    private func panelDidHide() {
+        store?.setWindowVisible(false)
+        NotificationCenter.default.post(name: .panelDidHide, object: nil)
+    }
 
     /// Closing the panel only hides it; the status item brings it back. Quit
     /// is an explicit choice in the status item's menu, never a side effect of
@@ -69,7 +100,7 @@ final class StatusBarController: NSObject, NSApplicationDelegate, NSMenuItemVali
 
     private func togglePanel() {
         if let panel, panel.isVisible {
-            store?.setWindowVisible(false)
+            panelDidHide()
             panel.orderOut(nil)
         } else {
             showPanel()

@@ -1,11 +1,13 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import test from 'node:test';
 import { builtinProviders } from '@earendil-works/pi-ai/providers/all';
+import { amazonBedrockProvider } from '@earendil-works/pi-ai/providers/amazon-bedrock';
 import { cloudflareWorkersAIProvider } from '@earendil-works/pi-ai/providers/cloudflare-workers-ai';
 import { deepseekProvider } from '@earendil-works/pi-ai/providers/deepseek';
 import { githubCopilotProvider } from '@earendil-works/pi-ai/providers/github-copilot';
@@ -26,6 +28,12 @@ function fixture(login, provider = openaiProvider()) {
       getPassword: () => saved,
       setPassword: value => { saved = value; },
       deletePassword: () => { saved = null; },
+    },
+    runSecurity(command, args, { stdio }) {
+      assert.equal(command, '/usr/bin/security');
+      assert.deepEqual(args, ['find-generic-password', '-s', 'com.second-brain.pi-oauth', '-a', provider.id]);
+      assert.equal(stdio, 'ignore');
+      return { status: saved === null ? 44 : 0 };
     },
     input,
     send: event => output.push(event),
@@ -50,11 +58,16 @@ test('login, list from a fresh collection, and disconnect without exposing crede
   await f.run('login');
   assert.equal(f.output.find(e => e.type === 'auth_url')?.url, 'https://example.test/sign-in');
   assert.equal(f.output.at(-1).type, 'done');
+  assert.equal(f.output.find(e => e.kind === 'manual_code').callback_listening, false);
   assert.deepEqual(JSON.parse(f.options.entry.getPassword()), credential);
+  await f.run('connection-status');
+  assert.deepEqual(f.output.at(-1), { connected: true });
   await f.run('list-models');
   assert.ok(f.output.at(-1).some(m => m.id && m.name));
   assert.doesNotMatch(JSON.stringify(f.output), /private-/);
   await f.run('logout');
+  await f.run('connection-status');
+  assert.deepEqual(f.output.at(-1), { connected: false });
   await f.run('list-models');
   assert.deepEqual(f.output.at(-1), []);
 });
@@ -67,8 +80,15 @@ test('browser completion cancels the manual prompt without cancelling the login'
     await assert.rejects(manual);
     return credential;
   });
-  await f.run('login');
-  assert.equal(f.output.at(-1).type, 'done');
+  const listener = createServer();
+  await new Promise(resolve => listener.listen(0, '127.0.0.1', resolve));
+  try {
+    await f.run('login');
+    assert.equal(f.output.at(-1).type, 'done');
+    assert.equal(f.output.find(e => e.kind === 'manual_code').callback_listening, true);
+  } finally {
+    await new Promise(resolve => listener.close(resolve));
+  }
 });
 
 for (const [reason, reply] of [['cancel', '{"type":"cancel"}\n'], ['malformed input', 'private-invalid-line\n'], ['closed pipe', null]]) {
@@ -174,7 +194,29 @@ test('a selected service-account file counts as configuration, not an ambient cr
   rmSync(file);
   await f.run('list-models');
   assert.deepEqual(f.output.at(-1), []);
+  await f.run('connection-status');
+  assert.deepEqual(f.output.at(-1), { connected: true }); // Saved, though no models are available.
 });
+
+test('a failed Keychain lookup is not reported as disconnected', async () => {
+  const f = fixture();
+  f.options.runSecurity = () => ({ status: 1, stderr: 'private diagnostic' });
+  await assert.rejects(f.run('connection-status'), { message: 'Cannot check the saved login. Check macOS Keychain.' });
+  assert.deepEqual(f.output, []);
+});
+
+for (const [provider, ambient] of [[googleVertexProvider(), 'adc'], [amazonBedrockProvider(), 'credential-chain']]) {
+  test(`${provider.id}: ambient-only sign-in is neither offered nor accepted`, async () => {
+    const f = fixture(undefined, provider);
+    f.options.send = event => {
+      assert.equal(event.kind, 'select');
+      assert.ok(event.options.length > 0 && !event.options.some(option => option.id === ambient));
+      f.input.write(JSON.stringify({ type: 'answer', id: event.id, value: ambient }) + '\n');
+    };
+    await assert.rejects(f.run('login'), /offered sign-in methods/);
+    assert.equal(f.options.entry.getPassword(), null);
+  });
+}
 
 test('model listing never fills in a missing saved key with an ambient key', async t => {
   const previous = process.env.DEEPSEEK_API_KEY;

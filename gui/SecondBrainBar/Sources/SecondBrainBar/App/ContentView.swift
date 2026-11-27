@@ -38,7 +38,7 @@ struct ContentView: View {
     var body: some View {
         Group {
             if showingSettings {
-                SettingsView(config: config) {
+                SettingsView {
                     withAnimation(.easeInOut(duration: 0.2)) { showingSettings = false }
                 }
                 .transition(.opacity)
@@ -57,6 +57,7 @@ struct ContentView: View {
             // Settings would hide a drop's result, and leaving it to show the
             // result would discard unsaved edits.
             intake.acceptsFiles = !showing
+            if !showing { store.forgetBuildModels() }
         }
     }
 
@@ -178,7 +179,8 @@ struct ContentView: View {
                 case .build:   BuildTab(
                     config: config,
                     onBuild: attemptBuild,
-                    canBuild: store.connected && !store.locked
+                    canBuild: store.connected && !store.locked,
+                    onOpenSettings: openSettings
                 )
                 case .domains: DomainsTab(config: config)
                 case .overview: OverviewTab(config: config)
@@ -221,10 +223,12 @@ struct ContentView: View {
             TextAction(title: "Reveal", help: "Show the Second Brain folder in Finder") {
                 NSWorkspace.shared.activateFileViewerSelecting([config.vaultRoot])
             }
-            IconAction(systemName: "gearshape", help: "Settings") {
-                withAnimation(.easeInOut(duration: 0.2)) { showingSettings = true }
-            }
+            IconAction(systemName: "gearshape", help: "Settings", action: openSettings)
         }
+    }
+
+    private func openSettings() {
+        withAnimation(.easeInOut(duration: 0.2)) { showingSettings = true }
     }
 
     private func attemptBuild() { store.requestBuild() }

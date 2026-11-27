@@ -54,3 +54,58 @@ async def test_provider_discovery_rejects_malformed_helper_data(
 async def test_model_choices_require_local_auth(async_client: AsyncClient) -> None:
     response = await async_client.get("/v1/providers/new-vendor/models")
     assert response.status_code == 401
+
+
+@pytest.mark.parametrize(
+    ("method", "path"),
+    [
+        ("get", "/providers/vendor/connection"),
+        ("delete", "/providers/vendor/connection"),
+        ("post", "/providers/vendor/logins"),
+        ("post", "/logins/session/next-event"),
+        ("post", "/logins/session/answers"),
+        ("delete", "/logins/session"),
+    ],
+)
+async def test_connect_routes_require_local_auth(
+    async_client: AsyncClient, method: str, path: str
+) -> None:
+    response = await getattr(async_client, method)(f"/v1{path}")
+    assert response.status_code == 401
+    assert "no-store" in response["Cache-Control"]
+
+
+@pytest.mark.parametrize(
+    ("path", "body"),
+    [
+        ("/providers/vendor/logins", {"method": "private-input"}),
+        ("/logins/session/answers", {"prompt_id": False, "answer": "private-input"}),
+        ("/logins/session/answers", {"prompt_id": 1, "answer": {"private-input": True}}),
+    ],
+)
+async def test_invalid_login_request_does_not_reflect_input(
+    async_client: AsyncClient, path: str, body: dict, caplog: pytest.LogCaptureFixture
+) -> None:
+    response = await async_client.post(
+        f"/v1{path}",
+        body,
+        content_type="application/json",
+        headers={"Authorization": f"Bearer {settings.API_TOKEN}"},
+    )
+    assert response.status_code == 422
+    assert "no-store" in response["Cache-Control"]
+    assert b"private-input" not in response.content
+    assert "private-input" not in caplog.text
+
+
+async def test_malformed_connection_status_is_not_coerced_or_echoed(
+    async_client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(pi_helper, "run_json", AsyncMock(return_value={"connected": "private"}))
+    response = await async_client.get(
+        "/v1/providers/vendor/connection",
+        headers={"Authorization": f"Bearer {settings.API_TOKEN}"},
+    )
+    assert response.status_code == 503
+    assert "no-store" in response["Cache-Control"]
+    assert response.json() == {"detail": "Invalid connection status from the provider helper."}

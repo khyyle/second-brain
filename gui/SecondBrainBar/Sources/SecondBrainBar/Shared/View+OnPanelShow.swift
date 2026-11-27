@@ -5,6 +5,7 @@ extension Notification.Name {
     /// reused across opens, so views that read from disk listen for this to
     /// refresh, since `.onAppear` only fires on the panel's first show.
     static let panelDidShow = Notification.Name("SecondBrainPanelDidShow")
+    static let panelDidHide = Notification.Name("SecondBrainPanelDidHide")
 }
 
 extension View {

@@ -1,4 +1,5 @@
 // Private JSON-lines interface between Django Preferences and Pi.
+import { spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { EventEmitter, once } from 'node:events';
 import { linkSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
@@ -8,6 +9,9 @@ import { createInterface } from 'node:readline';
 import { createModels, defaultProviderAuthContext, InMemoryCredentialStore } from '@earendil-works/pi-ai';
 import { builtinProviders } from '@earendil-works/pi-ai/providers/all';
 import { Entry } from '@napi-rs/keyring';
+
+// Keep the original service name so existing Pi logins still work after upgrading.
+const keychainService = 'com.second-brain.pi-oauth';
 
 // Only display our own errors. Provider errors may contain the callback URL or tokens.
 class PreferencesError extends Error {}
@@ -73,10 +77,21 @@ async function requestCredential(models, providerId, method, { input, send, getD
       const until = promptSignal ? AbortSignal.any([signal, promptSignal]) : signal;
       until.throwIfAborted();
       const answer = once(replies, `answer:${id}`, { signal: until });
+      // Pi's ADC/credential-chain choices require ambient credentials, which this app never resolves.
+      if (kind === 'select') {
+        const ambient = { 'google-vertex': 'adc', 'amazon-bedrock': 'credential-chain' }[providerId];
+        fields.options = fields.options.filter(option => option.id !== ambient);
+      }
+      // Each login owns its Node process. A loopback redirect alone is not proof Pi
+      // acquired the callback port: without a listener, pasting is the *only* path.
+      if (kind === 'manual_code') fields.callback_listening = process.getActiveResourcesInfo().includes('TCPServerWrap');
       send({ type: 'prompt', id, kind, ...fields });
 
       // If the browser callback wins, Pi aborts just this pending manual-code prompt.
       const [value] = await answer;
+      if (kind === 'select' && !fields.options.some(option => option.id === value)) {
+        throw new PreferencesError('Choose one of the offered sign-in methods.');
+      }
       if (kind === 'secret' && !value.trim()) {
         throw new PreferencesError('A credential is required.');
       }
@@ -158,6 +173,15 @@ async function connectProvider(provider, { entry, input, send, getDeviceId, auth
 /** Dispatch argv once at startup. Only connectProvider keeps the process open for replies. */
 export async function runCommand(command, provider, options) {
   switch (command) {
+    case 'connection-status': {
+      // Without -w or -g, security queries item metadata, not the password. A saved
+      // connection can still have no available models. Only errSecItemNotFound is absent.
+      const { status } = options.runSecurity('/usr/bin/security',
+        ['find-generic-password', '-s', keychainService, '-a', provider.id],
+        { stdio: 'ignore', timeout: 10_000 });
+      if (status !== 0 && status !== 44) throw new PreferencesError('Cannot check the saved login. Check macOS Keychain.');
+      return options.send({ connected: status === 0 });
+    }
     case 'list-models':
       return options.send(await listModels(provider, options.entry));
     case 'login':
@@ -173,7 +197,7 @@ export async function runCommand(command, provider, options) {
 
 async function main(args) {
   const [command, providerId, authMethod] = args;
-  const usage = 'Usage: node pi-helper.mjs list-providers | login <provider-id> [oauth|api_key] | <list-models|logout> <provider-id>';
+  const usage = 'Usage: node pi-helper.mjs list-providers | login <provider-id> [oauth|api_key] | <connection-status|list-models|logout> <provider-id>';
 
   if (command === '--help' && args.length === 1) {
     return console.log(usage);
@@ -184,7 +208,7 @@ async function main(args) {
   if (command === 'list-providers' && args.length === 1) {
     return send(providers.map(p => ({ id: p.id, name: p.name, loginMethods: loginMethods(p) })));
   }
-  if (!['list-models', 'login', 'logout'].includes(command) || !providerId || args.length > (command === 'login' ? 3 : 2)) {
+  if (!['connection-status', 'list-models', 'login', 'logout'].includes(command) || !providerId || args.length > (command === 'login' ? 3 : 2)) {
     throw new UsageError(usage);
   }
 
@@ -196,8 +220,8 @@ async function main(args) {
     throw new PreferencesError('Second Brain requires macOS Keychain.');
   }
   await runCommand(command, provider, {
-    // Keep the original service name so existing Pi logins still work after upgrading.
-    entry: new Entry('com.second-brain.pi-oauth', provider.id),
+    entry: new Entry(keychainService, provider.id),
+    runSecurity: spawnSync,
     input: process.stdin, send, authMethod,
     getDeviceId: () => installationUuid(join(homedir(), 'Library', 'Application Support', 'Second Brain')),
   });

@@ -20,7 +20,8 @@ def get_desktop_state() -> dict:
     -------
     dict
         Library state, jobs with progress, imports, triage decisions, grouping, build
-        actions, the compilation model, and inference status. Completed index jobs are omitted.
+        actions, the selected provider and model, and inference status. Completed index
+        jobs are omitted.
     """
     config = get_pipeline_config()
     jobs = Job.objects.defer("payload", "config_snapshot").order_by("-created_at", "-id")
@@ -37,6 +38,7 @@ def get_desktop_state() -> dict:
         "triage": list_decisions(),
         "grouping_plan": get_grouping(),
         "build_actions": list_build_actions(),
+        "compilation_provider": config.compilation.provider,
         "compilation_model": config.compilation.model,
         "inference": {"worker_statuses": read_worker_statuses(get_vault_paths().backend_dir)},
     }

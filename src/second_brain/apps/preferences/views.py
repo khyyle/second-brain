@@ -1,22 +1,23 @@
 """HTTP entry points for preferences and credentials."""
 
 from django.http import HttpRequest
-from ninja import Router
+from django.views.decorators.cache import never_cache
+from ninja import Router, Status
+from ninja.decorators import decorate_view
 
 from second_brain.apps.preferences.schemas import (
     Catalog,
-    CredentialStatus,
+    ConnectionStatus,
+    LoginAnswer,
+    LoginRequest,
+    LoginStarted,
     ModelChoiceResponse,
     SettingsUpdate,
     WatchedFolder,
 )
-from second_brain.apps.preferences.services import (
-    catalog,
-    provider_credentials,
-    user_settings,
-)
+from second_brain.apps.preferences.services import catalog, user_settings
 from second_brain.apps.preferences.services import watched_folders as folders
-from second_brain.apps.preferences.services.agent_provider import model_selection
+from second_brain.apps.preferences.services.agent_provider import model_selection, provider_auth
 from second_brain.django_config.schemas import ErrorResponse
 from second_brain.pipeline_config import Preferences
 
@@ -138,23 +139,85 @@ def replace_watched_folders(
     return folders.replace_folders([item.model_dump(mode="json") for item in payload])
 
 
+# Wrap Ninja's HTTP response, including authentication, validation and helper errors.
+_private_response = decorate_view(never_cache)
+
+
 @router.get(
-    "/credentials/{provider}",
-    response={200: CredentialStatus, 400: ErrorResponse, 503: ErrorResponse},
+    "/providers/{provider_id}/connection",
+    response={200: ConnectionStatus, 400: ErrorResponse, 503: ErrorResponse},
 )
-def credential_status(request: HttpRequest, provider: str) -> dict:
-    """Report whether the provider credential is available in Keychain.
+@_private_response
+async def get_connection(request: HttpRequest, provider_id: str) -> ConnectionStatus:
+    """Report whether this provider has a saved login, independent of available models."""
+    return ConnectionStatus(connected=await provider_auth.is_connected(provider_id))
 
-    Parameters
-    ----------
-    request: HttpRequest
-        Incoming authenticated HTTP request.
-    provider: str
-        Provider whose local credential availability should be checked.
 
-    Returns
-    -------
-    dict
-        Provider name and configured flag; no credential value is returned.
-    """
-    return {"provider": provider, "configured": bool(provider_credentials.read_api_key(provider))}
+@router.delete(
+    "/providers/{provider_id}/connection",
+    response={204: None, 400: ErrorResponse, 503: ErrorResponse},
+)
+@_private_response
+async def disconnect_provider(request: HttpRequest, provider_id: str) -> Status[None]:
+    """Remove the local credential; this does not revoke it at the provider."""
+    await provider_auth.logout(provider_id)
+    return Status(204, None)
+
+
+@router.post(
+    "/providers/{provider_id}/logins",
+    response={200: LoginStarted, 400: ErrorResponse, 503: ErrorResponse},
+)
+@_private_response
+async def start_provider_login(
+    request: HttpRequest, provider_id: str, payload: LoginRequest
+) -> LoginStarted:
+    """Start a login with the selected method; read next-event to follow its progress."""
+    return LoginStarted(login_id=await provider_auth.start_login(provider_id, payload.method))
+
+
+@router.post(
+    "/logins/{login_id}/next-event",
+    response={
+        200: provider_auth.LoginEvent,
+        400: ErrorResponse,
+        404: ErrorResponse,
+        409: ErrorResponse,
+        503: ErrorResponse,
+    },
+)
+@_private_response
+async def next_login_event(request: HttpRequest, login_id: str) -> provider_auth.LoginEvent:
+    """Wait for one login event, including prompts and terminal confirmation."""
+    return await provider_auth.read_login_event(login_id)
+
+
+@router.post(
+    "/logins/{login_id}/answers", response={204: None, 404: ErrorResponse, 409: ErrorResponse}
+)
+@_private_response
+async def submit_login_answer(
+    request: HttpRequest, login_id: str, payload: LoginAnswer
+) -> Status[None]:
+    """Answer a pending prompt once. Input goes only to that login's helper stdin."""
+    await provider_auth.answer_login(
+        login_id, payload.prompt_id, payload.answer.get_secret_value()
+    )
+    return Status(204, None)
+
+
+@router.delete(
+    "/logins/{login_id}",
+    response={
+        204: None,
+        400: ErrorResponse,
+        404: ErrorResponse,
+        409: ErrorResponse,
+        503: ErrorResponse,
+    },
+)
+@_private_response
+async def cancel_provider_login(request: HttpRequest, login_id: str) -> Status[None]:
+    """Stop a pending login without disconnecting an already saved account."""
+    await provider_auth.cancel_login(login_id)
+    return Status(204, None)

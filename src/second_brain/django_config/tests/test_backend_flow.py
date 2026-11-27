@@ -35,21 +35,24 @@ def test_settings_have_no_runtime_paths_and_patch_preserves_nested_values(api_cl
     assert "data_dir" not in (config.data_dir / "config.yaml").read_text()
 
 
-def test_provider_model_patch_is_validated_after_merging(api_client):
-    assert (
-        send(
-            api_client,
-            "patch",
-            "/settings",
-            {"compilation": {"provider": "deepseek", "model": "deepseek-v4-flash"}},
-        ).status_code
-        == 200
+def test_settings_saves_a_provider_and_the_build_tab_saves_its_model(api_client):
+    def save(**compilation):
+        response = send(api_client, "patch", "/settings", {"compilation": compilation})
+        assert response.status_code == 200, response.content
+        saved = response.json()["compilation"]
+        return saved["provider"], saved["model"]
+
+    # Any provider in Pi's catalog can be chosen; it starts without a model.
+    assert save(provider="new-vendor") == ("new-vendor", "")
+    assert save(model="family/model-v2") == ("new-vendor", "family/model-v2")
+    assert save(max_iterations=17) == ("new-vendor", "family/model-v2")
+    assert save(provider="new-vendor") == ("new-vendor", "family/model-v2")
+    # Another provider's catalog does not contain this model.
+    assert save(provider="other-vendor") == ("other-vendor", "")
+    assert save(provider="new-vendor", model="family/model-v2") == (
+        "new-vendor",
+        "family/model-v2",
     )
-    response = send(
-        api_client, "patch", "/settings", {"compilation": {"model": "deepseek-v4-pro"}}
-    )
-    assert response.status_code == 200
-    assert response.json()["compilation"]["provider"] == "deepseek"
 
 
 @pytest.mark.parametrize(
@@ -58,6 +61,9 @@ def test_provider_model_patch_is_validated_after_merging(api_client):
         {"data_dir": "/tmp/other"},
         {"triage": None},
         {"compilation": {"max_iterations": 0}},
+        {"compilation": {"provider": ""}},
+        {"compilation": {"provider": "vendor/../other"}},
+        {"compilation": {"model": " padded "}},
         {"search": {"embedding_dimensions": 128}},
         {"triage": {"model": "my-local-model"}},
     ],
@@ -358,16 +364,6 @@ def test_wiki_edit_rejects_a_concurrent_writer(api_client, config):
     with vault_lock("wiki"):
         response = send(api_client, "post", "/domains/rename", {"old": "a", "new": "b"})
     assert response.status_code == 409
-
-
-def test_provider_status_never_serializes_the_key(api_client, monkeypatch):
-    monkeypatch.setattr(
-        "second_brain.apps.preferences.services.provider_credentials.read_api_key",
-        lambda _: "secret-test-value",
-    )
-    response = api_client.get("/v1/credentials/anthropic")
-    assert response.json() == {"provider": "anthropic", "configured": True}
-    assert b"secret-test-value" not in response.content
 
 
 def test_worker_retains_counts_and_marks_failed_results(api_client, monkeypatch):

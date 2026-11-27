@@ -16,5 +16,6 @@ class DesktopState(Schema):
     triage: list[TriageOut]
     grouping_plan: GroupingPlan | None
     build_actions: list[BuildAction]
+    compilation_provider: str
     compilation_model: str
     inference: InferenceStatusOut

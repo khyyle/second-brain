@@ -8,6 +8,7 @@ struct DesktopSnapshot: Decodable {
     let triage: [TriageResponse]
     let grouping_plan: ClusterPlan?
     let build_actions: [BuildActionResponse]
+    let compilation_provider: String
     let compilation_model: String
     let inference: InferenceStatusResponse
 }

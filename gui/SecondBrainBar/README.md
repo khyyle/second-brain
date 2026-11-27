@@ -17,7 +17,7 @@ Files are located under `Sources/SecondBrainBar/`, organized by feature and role
 | `Features/` | Primary user-facing screens and their private views and readers, organized by domain. |
 | `Intake/` | File and folder selection, drag-and-drop handling, and import submission. |
 | `Pipeline/` | Shared library state, job progress, and triage results received from the API. |
-| `Configuration/` | Startup paths, preferences response types, and provider Keychain access. |
+| `Configuration/` | Startup paths and preferences response types. |
 | `Shared/` | Cross-cutting visual theme, custom controls, view modifiers, and utilities. |
 
 Directory conventions:
@@ -38,4 +38,4 @@ Directory conventions:
 
 ## Dependencies
 
-The Swift target uses the macOS SDK, including `URLSession` for HTTP and Security.framework for Keychain access. The Python backend manages the databases and changes to vault files.
+The Swift app uses `URLSession` to talk to the local backend, which manages provider connections, databases, and vault files.

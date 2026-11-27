@@ -23,7 +23,7 @@ Imported ChatGPT conversations get one more pass. Chat history is noisy, so a sm
 
 Review chats before building and skip redundant material so you don't pay to compile overlapping conversations.
 
-**Build** is where staged sources are compiled into wiki pages using a cloud model. It shows what is ready to build with an estimated cost, along with a log of recently built pages. A kept chat can still be skipped from the staged list, which moves it to the skipped chats on the Ingest tab. Removing a staged source takes it out of the pipeline entirely (see [deletion](lifecycle.md#deletion)).
+**Build** is where staged sources are compiled into wiki pages using a cloud model. Choose the model at the top of the tab. Below it is what is ready to build with an estimated cost, along with a log of recently built pages. A kept chat can still be skipped from the staged list, which moves it to the skipped chats on the Ingest tab. Removing a staged source takes it out of the pipeline entirely (see [deletion](lifecycle.md#deletion)).
 
 **Domains** manages the wiki's subject tags. Renaming, merging, or deleting a domain updates the tags on every affected page.
 
@@ -45,7 +45,7 @@ For asking questions instead of browsing, you can hand the wiki to Claude Deskto
 
 ## Settings
 
-You must set your compilation provider's API key in Settings before you can build the wiki. Settings also holds the compilation model, a per-build spend cap, triage tuning, and watched folders.
+Connect a model provider in Settings before you build the wiki: choose the provider, then **Sign in** or **Use API key**, depending on what it supports. Signing in takes effect immediately; click **Save** to keep the provider you chose. Settings also holds a per-build spend cap, triage tuning, and watched folders.
 
 ### Watched folders
 

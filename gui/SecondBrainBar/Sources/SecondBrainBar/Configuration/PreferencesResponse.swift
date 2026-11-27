@@ -14,15 +14,16 @@ struct TriagePreferences: Decodable {
     let profile: String
 }
 struct ApplicationCatalog: Decodable {
-    let providers: [ProviderInfo]
     let file_types: [String]
     let triage_profiles: [String]
 }
-struct ProviderInfo: Decodable, Identifiable {
+struct PiProviderResponse: Decodable, Identifiable {
     let id: String
     let name: String
-    let models: [ModelInfo]
+    let login_methods: [String]
 }
-struct ModelInfo: Decodable, Identifiable { let id: String }
-struct CredentialStatus: Decodable { let configured: Bool }
+struct ModelChoiceResponse: Decodable, Identifiable, Equatable {
+    let id: String
+    let name: String
+}
 struct IntegrationStatus: Decodable { let configured: Bool; let message: String }

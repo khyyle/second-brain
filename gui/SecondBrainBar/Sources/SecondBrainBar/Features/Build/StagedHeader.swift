@@ -1,8 +1,8 @@
 import SwiftUI
 
-/// "Staged for build" heading. Shows staged count + cost (the plan's when a
-/// cluster preview is active, else a per-source estimate), a Preview/Refresh
-/// action, and live progress while grouping or compiling.
+/// "Staged for build" heading. The first row names the model the build uses. The
+/// second shows the cost (the plan's when a cluster preview is active, else a
+/// per-source estimate) beside the Group and Build actions, or Stop while compiling.
 struct StagedHeader: View {
     let cost: Double
     let sourceCount: Int
@@ -12,6 +12,7 @@ struct StagedHeader: View {
     let onPreview: () -> Void
     let onBuild: () -> Void
     let canBuild: Bool
+    let onOpenSettings: () -> Void
     @EnvironmentObject private var store: PipelineStore
 
     private var running: Bool {
@@ -28,23 +29,23 @@ struct StagedHeader: View {
     }
 
     var body: some View {
-        HStack(alignment: .center, spacing: 8) {
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 5) {
-                    Text("Staged for build")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(Theme.Colors.textTertiary)
-                    HelpButton(text: helpText)
-                }
-                if !running, sourceCount > 0 {
-                    costLine
-                }
+        let building = store.isCompiling || store.stopping
+        let ready = !running && sourceCount > 0
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 5) {
+                Text("Staged for build")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(Theme.Colors.textTertiary)
+                HelpButton(text: helpText)
+                Spacer(minLength: 8)
+                if store.connected { BuildModelMenu(onOpenSettings: onOpenSettings) }
             }
-            Spacer(minLength: 8)
-            if store.isCompiling || store.stopping {
-                stopButton
-            } else if !running, sourceCount > 0 {
-                actions
+            if building || ready {
+                HStack(spacing: 8) {
+                    if ready { costLine }
+                    Spacer(minLength: 8)
+                    if building { stopButton } else { actions }
+                }
             }
         }
         .padding(.horizontal, 8).padding(.top, 4).padding(.bottom, 1)
@@ -70,7 +71,7 @@ struct StagedHeader: View {
             if canPreview {
                 regroupButton
             }
-            if canBuild {
+            if canBuild && store.hasBuildModel {
                 Button("Build wiki", action: onBuild)
                     .buttonStyle(PillButton(.primary))
             }

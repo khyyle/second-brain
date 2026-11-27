@@ -5,6 +5,8 @@ import sys
 from pathlib import Path
 
 import pytest
+from django.conf import settings
+from django.test import AsyncClient
 
 from second_brain.apps.preferences.services.agent_provider import model_selection
 from second_brain.apps.preferences.services.agent_provider import provider_auth as auth
@@ -24,6 +26,7 @@ def helper(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
 import json, sys, time
 from pathlib import Path
 command, provider, *method = sys.argv[1:]
+saved = Path(__file__).with_name('saved-' + provider)
 if provider == 'unknown':
     sys.exit(2)
 if command == 'login' and provider == 'silent':
@@ -35,12 +38,34 @@ if provider == 'broken':
     sys.exit(0)  # Successful exit is not enough when stdout is malformed.
 if command == 'login':
     prompt = {'type': 'prompt', 'kind': 'secret', 'id': 1, 'message': provider}
+    if provider == 'interactive':
+        if method != ['oauth']:
+            sys.exit(2)
+        events = [
+            {'type': 'auth_url', 'url': 'https://example.test', 'instructions': 'Open'},
+            {'type': 'device_code', 'userCode': 'test-code', 'verificationUri': 'https://example.test',
+             'openBrowserOnConfirm': False, 'copyCodeOnConfirm': True, 'intervalSeconds': 1,
+             'expiresInSeconds': 60},
+            {'type': 'progress', 'message': 'Waiting'},
+            {'type': 'info', 'message': 'Help',
+             'links': [{'url': 'https://example.test', 'label': 'Help'}]},
+        ]
+        for event in events:
+            print(json.dumps({**event, 'internal': 'private diagnostic'}), flush=True)
+        prompt.update(kind='select', options=[{
+            'id': 'option', 'label': 'Choice', 'description': 'Detail', 'internal': 'private'
+        }])
     print(json.dumps(prompt), flush=True)
     reply = json.loads(input())
     if reply == {'type': 'cancel'}:
         sys.exit(1 if provider == 'failing' else 3)
-    if reply != {'type': 'answer', 'id': 1, 'value': provider + '\\nanswer'}:
+    expected = 'option' if provider == 'interactive' else provider + '\\nanswer'
+    if reply != {'type': 'answer', 'id': 1, 'value': expected}:
         sys.exit(1)
+    saved.touch()
+elif command == 'connection-status':
+    print(json.dumps({'connected': saved.exists()}))
+    sys.exit(0)
 elif command == 'list-models':
     choices = {
         'connected': [{'id': 'model/a', 'name': 'A', 'extra': 'not picker data'}],
@@ -53,7 +78,9 @@ elif command == 'list-models':
 elif command == 'logout' and provider == 'unconfirmed':
     print('{}')
     sys.exit(0)
-elif command != 'logout':
+elif command == 'logout':
+    saved.unlink(missing_ok=True)
+else:
     sys.exit(2)
 print('{"type":"done"}', flush=True)
 if provider == 'delayed-exit':
@@ -192,3 +219,90 @@ async def test_missing_private_runtime_is_a_dependency_error(
     monkeypatch.setattr(pi_helper, "NODE", tmp_path / "missing-node")
     with pytest.raises(DependencyError):
         await auth.start_login("provider")
+
+
+@pytest.mark.usefixtures("helper")
+async def test_connect_through_settings_api(
+    async_client: AsyncClient, caplog: pytest.LogCaptureFixture
+) -> None:
+    headers = {"Authorization": f"Bearer {settings.API_TOKEN}"}
+    provider = "/v1/providers/interactive"
+    status_path = f"{provider}/connection"
+    assert (await async_client.get(status_path, headers=headers)).json() == {"connected": False}
+
+    start = await async_client.post(
+        f"{provider}/logins", {"method": "oauth"}, content_type="application/json", headers=headers
+    )
+    assert start.status_code == 200
+    assert "no-store" in start["Cache-Control"]
+    login = f"/v1/logins/{start.json()['login_id']}"
+    event_path = f"{login}/next-event"
+    expected = [
+        {"type": "auth_url", "url": "https://example.test", "instructions": "Open"},
+        {
+            "type": "device_code",
+            "userCode": "test-code",
+            "verificationUri": "https://example.test",
+            "openBrowserOnConfirm": False,
+            "copyCodeOnConfirm": True,
+            "intervalSeconds": 1,
+            "expiresInSeconds": 60,
+        },
+        {"type": "progress", "message": "Waiting"},
+        {
+            "type": "info",
+            "message": "Help",
+            "links": [{"url": "https://example.test", "label": "Help"}],
+        },
+        {
+            "type": "prompt",
+            "id": 1,
+            "kind": "select",
+            "message": "interactive",
+            "options": [{"id": "option", "label": "Choice", "description": "Detail"}],
+        },
+    ]
+    async with asyncio.timeout(5):
+        for event in expected:
+            response = await async_client.post(event_path, headers=headers)
+            assert response.status_code == 200
+            assert "no-store" in response["Cache-Control"]
+            assert response.json() == event
+        for prompt_id, answer, status in ((2, "private-answer", 409), (1, "option", 204)):
+            response = await async_client.post(
+                f"{login}/answers",
+                {"prompt_id": prompt_id, "answer": answer},
+                content_type="application/json",
+                headers=headers,
+            )
+            assert response.status_code == status
+            assert "no-store" in response["Cache-Control"]
+            assert answer.encode() not in response.content
+        assert (await async_client.post(event_path, headers=headers)).json() == {"type": "done"}
+        assert (await async_client.post(event_path, headers=headers)).status_code == 404
+    assert (await async_client.get(status_path, headers=headers)).json() == {"connected": True}
+    assert (await async_client.delete(status_path, headers=headers)).status_code == 204
+    assert (await async_client.get(status_path, headers=headers)).json() == {"connected": False}
+    assert "test-code" not in caplog.text
+    assert "private diagnostic" not in caplog.text
+    assert "private-answer" not in caplog.text
+
+
+@pytest.mark.usefixtures("helper")
+async def test_cancel_through_settings_api(async_client: AsyncClient) -> None:
+    headers = {"Authorization": f"Bearer {settings.API_TOKEN}"}
+    start = await async_client.post(
+        "/v1/providers/vendor/logins",
+        {"method": "api_key"},
+        content_type="application/json",
+        headers=headers,
+    )
+    login = f"/v1/logins/{start.json()['login_id']}"
+    async with asyncio.timeout(5):
+        prompt = await async_client.post(f"{login}/next-event", headers=headers)
+        assert prompt.json() == {"type": "prompt", "id": 1, "kind": "secret", "message": "vendor"}
+        cancelled = await async_client.delete(login, headers=headers)
+        assert cancelled.status_code == 204
+        assert not cancelled.content
+        assert "no-store" in cancelled["Cache-Control"]
+        assert (await async_client.post(f"{login}/next-event", headers=headers)).status_code == 404
