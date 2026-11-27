@@ -46,6 +46,11 @@ class CredentialStatus(Schema):
     configured: bool
 
 
+class ModelChoiceResponse(Schema):
+    id: str
+    name: str
+
+
 class ModelInfo(Schema):
     id: str
     input_price_per_mtok: float

@@ -6,8 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from second_brain.apps.preferences.services import agent_provider as auth
-from second_brain.apps.preferences.services.agent_provider import provider_auth
+from second_brain.apps.preferences.services.agent_provider import model_selection
+from second_brain.apps.preferences.services.agent_provider import provider_auth as auth
 from second_brain.cloud_llm.pi import pi_helper
 from second_brain.django_config.errors import (
     ConflictError,
@@ -130,7 +130,7 @@ async def test_interrupted_read_does_not_lose_a_confirmed_save(tmp_path: Path) -
 async def test_abandoned_login_expires_and_unblocks_a_waiting_reader(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(provider_auth, "_LOGIN_LIFETIME_SECONDS", 0)
+    monkeypatch.setattr(auth, "_LOGIN_LIFETIME_SECONDS", 0)
     async with asyncio.timeout(5):
         login_id = await auth.start_login("silent")
         with pytest.raises(DependencyError):
@@ -171,8 +171,8 @@ async def test_model_picker_runs_without_interrupting_a_pending_login() -> None:
     login_id = await auth.start_login("provider")
     try:
         assert (await auth.read_login_event(login_id))["type"] == "prompt"
-        assert await auth.list_models("connected") == [{"id": "model/a", "name": "A"}]
-        assert await auth.list_models("disconnected") == []
+        assert await model_selection.list_models("connected") == [{"id": "model/a", "name": "A"}]
+        assert await model_selection.list_models("disconnected") == []
     finally:
         await auth.cancel_login(login_id)
 
@@ -181,7 +181,7 @@ async def test_model_picker_runs_without_interrupting_a_pending_login() -> None:
 @pytest.mark.parametrize("provider", ["bad-list", "bad-choice", "broken"])
 async def test_model_picker_rejects_malformed_replies_without_echoing_them(provider: str) -> None:
     with pytest.raises(DependencyError) as invalid:
-        await auth.list_models(provider)
+        await model_selection.list_models(provider)
     assert "private" not in str(invalid.value)
 
 

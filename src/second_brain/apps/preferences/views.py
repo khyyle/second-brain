@@ -6,6 +6,7 @@ from ninja import Router
 from second_brain.apps.preferences.schemas import (
     Catalog,
     CredentialStatus,
+    ModelChoiceResponse,
     SettingsUpdate,
     WatchedFolder,
 )
@@ -15,6 +16,7 @@ from second_brain.apps.preferences.services import (
     user_settings,
 )
 from second_brain.apps.preferences.services import watched_folders as folders
+from second_brain.apps.preferences.services.agent_provider import model_selection
 from second_brain.django_config.schemas import ErrorResponse
 from second_brain.pipeline_config import Preferences
 
@@ -37,6 +39,23 @@ def get_catalog(request: HttpRequest) -> dict:
         triage profiles, and clustering algorithms.
     """
     return catalog.get_catalog()
+
+
+@router.get("/providers", response={200: list[model_selection.ProviderChoice], 503: ErrorResponse})
+async def list_providers(request: HttpRequest) -> list[model_selection.ProviderChoice]:
+    """List Pi providers and their login methods."""
+    return await model_selection.list_providers()
+
+
+@router.get(
+    "/providers/{provider_id}/models",
+    response={200: list[ModelChoiceResponse], 400: ErrorResponse, 503: ErrorResponse},
+)
+async def list_provider_models(
+    request: HttpRequest, provider_id: str
+) -> list[model_selection.ModelChoice]:
+    """List LLM options for a connected provider."""
+    return await model_selection.list_models(provider_id)
 
 
 @router.get("/settings", response={200: Preferences, 400: ErrorResponse, 503: ErrorResponse})

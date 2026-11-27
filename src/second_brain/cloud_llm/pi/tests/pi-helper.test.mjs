@@ -11,7 +11,9 @@ import { deepseekProvider } from '@earendil-works/pi-ai/providers/deepseek';
 import { githubCopilotProvider } from '@earendil-works/pi-ai/providers/github-copilot';
 import { googleVertexProvider } from '@earendil-works/pi-ai/providers/google-vertex';
 import { openaiProvider } from '@earendil-works/pi-ai/providers/openai';
-import { installationUuid, runCommand } from './pi-helper.mjs';
+import { installationUuid, runCommand } from '../pi-helper.mjs';
+
+const helperPath = join(import.meta.dirname, '..', 'pi-helper.mjs');
 
 // Real Pi collection and catalog; substitute the interactive provider and Keychain item only.
 function fixture(login, provider = openaiProvider()) {
@@ -86,14 +88,14 @@ for (const [reason, reply] of [['cancel', '{"type":"cancel"}\n'], ['malformed in
 }
 
 test('CLI distinguishes a cancelled login from a failed command', { skip: process.platform !== 'darwin' }, () => {
-  const result = spawnSync(process.execPath, ['pi-helper.mjs', 'login', 'deepseek'], {
-    cwd: import.meta.dirname, encoding: 'utf8', input: '{"type":"cancel"}\n', timeout: 5000,
+  const result = spawnSync(process.execPath, [helperPath, 'login', 'deepseek'], {
+    encoding: 'utf8', input: '{"type":"cancel"}\n', timeout: 5000,
   });
   assert.equal(result.status, 3, result.stderr);
 });
 
 test('list-providers exposes the installed Pi registry and its login capabilities', () => {
-  const run = (...args) => spawnSync(process.execPath, ['pi-helper.mjs', ...args], { cwd: import.meta.dirname, encoding: 'utf8' });
+  const run = (...args) => spawnSync(process.execPath, [helperPath, ...args], { encoding: 'utf8' });
   const result = run('list-providers');
   assert.equal(result.status, 0, result.stderr);
   const providers = JSON.parse(result.stdout);

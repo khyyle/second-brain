@@ -1,6 +1,8 @@
-"""Model choices for the connected provider in Settings."""
+"""Provider and model choices for Settings."""
 
 from typing import TypedDict
+
+from pydantic import BaseModel, Field, ValidationError
 
 from second_brain.apps.preferences.services.agent_provider._errors import settings_errors
 from second_brain.cloud_llm.pi import pi_helper
@@ -10,6 +12,24 @@ from second_brain.django_config.errors import DependencyError
 class ModelChoice(TypedDict):
     id: str
     name: str
+
+
+class ProviderChoice(BaseModel):
+    id: str = Field(min_length=1)
+    name: str
+    login_methods: list[str] = Field(validation_alias="loginMethods")
+
+
+async def list_providers() -> list[ProviderChoice]:
+    """List built-in Pi providers and their interactive login methods."""
+    with settings_errors():
+        items = await pi_helper.run_json("list-providers")
+    if not isinstance(items, list):
+        raise DependencyError("Expected a list from the provider helper.")
+    try:
+        return [ProviderChoice.model_validate(item) for item in items]
+    except ValidationError:
+        raise DependencyError("Invalid provider list from the provider helper.") from None
 
 
 async def list_models(provider_id: str) -> list[ModelChoice]:

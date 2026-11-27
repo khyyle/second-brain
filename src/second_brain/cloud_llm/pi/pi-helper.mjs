@@ -1,4 +1,4 @@
-// Private JSON-lines interface between Django Preferences and Pi; see README.md.
+// Private JSON-lines interface between Django Preferences and Pi.
 import { randomUUID } from 'node:crypto';
 import { EventEmitter, once } from 'node:events';
 import { linkSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
