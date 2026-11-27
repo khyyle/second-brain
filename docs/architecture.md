@@ -101,7 +101,7 @@ The compiled wiki is stored as plain Markdown under `~/second-brain/wiki/`, so i
 | Triage classification (Gemma) | Local, via llama.cpp |
 | Semantic-search and clustering embeddings | Local, via llama.cpp |
 | Grouping chats into clusters | Local (threshold or HDBSCAN over embeddings) |
-| Wiki synthesis (the build step) | Cloud, with the provider connected in Settings and the model chosen on the Build tab |
+| Wiki synthesis (the build step) | Cloud, via a [Pi](https://github.com/earendil-works/pi) provider service: the provider connected in Settings and the model chosen on the Build tab |
 
 Only the build step is required to leave the machine. Everything needed to capture, parse, and filter your material is local and free.
 
@@ -132,7 +132,7 @@ Before queueing a build, the backend copies its selected Markdown into `.backend
 
 Saving settings creates (when absent) or updates `<vault>/config.yaml`, which the backend reads preferences from. These preferences default to the values in `pipeline_config.py`. The vault location can optionally be changed via the environment variable `SECOND_BRAIN_VAULT` (see [Run locally](../CONTRIBUTING.md#run-locally)).
 
-A provider login, whether a sign-in or an API key, is saved in macOS Keychain and read only by the Pi helper (`src/second_brain/cloud_llm/pi`), which makes every model request. A build uses that login and nothing else: no environment variable or other credential stands in when it is missing. The token used to authenticate local API requests and Django's signing key are private files under `.backend/`.
+Model providers are reached through [Pi](https://github.com/earendil-works/pi), an open-source library that handles sign-in and requests for many providers. A provider login, whether a sign-in or an API key, is saved in macOS Keychain. A build uses that login and nothing else: no environment variable or other credential stands in when it is missing. The token used to authenticate local API requests and Django's signing key are private files under `.backend/`.
 
 ## Hashing and caching
 
