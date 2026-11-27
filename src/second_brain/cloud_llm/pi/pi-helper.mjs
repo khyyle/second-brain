@@ -1,4 +1,5 @@
-// Private JSON-lines interface between Django Preferences and Pi.
+// Private JSON interface between the Django backend and Pi: provider sign-in for
+// Preferences, and one model turn at a time for the build worker.
 import { spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { EventEmitter, once } from 'node:events';
@@ -6,7 +7,8 @@ import { linkSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'no
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
-import { createModels, defaultProviderAuthContext, InMemoryCredentialStore } from '@earendil-works/pi-ai';
+import { json as readJson } from 'node:stream/consumers';
+import { createModels, defaultProviderAuthContext, InMemoryCredentialStore, isContextOverflow } from '@earendil-works/pi-ai';
 import { builtinProviders } from '@earendil-works/pi-ai/providers/all';
 import { Entry } from '@napi-rs/keyring';
 
@@ -137,19 +139,118 @@ function hasCredentialShape(credential) {
     && typeof credential.refresh === 'string' && Number.isFinite(credential.expires);
 }
 
-async function listModels(provider, entry) {
+/** Pi's models as the saved login sees them, or null when no login is saved. */
+function modelsForSavedLogin(provider, entry) {
   const saved = entry.getPassword();
-  if (saved === null) return []; // Never fall back to an ambient API key.
+  if (saved === null) return null; // Never fall back to an ambient API key.
 
-  const credential = JSON.parse(saved);
+  let credential = JSON.parse(saved);
   if (!hasCredentialShape(credential)) {
     throw new PreferencesError('Invalid saved login. Disconnect and sign in again.');
   }
-  // Listing never resolves or refreshes tokens. The build worker owns refresh.
-  const credentials = new InMemoryCredentialStore();
-  await credentials.modify(provider.id, async () => credential);
-  const available = await modelsFor(provider, credentials).getAvailable(provider.id);
+  return modelsFor(provider, {
+    read: async () => credential,
+    // Pi calls this only to refresh an expiring OAuth token, and waits for it before sending
+    // the request. The provider has already retired the old token, so save the new one first.
+    async modify(_providerId, refresh) {
+      const refreshed = await refresh(credential);
+      if (refreshed !== undefined) {
+        entry.setPassword(JSON.stringify(refreshed));
+        credential = refreshed;
+      }
+      return credential;
+    },
+  });
+}
+
+async function listModels(provider, entry) {
+  // Listing checks the login but sends nothing, so it never refreshes a token.
+  const available = await modelsForSavedLogin(provider, entry)?.getAvailable(provider.id) ?? [];
   return available.map(({ id, name }) => ({ id, name }));
+}
+
+// Python checks the spend cap between turns, so asking for at most this much output bounds
+// how far one turn can overshoot it. Providers that take no output limit ignore it.
+const maxTurnOutputTokens = 16384;
+
+// What each provider API itself says when a model finishes its answer or hands over tool calls.
+// Pi also reports 'stop' for a paused turn, a response still in progress and a reply with no
+// reason at all, so its stopReason alone does not show that the model finished. A reply from
+// an API that is not listed is never complete.
+const finalStopReasons = {
+  'anthropic-messages': ['end_turn', 'tool_use'],
+  'bedrock-converse-stream': ['end_turn', 'tool_use'],
+  'openai-completions': ['stop', 'end', 'tool_calls', 'function_call'],
+  'mistral-conversations': ['stop', 'tool_calls'],
+  'openai-responses': ['completed'],
+  'openai-codex-responses': ['completed'],
+  'azure-openai-responses': ['completed'],
+  'google-generative-ai': ['STOP'],
+  'google-vertex': ['STOP'],
+  'pi-messages': [undefined], // Pi's own gateway passes on no provider reason, only Pi's.
+};
+
+/**
+ * Whether Python may act on a reply: a finished answer, or tool calls from a tool-use turn.
+ * closedCalls holds the content positions of the tool calls whose arguments arrived in full.
+ */
+function isComplete(reply, closedCalls) {
+  if (reply.errorMessage || !finalStopReasons[reply.api]?.includes(reply.rawStopReason)) return false;
+  const calls = reply.content.flatMap((block, position) => block.type === 'toolCall' ? [position] : []);
+  if (reply.stopReason === 'toolUse') return calls.length > 0 && calls.every(position => closedCalls.has(position));
+  return reply.stopReason === 'stop' && calls.length === 0 && reply.endTurn !== false;
+}
+
+/**
+ * Send one turn of a build conversation to the chosen model on the saved login.
+ *
+ * Stdin is one Pi context ({ systemPrompt, tools, messages }). The result's outcome is
+ * 'stop' or 'toolUse' with the assistant message to append for the next turn, or the
+ * reason there is no usable reply: not_connected, model_unavailable, too_large,
+ * incomplete or error. Provider error text stays here; it can quote the request.
+ * cost_usd is null when the turn's cost is unknown.
+ */
+async function buildTurn(provider, { entry, input, modelId }) {
+  let context;
+  try { context = await readJson(input); } catch { /* Reported below without echoing the input. */ }
+  if (typeof context?.systemPrompt !== 'string' || !Array.isArray(context.tools) || !Array.isArray(context.messages)) {
+    throw new UsageError('build-turn reads one Pi context as JSON on stdin.');
+  }
+
+  const models = modelsForSavedLogin(provider, entry);
+  if (!models) return { outcome: 'not_connected' };
+  // getAvailable applies the login's own model list. getModel alone would not.
+  const model = (await models.getAvailable(provider.id)).find(m => m.id === modelId);
+  if (!model) return { outcome: 'model_unavailable' };
+
+  // The person chose this model. Some Anthropic catalog entries let the server answer with another.
+  const exactModel = model.compat?.allowedFallbackModels
+    ? { ...model, compat: { ...model.compat, allowedFallbackModels: [] } } : model;
+  let accepted = false; // Whether the provider took the request, and so may charge for it.
+  const closedCalls = new Set();
+  const stream = models.streamSimple(exactModel, context, {
+    maxTokens: Math.min(maxTurnOutputTokens, model.maxTokens),
+    maxRetries: 2, // For a rate limit or a provider fault. Pi retries only before a reply starts.
+    transport: 'sse', // One process serves one turn, so there is no socket to keep open between turns.
+    onResponse: ({ status }) => { accepted = status < 400; },
+  });
+  for await (const event of stream) if (event.type === 'toolcall_end') closedCalls.add(event.contentIndex);
+  const reply = await stream.result();
+
+  // Pi prices a turn from its catalog unless the provider reports the bill. Its $0 is real
+  // only then, or when the request failed without the provider taking it. Otherwise the catalog
+  // has no price for the model or the provider sent no usage: an unknown cost, not a free turn.
+  const { cost } = reply.usage;
+  const unbilled = reply.stopReason === 'error' && !accepted;
+  const cost_usd = cost.total > 0 || cost.totalFromProvider || unbilled ? cost.total : null;
+
+  if (isContextOverflow(reply, model.contextWindow) || reply.rawStopReason === 'model_context_window_exceeded') {
+    return { outcome: 'too_large', cost_usd };
+  }
+  if (!isComplete(reply, closedCalls)) return { outcome: reply.stopReason === 'error' ? 'error' : 'incomplete', cost_usd };
+  // Diagnostics can quote transport errors. Every other field may be needed to replay the reply.
+  const { diagnostics: _diagnostics, ...message } = reply;
+  return { outcome: reply.stopReason, message, cost_usd };
 }
 
 async function connectProvider(provider, { entry, input, send, getDeviceId, authMethod }) {
@@ -184,6 +285,8 @@ export async function runCommand(command, provider, options) {
     }
     case 'list-models':
       return options.send(await listModels(provider, options.entry));
+    case 'build-turn':
+      return options.send(await buildTurn(provider, options));
     case 'login':
       await connectProvider(provider, options);
       return options.send({ type: 'done' });
@@ -196,8 +299,8 @@ export async function runCommand(command, provider, options) {
 }
 
 async function main(args) {
-  const [command, providerId, authMethod] = args;
-  const usage = 'Usage: node pi-helper.mjs list-providers | login <provider-id> [oauth|api_key] | <connection-status|list-models|logout> <provider-id>';
+  const [command, providerId, choice] = args; // The login method for login, the model for build-turn.
+  const usage = 'Usage: node pi-helper.mjs list-providers | login <provider-id> [oauth|api_key] | <connection-status|list-models|logout> <provider-id> | build-turn <provider-id> <model-id>';
 
   if (command === '--help' && args.length === 1) {
     return console.log(usage);
@@ -208,7 +311,8 @@ async function main(args) {
   if (command === 'list-providers' && args.length === 1) {
     return send(providers.map(p => ({ id: p.id, name: p.name, loginMethods: loginMethods(p) })));
   }
-  if (!['connection-status', 'list-models', 'login', 'logout'].includes(command) || !providerId || args.length > (command === 'login' ? 3 : 2)) {
+  const maxArgs = new Map([['connection-status', 2], ['list-models', 2], ['logout', 2], ['login', 3], ['build-turn', 3]]).get(command);
+  if (!maxArgs || !providerId || args.length > maxArgs || (command === 'build-turn' && !choice)) {
     throw new UsageError(usage);
   }
 
@@ -222,7 +326,7 @@ async function main(args) {
   await runCommand(command, provider, {
     entry: new Entry(keychainService, provider.id),
     runSecurity: spawnSync,
-    input: process.stdin, send, authMethod,
+    input: process.stdin, send, authMethod: choice, modelId: choice,
     getDeviceId: () => installationUuid(join(homedir(), 'Library', 'Application Support', 'Second Brain')),
   });
 }
