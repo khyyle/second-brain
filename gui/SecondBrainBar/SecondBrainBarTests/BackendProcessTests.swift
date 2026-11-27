@@ -10,12 +10,13 @@ final class BackendProcessTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let script = directory.appending(path: "backend.sh")
-        try "echo $$ > \"$SECOND_BRAIN_VAULT/child.pid\"\nexec /bin/sleep 30\n"
+        try "#!/bin/sh\necho $$ > \"$SECOND_BRAIN_VAULT/child.pid\"\nexec /bin/sleep 30\n"
             .write(to: script, atomically: true, encoding: .utf8)
-        let backend = BackendProcess()
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: script.path)
+        let backend = BackendProcess(launcher: script)
         defer { backend.stop() }
         let task = Task {
-            try await backend.connectOrStart(config: AppConfig(vaultRoot: directory, backendScript: script))
+            try await backend.connectOrStart(config: AppConfig(vaultRoot: directory))
         }
         defer { task.cancel() }
 

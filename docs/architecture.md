@@ -130,7 +130,7 @@ Long-running operations, including ingestion and builds, are saved as jobs in `m
 
 Before queueing a build, the backend copies its selected Markdown into `.backend/jobs/<job-id>/raw/` and saves the current preferences with the job. Later file and settings changes cannot alter that attempt's inputs. `.clusters.json` stores the grouping preview; `.cluster-overrides.json` stores excluded sources and groups chosen for splitting.
 
-Saving settings creates (when absent) or updates `<vault>/config.yaml`, which the backend reads preferences from. These preferences default to the values in `pipeline_config.py`. The vault location can optionally be changed via the environment variable `SECOND_BRAIN_VAULT` (see [development](development.md#start-it)).
+Saving settings creates (when absent) or updates `<vault>/config.yaml`, which the backend reads preferences from. These preferences default to the values in `pipeline_config.py`. The vault location can optionally be changed via the environment variable `SECOND_BRAIN_VAULT` (see [Run locally](../CONTRIBUTING.md#run-locally)).
 
 Provider API keys are managed via macOS Keychain. The token used to authenticate local API requests and Django's signing key are private files under `.backend/`.
 

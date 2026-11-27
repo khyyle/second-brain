@@ -37,23 +37,16 @@ See [Architecture](docs/architecture.md) for how the pipeline and storage work u
 
 - An Apple Silicon Mac (M1 or later) with roughly 16 GB of unified memory recommended (local models use 4 to 6 GB while active).
 - Around 10 GB of free disk space for dependencies and local models.
-- [uv](https://github.com/astral-sh/uv) package manager.
-- Xcode Command Line Tools (`xcode-select --install`).
+- Xcode Command Line Tools (`xcode-select --install`) for Git and Swift, and [uv](https://docs.astral.sh/uv/) for Python.
 
 ### Install
 
-From the repository root:
+Clone the repository and run the installer:
 
 ```bash
+git clone https://github.com/khyyle/second-brain.git
+cd second-brain
 ./install.sh
-```
-
-This installs Python dependencies, builds the menu bar app into `/Applications`, sets up data directories under `~/second-brain/`, and prepares the OCR models. On first launch, the backend downloads and starts the triage and embedding models (`gemma4:12b` and `nomic-embed-text`).
-
-You can check local model status in the app's settings. Alternatively, to verify from a terminal:
-
-```bash
-uv run second-brain doctor
 ```
 
 ## First run
@@ -106,7 +99,7 @@ See [Querying over MCP](docs/mcp.md) for more details and tool reference.
 - [Command line](docs/cli.md): manage the pipeline and inspect vault status from the terminal.
 - [Querying over MCP](docs/mcp.md): configure desktop AI clients and query tools.
 - [Architecture](docs/architecture.md): pipeline execution model and on-disk layout.
-- [Development](docs/development.md): developer relevant details for the backend.
+- [Contributing](CONTRIBUTING.md): set up, run, and test the app from source.
 - [Wiki structure](docs/wiki-structure.md): vault directory layout, metadata conventions, and link semantics.
 - [Data lifecycle and deletion](docs/lifecycle.md): content hashing, caching, and recovery behavior.
 

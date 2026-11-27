@@ -2,25 +2,9 @@
 
 A macOS menu bar client for the Second Brain backend. It submits imports and build requests over HTTP and receives library and job updates through server-sent events (SSE).
 
-Most users install it via the repository's top-level `install.sh`, which builds this app and copies it into `/Applications`. The instructions below are for building it on its own.
+The top-level [`install.sh`](../../install.sh) builds the menu bar app from this checkout and installs it in Applications.
 
-## Build
-
-```sh
-cd gui/SecondBrainBar
-./bundle.sh
-cp -r "Second Brain.app" /Applications/
-```
-
-`bundle.sh` compiles a release binary, generates `AppIcon.icns` from `Resources/AppIcon.png`, and ad-hoc signs the bundle. Replace `Resources/AppIcon.png` (1024x1024) and re-run to change the icon.
-
-For development, run from the repository root:
-
-```sh
-make dev
-```
-
-This builds and launches a debug app with the local backend. See [development](../../docs/development.md#start-it) for further details and startup options.
+For development, see [Run locally](../../CONTRIBUTING.md#run-locally).
 
 ## Source layout
 
@@ -50,7 +34,7 @@ Directory conventions:
 - **Vault:** `SECOND_BRAIN_VAULT` from the process environment, defaulting to `~/second-brain`.
 - **Address:** `http://127.0.0.1:<port>/v1`, with `SECOND_BRAIN_PORT` defaulting to `8000`.
 - **Authentication:** the bearer token stored in the selected vault's `.backend/api-token` file.
-- **Launcher:** `SECOND_BRAIN_BACKEND_SCRIPT`, or the path to `run.sh` recorded by `bundle.sh` in `Contents/Resources/BackendLauncher.txt`. The app first tries to connect to an existing backend. If none is available, it starts one using that launcher and stops it when the app quits.
+- **Backend:** the app reuses a responding backend or starts one from `~/Library/Application Support/Second Brain/backend`. It stops only its own backend on quit. In development, `make dev` starts the checkout’s backend before launching the GUI.
 
 ## Dependencies
 

@@ -6,22 +6,18 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 APP_NAME="SecondBrainBar"
-APP_DISPLAY="Second Brain"
-APP_BUNDLE="${APP_DISPLAY}.app"
-BUILD_DIR=".build/release"
+APP_BUNDLE=${1:?usage: bundle.sh /absolute/path/to/new.app}
+[[ "$APP_BUNDLE" == /* && ! -e "$APP_BUNDLE" && ! -L "$APP_BUNDLE" ]] || { echo 'Expected a new app bundle path.' >&2; exit 1; }
 
-echo "[build] swift build -c release"
-swift build -c release
+swift build -c release --arch arm64
+BUILD_DIR=$(swift build -c release --arch arm64 --show-bin-path)
 
 echo "[bundle] assembling ${APP_BUNDLE}"
-rm -rf "$APP_BUNDLE"
 mkdir -p "$APP_BUNDLE/Contents/MacOS"
 mkdir -p "$APP_BUNDLE/Contents/Resources"
 
 cp "$BUILD_DIR/$APP_NAME" "$APP_BUNDLE/Contents/MacOS/$APP_NAME"
 cp "Resources/Info.plist" "$APP_BUNDLE/Contents/Info.plist"
-REPO_DIR="$(cd ../.. && pwd)"
-printf '%s\n' "$REPO_DIR/run.sh" > "$APP_BUNDLE/Contents/Resources/BackendLauncher.txt"
 
 # The menu-bar glyph is loaded at runtime as a template image.
 if [ -f "Resources/MenuBarIcon.png" ]; then
@@ -32,7 +28,8 @@ fi
 # logo in Finder, Spotlight, and "Get Info".
 if [ -f "Resources/AppIcon.png" ]; then
     echo "[icon] generating AppIcon.icns"
-    WORK="$(mktemp -d)"
+    WORK=$(mktemp -d)
+    trap 'rm -rf "$WORK"' EXIT
     ICONSET="$WORK/AppIcon.iconset"
     mkdir -p "$ICONSET"
 
@@ -61,15 +58,7 @@ if [ -f "Resources/AppIcon.png" ]; then
     sips -z 512 512   "$SQUARE" --out "$ICONSET/icon_512x512.png"    >/dev/null
     sips -z 1024 1024 "$SQUARE" --out "$ICONSET/icon_512x512@2x.png" >/dev/null
     iconutil -c icns "$ICONSET" -o "$APP_BUNDLE/Contents/Resources/AppIcon.icns"
-    rm -rf "$WORK"
 fi
 
-# Ad-hoc sign the locally built bundle. This does not notarize it for distribution.
-codesign --force --deep --sign - "$APP_BUNDLE" >/dev/null
-
-echo "built $(pwd)/${APP_BUNDLE}"
-echo
-echo "Next:"
-echo "  open \"${APP_BUNDLE}\"                  # launch once to test"
-echo "  cp -r \"${APP_BUNDLE}\" /Applications/  # install (then findable via Spotlight)"
-echo "  System Settings -> Login Items           # auto-launch on boot"
+codesign --force --sign - "$APP_BUNDLE"
+codesign --verify --strict "$APP_BUNDLE"

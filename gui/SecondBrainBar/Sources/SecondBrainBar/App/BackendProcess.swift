@@ -4,26 +4,27 @@ import Foundation
 /// An externally started backend is never stopped when the GUI quits.
 @MainActor
 final class BackendProcess {
+    private let launcher: URL
     private var process: Process?
     private var output: FileHandle?
+
+    init(launcher: URL = URL.applicationSupportDirectory.appending(path: "Second Brain/backend/bin/python")) {
+        self.launcher = launcher
+    }
 
     func connectOrStart(config: AppConfig) async throws {
         let client = BackendClient(config: config)
         if (try? await client.send("/jobs", query: ["limit": "1"])) != nil { return }
-        guard let script = config.backendScript else {
-            throw BackendError(message: "Start the backend with make backend, or run make dev to launch both.")
-        }
         var isReady = false
         defer { if !isReady { stop() } }
         let child = Process()
-        child.executableURL = URL(fileURLWithPath: "/bin/bash")
-        child.arguments = [script.path, "--no-reload"]
-        child.currentDirectoryURL = script.deletingLastPathComponent()
+        child.executableURL = launcher
+        child.arguments = ["-I", "-m", "second_brain.django_config.server", "--no-reload"]
+        child.currentDirectoryURL = launcher.deletingLastPathComponent()
         var env = ProcessInfo.processInfo.environment
         env["SECOND_BRAIN_VAULT"] = config.vaultRoot.path
         env["SECOND_BRAIN_PORT"] = String(config.port)
         env["PYTHON_DOTENV_DISABLED"] = "1"
-        env["PATH"] = "\(FileManager.default.homeDirectoryForCurrentUser.path)/.local/bin:/opt/homebrew/bin:/usr/local/bin:" + (env["PATH"] ?? "/usr/bin:/bin")
         child.environment = env
         // Keep bootstrap diagnostics outside the vault until the backend creates it.
         let logs = FileManager.default.temporaryDirectory.appending(path: "second-brain-backend-\(UUID().uuidString).log")

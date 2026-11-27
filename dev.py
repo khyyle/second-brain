@@ -37,7 +37,6 @@ def main() -> None:
     environment.update(
         SECOND_BRAIN_VAULT=str(client.vault),
         SECOND_BRAIN_PORT=str(client.port),
-        SECOND_BRAIN_BACKEND_SCRIPT=str(ROOT / "run.sh"),
     )
     package = str(ROOT / "gui" / "SecondBrainBar")
     subprocess.run(["swift", "build", "--package-path", package], check=True)

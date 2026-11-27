@@ -1,10 +1,11 @@
 .DEFAULT_GOAL := help
 
-sync: ## Install/refresh dependencies into the uv env
-	uv sync
-
 dev: ## Build the GUI and launch it with the local HTTP backend
 	uv run python dev.py
+
+setup-pi: ## Set up the checkout environment and Node dependencies for LLM providers
+	UV_PROJECT_ENVIRONMENT=.venv uv sync --locked --python 3.11
+	./scripts/setup-pi.sh .venv/bin src/second_brain/cloud_llm/pi
 
 gui-smoke: ## Test the Swift HTTP client against a temporary real backend
 	uv run pytest src/second_brain/django_config/tests/test_gui_http.py --run-gui-http -q
@@ -42,4 +43,4 @@ help: ## Show this help message
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
 		awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
 
-.PHONY: sync dev gui-test gui-smoke backend backend-check backend-test install-hooks test lint format typecheck check help
+.PHONY: dev setup-pi gui-test gui-smoke backend backend-check backend-test install-hooks test lint format typecheck check help

@@ -1,20 +1,43 @@
 # Contributing to second-brain
 
+## Prerequisites
+
+- an Apple Silicon Mac
+- Git
+- [uv](https://docs.astral.sh/uv/)
+- Xcode with its command-line tools
+
 ## First-time setup
 
-This project uses [uv](https://docs.astral.sh/uv/) for dependency and environment management. Install dependencies into the project virtual environment (`.venv`):
+Install dependencies into the project virtual environment (`.venv`):
 
 ```bash
 uv sync
 ```
-
-That creates `.venv` and installs the dev tooling (`pytest`, `ruff`, `mypy`, `pre-commit`) alongside the runtime dependencies. Run any command inside the environment with `uv run` (e.g. `uv run pytest`), or use the `make` targets below.
 
 Then install the git hooks once per clone, so linting and commit-message checks run automatically:
 
 ```bash
 make install-hooks
 ```
+
+Install the pinned Node runtime and packages (for LLM providers):
+
+```bash
+make setup-pi
+```
+
+## Run locally
+
+Run `make dev` to start both the app GUI and backend, or `make backend` for the API alone. Both read `.env` at the repository root. To keep development separate from the installed app’s `~/second-brain` vault and port `8000`, use:
+
+```dotenv
+SECOND_BRAIN_VAULT=~/second-brain-scratch
+SECOND_BRAIN_PORT=8001
+SECOND_BRAIN_DEBUG=true
+```
+
+This serves the API docs at `http://127.0.0.1:8001/v1/docs`. Restart the backend after editing worker code; HTTP auto-reload does not restart workers.
 
 ## Daily workflow
 
@@ -27,10 +50,13 @@ Run these from the repo root:
 | `make format` | Auto-fix formatting and lint issues |
 | `make typecheck` | Run `mypy` over `src` (opt-in) |
 | `make check` | Lint + tests combined |
-| `make sync` | Install/refresh dependencies into the uv env |
-| `make install-hooks` | Install the pre-commit and commit-msg git hooks |
+| `make gui-test` | Run Swift tests |
+| `make gui-smoke` | Test the Swift client against the real backend in a temporary vault |
+| `make backend-check` | Validate the Django configuration |
 
 `mypy` is kept out of `make check` on purpose: the strict settings in `pyproject.toml` are not yet satisfied repo-wide, so it runs as a separate opt-in target until the type annotations are clean.
+
+Backend features are located in `src/second_brain/apps/`, with tests beside each feature. Shared Python fixtures are in `conftest.py`. After changing a Django model, run `uv run python manage.py makemigrations --check --dry-run` to check for missing migrations.
 
 ## Conventional Commits
 
