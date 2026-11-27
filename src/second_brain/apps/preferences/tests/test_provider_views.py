@@ -24,7 +24,6 @@ async def test_picker_discovers_providers_and_lists_the_selected_models(
                     "name": "Model",
                     "contextWindow": 200_000,
                     "price": {"input": 3, "output": 15},
-                    "subscription": False,
                 }
             ],
             ("list-models", "other"): [],

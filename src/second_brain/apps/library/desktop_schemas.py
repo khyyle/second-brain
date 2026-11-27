@@ -18,6 +18,4 @@ class DesktopState(Schema):
     build_actions: list[BuildAction]
     compilation_provider: str
     compilation_model: str
-    # The login is a plan, so costs say what the usage is worth at API prices, not a charge.
-    compilation_subscription: bool
     inference: InferenceStatusOut

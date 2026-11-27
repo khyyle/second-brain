@@ -33,9 +33,8 @@ def test_snapshot_includes_both_workers_and_latest_outcomes(api_client, job_fact
     assert "config_snapshot" not in jobs[str(build.pk)]["job"]
     assert body["imports"] == body["triage"] == body["build_actions"] == []
     assert body["grouping_plan"] is None
-    # A new vault has no provider or model chosen, and so no plan login.
+    # A new vault has no provider or model chosen.
     assert (body["compilation_provider"], body["compilation_model"]) == ("", "")
-    assert body["compilation_subscription"] is False
     assert body["inference"] == {"worker_statuses": {"generation": None, "embedding": None}}
 
 
@@ -165,16 +164,9 @@ def test_estimates_use_the_chosen_models_price_and_stay_unknown_without_one(
     from second_brain.apps.preferences.services.user_settings import update_preferences
     from second_brain.cloud_llm.pi import pi_helper
 
-    facts = {"contextWindow": 200_000, "subscription": True}
-    offered = [
-        {
-            "id": "claude-sonnet-4-6",
-            "name": "Sonnet",
-            "price": {"input": 3, "output": 15},
-            **facts,
-        },
-        {"id": "unpriced", "name": "Unpriced", "price": None, **facts},
-    ]
+    sonnet = {"id": "claude-sonnet-4-6", "name": "Sonnet", "price": {"input": 3, "output": 15}}
+    unpriced = {"id": "unpriced", "name": "Unpriced", "price": None}
+    offered = [{**model, "contextWindow": 200_000} for model in (sonnet, unpriced)]
     lookups = []
 
     async def helper(command: str, provider: str) -> object:
@@ -202,33 +194,31 @@ def test_estimates_use_the_chosen_models_price_and_stay_unknown_without_one(
     }
     (config.data_dir / ".clusters.json").write_text(json.dumps(plan))
 
-    def estimates() -> tuple[list, bool]:
+    def estimates() -> list:
         body = api_client.get("/v1/desktop-state").json()
         state, grouping = body["state"], body["grouping_plan"]
-        figures = [
+        return [
             state["estimated_cost_usd"],
             grouping["estimated_cost_usd"],
             grouping["groups"][0]["estimated_cost_usd"],
             *(source["estimated_cost_usd"] for source in state["staged"]),
         ]
-        return figures, body["compilation_subscription"]
 
-    figures, subscription = estimates()
+    figures = estimates()
     assert len(figures) == 5 and all(0 < figure < 1 for figure in figures)
-    assert subscription is True
     # Snapshots are frequent; the helper is asked once per choice, not once per snapshot.
-    assert estimates() == (figures, True)
+    assert estimates() == figures
     assert lookups == ["list-models"]
 
     update_preferences({"compilation": {"model": "unpriced"}})
-    assert estimates() == ([None] * 5, True)
+    assert estimates() == [None] * 5
     update_preferences({"compilation": {"model": "not-offered"}})
-    assert estimates() == ([None] * 5, False)
+    assert estimates() == [None] * 5
     assert lookups == ["list-models"] * 3
 
     # With no model chosen there is nothing to look up, and a stuck helper is not waited for.
     update_preferences({"compilation": {"provider": "deepseek"}})
-    assert estimates() == ([None] * 5, False)
+    assert estimates() == [None] * 5
     assert lookups == ["list-models"] * 3
 
     async def stuck(command: str, provider: str) -> object:
@@ -237,4 +227,4 @@ def test_estimates_use_the_chosen_models_price_and_stay_unknown_without_one(
     monkeypatch.setattr(pi_helper, "run_json", stuck)
     monkeypatch.setattr(model_selection, "_ESTIMATE_LOOKUP_SECONDS", 0.05)
     update_preferences({"compilation": {"model": "claude-sonnet-4-6"}})
-    assert estimates() == ([None] * 5, False)
+    assert estimates() == [None] * 5

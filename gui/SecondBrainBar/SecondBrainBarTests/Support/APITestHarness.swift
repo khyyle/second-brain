@@ -65,7 +65,6 @@ enum APIFixtures {
                         workers: [String: Any] = ["generation": NSNull(), "embedding": NSNull()]) -> [String: Any] {
         ["state": state(staged: staged), "jobs": jobs, "imports": [], "triage": [],
          "grouping_plan": NSNull(), "build_actions": [], "compilation_provider": "test-provider", "compilation_model": "test-model",
-         "compilation_subscription": false,
          "inference": ["worker_statuses": workers]]
     }
     static let timestamp = "2026-10-23T12:00:00.000000Z"

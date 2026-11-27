@@ -60,7 +60,7 @@ struct StagedHeader: View {
     }
 
     private var costLine: some View {
-        Text(cost.map { formatEstimate($0) } ?? "cost unknown")
+        Text(cost.map(formatEstimate) ?? "cost unknown")
             .font(Theme.Font.meta(10))
             .foregroundStyle(Theme.Colors.textTertiary)
             .monospacedDigit()

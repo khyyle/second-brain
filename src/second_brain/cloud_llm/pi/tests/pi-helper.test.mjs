@@ -65,7 +65,7 @@ test('login, list from a fresh collection, and disconnect without exposing crede
   await f.run('connection-status');
   assert.deepEqual(f.output.at(-1), { connected: true });
   await f.run('list-models');
-  assert.ok(f.output.at(-1).length > 0 && f.output.at(-1).every(m => m.id && m.name && m.contextWindow > 0 && m.subscription));
+  assert.ok(f.output.at(-1).length > 0 && f.output.at(-1).every(m => m.id && m.name && m.contextWindow > 0));
   assert.doesNotMatch(JSON.stringify(f.output), /private-/);
   await f.run('logout');
   await f.run('connection-status');
@@ -151,7 +151,7 @@ for (const [provider, method] of [[deepseekProvider(), undefined], [openaiProvid
     await f.run('list-models');
     const choices = f.output.at(-1);
     const catalog = new Map(provider.getModels().map(m => [m.id, m.cost]));
-    assert.ok(choices.length > 0 && choices.every(m => catalog.has(m.id) && !m.subscription));
+    assert.ok(choices.length > 0 && choices.every(m => catalog.has(m.id)));
     const priced = choices.find(m => m.price);
     assert.deepEqual(priced.price, { input: catalog.get(priced.id).input, output: catalog.get(priced.id).output, tiers: [] });
     assert.doesNotMatch(JSON.stringify(f.output), /private-api-key/);
@@ -243,7 +243,7 @@ test('OAuth model choices respect the saved account catalog without refreshing',
   f.options.entry.setPassword(JSON.stringify({ ...credential, availableModelIds: [allowed.id] }));
   await f.run('list-models');
   const { input, output } = allowed.cost;
-  assert.deepEqual(f.output.at(-1), [{ id: allowed.id, name: allowed.name, contextWindow: allowed.contextWindow, subscription: true, price: { input, output, tiers: [] } }]);
+  assert.deepEqual(f.output.at(-1), [{ id: allowed.id, name: allowed.name, contextWindow: allowed.contextWindow, price: { input, output, tiers: [] } }]);
   f.options.entry.setPassword(JSON.stringify({ type: 'oauth' }));
   await assert.rejects(f.run('list-models'));
 });

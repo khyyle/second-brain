@@ -37,7 +37,7 @@ def connected_model(monkeypatch):
 
     async def offered(provider_id: str, model_id: str) -> model_selection.ModelChoice:
         return model_selection.ModelChoice(
-            id="model", name="Model", contextWindow=1_000_000, price=None, subscription=False
+            id="model", name="Model", contextWindow=1_000_000, price=None
         )
 
     monkeypatch.setattr(model_selection, "chosen_model", offered)

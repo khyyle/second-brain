@@ -34,7 +34,7 @@ def login(monkeypatch, config):
             return {"connected": state["connected"]}
         assert command == "list-models"
         models = state["models"] if state["connected"] else []
-        facts = {"contextWindow": 200_000, "price": None, "subscription": False}
+        facts = {"contextWindow": 200_000, "price": None}
         return [{"id": model, "name": model, **facts} for model in models]
 
     monkeypatch.setattr(pi_helper, "run_json", helper)

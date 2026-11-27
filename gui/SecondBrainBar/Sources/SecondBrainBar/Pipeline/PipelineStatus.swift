@@ -44,7 +44,7 @@ struct PipelineStatus: Identifiable {
 
     /// Local display time derives from the server start timestamp, so reconnects
     /// and sleep do not reset it. No heartbeat or HTTP request advances the clock.
-    func footerDetail(at now: Date, subscription: Bool = false) -> String {
+    func footerDetail(at now: Date) -> String {
         if queued {
             switch kind {
             case "build": return "Build queued"

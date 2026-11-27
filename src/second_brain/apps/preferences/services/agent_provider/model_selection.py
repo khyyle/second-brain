@@ -52,8 +52,6 @@ class ModelChoice(BaseModel):
     context_window: int = Field(gt=0, validation_alias="contextWindow")
     # None when Pi has no price for the model.
     price: ModelPrice | None
-    # A plan login pays a flat fee, so the price says what its usage is worth, not what it costs.
-    subscription: bool
 
 
 class ProviderChoice(BaseModel):

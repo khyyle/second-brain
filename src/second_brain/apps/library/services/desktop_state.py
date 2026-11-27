@@ -7,7 +7,6 @@ from second_brain.apps.ingestion.services.file_imports import list_imports
 from second_brain.apps.jobs.models import Job
 from second_brain.apps.library.services.library_state import get_state
 from second_brain.apps.library.services.manual_triage import list_decisions
-from second_brain.apps.preferences.services.agent_provider import model_selection
 from second_brain.apps.preferences.services.user_settings import get_pipeline_config
 from second_brain.django_config.paths import get_vault_paths
 
@@ -21,13 +20,10 @@ def get_desktop_state() -> dict:
     -------
     dict
         Library state, jobs with progress, imports, triage decisions, grouping, build
-        actions, the selected provider and model, whether its login is a plan, and
-        inference status. Completed index jobs are omitted.
+        actions, the selected provider and model, and inference status. Completed index
+        jobs are omitted.
     """
     config = get_pipeline_config()
-    model = model_selection.model_for_estimates(
-        config.compilation.provider, config.compilation.model
-    )
     jobs = Job.objects.defer("payload", "config_snapshot").order_by("-created_at", "-id")
     active = [Job.Status.RUNNING, Job.Status.QUEUED]
     displayed = list(jobs.filter(status__in=active))
@@ -44,6 +40,5 @@ def get_desktop_state() -> dict:
         "build_actions": list_build_actions(),
         "compilation_provider": config.compilation.provider,
         "compilation_model": config.compilation.model,
-        "compilation_subscription": model is not None and model.subscription,
         "inference": {"worker_statuses": read_worker_statuses(get_vault_paths().backend_dir)},
     }

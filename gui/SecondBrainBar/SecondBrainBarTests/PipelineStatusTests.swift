@@ -12,12 +12,11 @@ final class PipelineStatusTests: XCTestCase {
     }
 
     func testABuildShowsWhatItHasSpentOrThatTheCostIsUnknown() throws {
-        func footer(_ cost: Any, subscription: Bool = false) throws -> String {
+        func footer(_ cost: Any) throws -> String {
             let status = PipelineStatus(try detail(progress: ["phase": "compile", "cost_usd": cost]))
-            return status.footerDetail(at: status.startedAt.addingTimeInterval(5), subscription: subscription)
+            return status.footerDetail(at: status.startedAt.addingTimeInterval(5))
         }
         XCTAssertEqual(try footer(0.5), "Building 1/2 · 5s · $0.50")
-        XCTAssertEqual(try footer(0.5, subscription: true), "Building 1/2 · 5s · $0.50")
         XCTAssertEqual(try footer(0), "Building 1/2 · 5s")
         XCTAssertEqual(try footer(NSNull()), "Building 1/2 · 5s · cost unknown")
     }

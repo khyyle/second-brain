@@ -15,8 +15,6 @@ final class PipelineStore: ObservableObject {
     @Published private(set) var buildActions: [BuildLogEntry] = []
     @Published private(set) var compilationProvider = ""
     @Published private(set) var compilationModel = ""
-    /// The provider login is a plan, so costs are what its usage is worth at API prices.
-    @Published private(set) var compilationSubscription = false
     @Published private(set) var buildModels = BuildModels.loading
     @Published var inferenceStatus: InferenceStatusResponse?
     @Published private(set) var connected = false
@@ -124,7 +122,6 @@ final class PipelineStore: ObservableObject {
         // With no provider chosen there are no models to read, only Settings to open.
         if compilationProvider.isEmpty { buildModels = .disconnected }
         compilationModel = snapshot.compilation_model
-        compilationSubscription = snapshot.compilation_subscription
         inferenceStatus = snapshot.inference
         runRecord = RunRecord(
             ingest: jobs.first { $0.lane == "ingest" && !$0.isActive }?.stageRun,

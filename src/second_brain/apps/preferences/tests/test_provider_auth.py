@@ -68,7 +68,7 @@ elif command == 'connection-status':
     sys.exit(0)
 elif command == 'list-models':
     choices = {
-        'connected': [{'id': 'model/a', 'name': 'A', 'contextWindow': 1000, 'subscription': True,
+        'connected': [{'id': 'model/a', 'name': 'A', 'contextWindow': 1000,
                        'price': {'input': 3, 'output': 15}, 'extra': 'unused'}],
         'disconnected': [],
         'bad-list': {'error': 'private diagnostic'},
@@ -205,7 +205,6 @@ async def test_model_picker_runs_without_interrupting_a_pending_login() -> None:
             "name": "A",
             "context_window": 1000,
             "price": {"input": 3, "output": 15, "tiers": []},
-            "subscription": True,
         }
         assert await model_selection.list_models("disconnected") == []
     finally:
