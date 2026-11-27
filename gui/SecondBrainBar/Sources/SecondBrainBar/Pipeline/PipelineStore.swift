@@ -121,6 +121,8 @@ final class PipelineStore: ObservableObject {
         groupingPlan = snapshot.grouping_plan
         buildActions = snapshot.build_actions.compactMap(\.entry)
         compilationProvider = snapshot.compilation_provider
+        // With no provider chosen there are no models to read, only Settings to open.
+        if compilationProvider.isEmpty { buildModels = .disconnected }
         compilationModel = snapshot.compilation_model
         compilationSubscription = snapshot.compilation_subscription
         inferenceStatus = snapshot.inference
@@ -156,7 +158,11 @@ final class PipelineStore: ObservableObject {
     /// Reread what the saved provider offers. The last answer stays on screen meanwhile.
     func refreshBuildModels() async {
         let provider = compilationProvider
-        guard !provider.isEmpty else { return } // No snapshot yet.
+        guard !provider.isEmpty else {
+            // Before the first snapshot there is nothing to say. After it, no provider is chosen.
+            if hasState { buildModels = .disconnected }
+            return
+        }
         if provider != buildModelsProvider {
             buildModelsProvider = provider
             buildModels = .loading

@@ -32,12 +32,12 @@ def _block_real_pi_helper(monkeypatch):
 
 @pytest.fixture
 def connected_model(monkeypatch):
-    """A saved login that offers whichever model is chosen, for tests that reach a build."""
+    """A saved login and a chosen model it offers, for tests that reach a build."""
     from second_brain.apps.preferences.services.agent_provider import model_selection
 
     async def offered(provider_id: str, model_id: str) -> model_selection.ModelChoice:
         return model_selection.ModelChoice(
-            id=model_id, name=model_id, contextWindow=1_000_000, price=None, subscription=False
+            id="model", name="Model", contextWindow=1_000_000, price=None, subscription=False
         )
 
     monkeypatch.setattr(model_selection, "chosen_model", offered)

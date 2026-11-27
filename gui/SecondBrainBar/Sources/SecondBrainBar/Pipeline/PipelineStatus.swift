@@ -64,7 +64,7 @@ struct PipelineStatus: Identifiable {
         var parts = [total > 0 ? "\(verb) \(min(current + 1, total))/\(total)" : verb]
         parts.append(formatElapsed(max(0, now.timeIntervalSince(startedAt))))
         if let costUSD {
-            if costUSD > 0 { parts.append(String(format: "$%.2f", costUSD) + (subscription ? atAPIPrices : "")) }
+            if costUSD > 0 { parts.append(String(format: "$%.2f", costUSD)) }
         } else {
             parts.append("cost unknown")
         }

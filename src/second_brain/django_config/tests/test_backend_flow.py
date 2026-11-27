@@ -61,7 +61,6 @@ def test_settings_saves_a_provider_and_the_build_tab_saves_its_model(api_client)
         {"data_dir": "/tmp/other"},
         {"triage": None},
         {"compilation": {"max_iterations": 0}},
-        {"compilation": {"provider": ""}},
         {"compilation": {"provider": "vendor/../other"}},
         {"compilation": {"model": " padded "}},
         {"search": {"embedding_dimensions": 128}},

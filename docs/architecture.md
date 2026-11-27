@@ -78,13 +78,13 @@ flowchart TD
     response -->|Tool calls| tools["Run the requested wiki tools"]
     tools --> results["Return tool results or validation errors"]
     results --> model
-    response -->|"Final reply (end_turn)"| checkpoint["Commit wiki changes and record completion"]
+    response -->|"Finished reply"| checkpoint["Commit wiki changes and record completion"]
     checkpoint --> finished(["Finished"])
     model -->|Stop, failure, or limit| rollback["Discard uncommitted edits for this source or group"]
     tools -->|Cannot continue| rollback
 ```
 
-After the agent conversation for one document, chat, or chat group ends with `stop_reason: "end_turn"`, the compiler records source hashes, saves a Git checkpoint (see [how the wiki is versioned](lifecycle.md#how-the-wiki-is-versioned)), and adds the changed pages to the "recently updated" list. The build repeats this loop for the next group.
+After the agent conversation for one document, chat, or chat group ends with a reply the provider reports as finished, the compiler records source hashes, saves a Git checkpoint (see [how the wiki is versioned](lifecycle.md#how-the-wiki-is-versioned)), and adds the changed pages to the "recently updated" list. The build repeats this loop for the next group.
 
 At the end of the build attempt, the backend rebuilds the index, gap list, domain views, and recently-updated list from the saved wiki pages. This happens once per build attempt, including a partial or stopped build.
 
@@ -101,7 +101,7 @@ The compiled wiki is stored as plain Markdown under `~/second-brain/wiki/`, so i
 | Triage classification (Gemma) | Local, via llama.cpp |
 | Semantic-search and clustering embeddings | Local, via llama.cpp |
 | Grouping chats into clusters | Local (threshold or HDBSCAN over embeddings) |
-| Wiki synthesis (the build step) | Cloud via the configured provider (Anthropic or DeepSeek) |
+| Wiki synthesis (the build step) | Cloud, with the provider connected in Settings and the model chosen on the Build tab |
 
 Only the build step is required to leave the machine. Everything needed to capture, parse, and filter your material is local and free.
 
@@ -132,7 +132,7 @@ Before queueing a build, the backend copies its selected Markdown into `.backend
 
 Saving settings creates (when absent) or updates `<vault>/config.yaml`, which the backend reads preferences from. These preferences default to the values in `pipeline_config.py`. The vault location can optionally be changed via the environment variable `SECOND_BRAIN_VAULT` (see [Run locally](../CONTRIBUTING.md#run-locally)).
 
-Provider API keys are managed via macOS Keychain. The token used to authenticate local API requests and Django's signing key are private files under `.backend/`.
+A provider login, whether a sign-in or an API key, is saved in macOS Keychain and read only by the Pi helper (`src/second_brain/cloud_llm/pi`), which makes every model request. A build uses that login and nothing else: no environment variable or other credential stands in when it is missing. The token used to authenticate local API requests and Django's signing key are private files under `.backend/`.
 
 ## Hashing and caching
 

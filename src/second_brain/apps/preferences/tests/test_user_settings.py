@@ -12,7 +12,9 @@ from second_brain.pipeline_config import ConfigError, Preferences
 
 def test_missing_file_uses_defaults(config):
     assert isinstance(get_preferences(), Preferences)
-    assert get_preferences().compilation.provider == "anthropic"
+    # A new vault has no provider or model until the person chooses them.
+    compilation = get_preferences().compilation
+    assert (compilation.provider, compilation.model) == ("", "")
 
 
 def test_yaml_cannot_select_the_vault(config):

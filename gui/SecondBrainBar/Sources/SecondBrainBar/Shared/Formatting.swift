@@ -34,7 +34,3 @@ func formatElapsed(_ seconds: TimeInterval) -> String {
 func formatEstimate(_ usd: Double) -> String {
     usd < 0.005 ? "<$0.01" : String(format: "~$%.2f", usd)
 }
-
-/// Follows a cost when the provider login is a plan: the plan's flat fee covers the usage,
-/// so the figure is what that usage would cost through the API.
-let atAPIPrices = " at API prices"

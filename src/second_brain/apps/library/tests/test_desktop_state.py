@@ -33,7 +33,9 @@ def test_snapshot_includes_both_workers_and_latest_outcomes(api_client, job_fact
     assert "config_snapshot" not in jobs[str(build.pk)]["job"]
     assert body["imports"] == body["triage"] == body["build_actions"] == []
     assert body["grouping_plan"] is None
-    assert body["compilation_provider"] and body["compilation_model"]
+    # A new vault has no provider or model chosen, and so no plan login.
+    assert (body["compilation_provider"], body["compilation_model"]) == ("", "")
+    assert body["compilation_subscription"] is False
     assert body["inference"] == {"worker_statuses": {"generation": None, "embedding": None}}
 
 
@@ -180,6 +182,7 @@ def test_estimates_use_the_chosen_models_price_and_stay_unknown_without_one(
         return offered if command == "list-models" else {"connected": True}
 
     monkeypatch.setattr(pi_helper, "run_json", helper)
+    update_preferences({"compilation": {"provider": "anthropic", "model": "claude-sonnet-4-6"}})
     documents = config.raw_dir / "documents"
     documents.mkdir(parents=True)
     members = []

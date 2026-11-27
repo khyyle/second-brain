@@ -129,6 +129,8 @@ async def chosen_model(provider_id: str, model_id: str) -> ModelChoice:
     DependencyError
         The helper could not start or read the saved login.
     """
+    if not provider_id:
+        raise ConflictError("Connect a provider in Settings.")
     for choice in await list_models(provider_id):
         if choice.id == model_id:
             return choice

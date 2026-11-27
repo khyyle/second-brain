@@ -22,8 +22,9 @@ def staged_document(config):
 
 
 @pytest.fixture
-def login(monkeypatch):
+def login(monkeypatch, config):
     """What the provider helper finds in Keychain. Tests change it to move the login."""
+    update_preferences({"compilation": {"provider": "anthropic", "model": "claude-sonnet-4-6"}})
     state = {"connected": True, "models": ["claude-sonnet-4-6"]}
 
     async def helper(command: str, provider: str) -> object:
@@ -63,12 +64,15 @@ def test_a_missing_login_or_model_rejects_the_request_without_a_job_or_copies(
     assert staged_document.exists()
 
 
-def test_a_build_needs_a_model_chosen_after_the_provider_changes(
-    api_client, staged_document, login
-):
+def test_a_build_needs_a_provider_and_then_a_model_chosen(api_client, staged_document, login):
     update_preferences({"compilation": {"provider": "deepseek"}})
     response = build(api_client)
     assert (response.status_code, response.json()) == (409, {"detail": CHOOSE})
+    # A new vault starts with neither. Nothing is asked of the helper for a missing provider.
+    update_preferences({"compilation": {"provider": ""}})
+    login["error"] = AssertionError("There is no provider to look up")
+    response = build(api_client)
+    assert (response.status_code, response.json()) == (409, {"detail": CONNECT})
 
 
 def test_a_failing_helper_is_a_dependency_error_before_acceptance(

@@ -8,7 +8,7 @@ A single SQLite database, `~/second-brain/manifest.db`, records everything the p
 
 The parsed Markdown lives under `~/second-brain/raw/`, the wiki under `~/second-brain/wiki/` (a git repository), and the keyword/embedding index in `~/second-brain/search.db`.
 
-When you preview a grouping, the proposed grouping is written as two JSON files in the vault root: `.clusters.json` (the groups and their estimated cost) and `.cluster-overrides.json` (any group you split or chat you popped out). A complete build clears them if sources and grouping have not changed since submission and ingestion is idle. Otherwise, they remain for review and a later build. Re-previewing replaces them.
+When you preview a grouping, the proposed grouping is written as two JSON files in the vault root: `.clusters.json` (the groups) and `.cluster-overrides.json` (any group you split or chat you popped out). A complete build clears them if sources and grouping have not changed since submission and ingestion is idle. Otherwise, they remain for review and a later build. Re-previewing replaces them.
 
 ## The life of a source
 

@@ -59,6 +59,21 @@ final class BuildModelTests: XCTestCase {
         return (store, harness)
     }
 
+    func testANewVaultWithNoProviderPointsToSettingsInsteadOfReadingModels() async throws {
+        let backend = Backend()
+        backend.provider = ""
+        backend.model = ""
+        let (store, harness) = try await store(backend)
+        _ = harness
+        XCTAssertEqual(store.buildModels, .disconnected)
+        // Closing Settings forgets and rereads. Any request here would fail the test:
+        // there is no provider to ask.
+        store.forgetBuildModels()
+        await store.refreshBuildModels()
+        XCTAssertEqual(store.buildModels, .disconnected)
+        XCTAssertFalse(store.hasBuildModel)
+    }
+
     func testOnlyAModelTheConnectedProviderOffersCanBuild() async throws {
         let backend = Backend()
         let (store, harness) = try await store(backend)

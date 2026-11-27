@@ -17,7 +17,7 @@ final class PipelineStatusTests: XCTestCase {
             return status.footerDetail(at: status.startedAt.addingTimeInterval(5), subscription: subscription)
         }
         XCTAssertEqual(try footer(0.5), "Building 1/2 · 5s · $0.50")
-        XCTAssertEqual(try footer(0.5, subscription: true), "Building 1/2 · 5s · $0.50 at API prices")
+        XCTAssertEqual(try footer(0.5, subscription: true), "Building 1/2 · 5s · $0.50")
         XCTAssertEqual(try footer(0), "Building 1/2 · 5s")
         XCTAssertEqual(try footer(NSNull()), "Building 1/2 · 5s · cost unknown")
     }

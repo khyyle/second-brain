@@ -31,7 +31,7 @@ Review chats before building and skip redundant material so you don't pay to com
 
 ## Building the wiki
 
-A build reads your staged sources and writes wiki pages with a cloud model agent. The number on the Build tab is a rough estimate based on known input/output costs. Once a build is running, the real cost will increment in the status line.
+A build reads your staged sources and writes wiki pages with a cloud model agent. The number on the Build tab is a rough estimate from the chosen model's input and output prices. Once a build is running, what it has spent so far increments in the status line. When a model has no known price, both read "cost unknown". The spend cap compares what the build has reported spending so far, checked after each model turn, so a build can pass it by one turn and cannot be stopped by it while its spend is unknown. If you signed in with a subscription plan, the figures are marked "at API prices": they are what the same usage would cost through the API, not a charge on top of your plan.
 
 When the plan looks right, "Build wiki" compiles it. You can "Stop" mid-build: pages finished so far are kept, and unfinished changes for the source or group currently being built are discarded. Those sources remain ready for the next build.
 

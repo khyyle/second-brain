@@ -15,7 +15,7 @@
 - **MCP integration for agents.** A built-in MCP server connects your knowledge base directly to assistants like Claude Desktop, ChatGPT Desktop, and Cursor. When you ask questions, agents can navigate your actual notes, prerequisites, and source citations rather than improvising generic explanations. When you discover something new, the agent can also write notes back into the compilation queue to keep the wiki growing.
 - **Curated taxonomy and health tracking.** The app tracks unwritten concepts (topics linked by existing pages that do not have their own note yet), orphan notes with no references, and potential duplicates. You can also rename, merge, or delete domain tags across the entire vault to keep your vocabulary focused.
 - **Background monitoring and automatic intake.** Point the app at folders where you regularly save papers, slides, or notes. Second Brain watches them in the background, ingesting and staging them for compilation automatically.
-- **Local parsing and bounded build cost.** Typed PDFs, scans, and handwritten notes are converted into clean Markdown locally on Apple Silicon for free. You can preview estimated compilation costs and set a hard dollar spend cap on every build.
+- **Local parsing and bounded build cost.** Typed PDFs, scans, and handwritten notes are converted into clean Markdown locally on Apple Silicon for free. You can preview estimated compilation costs and set a dollar spend cap per build, which applies whenever the build's cost is known.
 
 ## How it works
 

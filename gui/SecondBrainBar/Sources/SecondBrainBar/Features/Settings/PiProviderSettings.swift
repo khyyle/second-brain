@@ -15,7 +15,10 @@ struct PiProviderSettings: View {
             SettingsRow("Provider") {
                 Picker("Provider", selection: $selection) {
                     // Keep the saved ID selected while the list loads, or after Pi drops it.
-                    if !providers.contains(where: { $0.id == selection }) { Text(selection).tag(selection) }
+                    // A new vault has none yet.
+                    if !providers.contains(where: { $0.id == selection }) {
+                        Text(selection.isEmpty ? "Choose provider" : selection).tag(selection)
+                    }
                     ForEach(providers) { Text($0.name).tag($0.id) }
                 }
                 .labelsHidden()
@@ -31,7 +34,7 @@ struct PiProviderSettings: View {
                 TextAction(title: "Retry providers", icon: "arrow.clockwise") { revision += 1 }
             } else if loading {
                 Text("Loading providers…")
-            } else {
+            } else if !selection.isEmpty {
                 Text("This provider is no longer available. Choose another.")
             }
         }

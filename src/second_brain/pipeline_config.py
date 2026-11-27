@@ -81,7 +81,7 @@ class ParsingConfig(BaseModel):
         return v
 
 
-ProviderID = Annotated[str, Field(max_length=128, pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]*$")]
+ProviderID = Annotated[str, Field(max_length=128, pattern=r"^([A-Za-z0-9][A-Za-z0-9_-]*)?$")]
 ModelID = Annotated[str, Field(max_length=256, pattern=r"^(\S(.*\S)?)?$")]
 
 
@@ -91,9 +91,10 @@ class CompilationConfig(BaseModel):
 
     Fields:
     -------
-    provider: str, default="anthropic"
-        Pi catalog ID of the provider connected in Settings. It is one URL path segment.
-    model: str, default="claude-sonnet-4-6"
+    provider: str, default=""
+        Pi catalog ID of the provider chosen in Settings, or empty until one is. It is
+        one URL path segment.
+    model: str, default=""
         That provider's ID for the model chosen on the Build tab, or empty until one
         is chosen. Neither ID is checked against a catalog here: the provider's
         offering can change after the choice is saved.
@@ -117,8 +118,8 @@ class CompilationConfig(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    provider: ProviderID = "anthropic"
-    model: ModelID = "claude-sonnet-4-6"
+    provider: ProviderID = ""
+    model: ModelID = ""
     max_tokens_per_page: int = Field(default=4000, gt=0)
     max_iterations: int = Field(default=100, gt=0)
     max_cost_per_build_usd: float = Field(default=0.0, ge=0.0)
