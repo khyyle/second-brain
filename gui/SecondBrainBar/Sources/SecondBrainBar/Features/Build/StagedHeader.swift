@@ -1,8 +1,9 @@
 import SwiftUI
 
 /// "Staged for build" heading. The first row names the model the build uses. The
-/// second shows the estimated cost beside the Group and Build actions, or Stop while
-/// compiling. The rows below leave an unknown cost blank; this line says so once.
+/// second shows the estimated cost beside the Group and Build actions, and is hidden
+/// while a build or grouping runs. The rows below leave an unknown cost blank; this
+/// line says so once.
 struct StagedHeader: View {
     let cost: Double?
     let sourceCount: Int
@@ -29,7 +30,6 @@ struct StagedHeader: View {
     }
 
     var body: some View {
-        let building = store.isCompiling || store.stopping
         let ready = !running && sourceCount > 0
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 5) {
@@ -40,23 +40,15 @@ struct StagedHeader: View {
                 Spacer(minLength: 8)
                 if store.connected { BuildModelMenu(onOpenSettings: onOpenSettings) }
             }
-            if building || ready {
+            if ready {
                 HStack(spacing: 8) {
-                    if ready { costLine }
+                    costLine
                     Spacer(minLength: 8)
-                    if building { stopButton } else { actions }
+                    actions
                 }
             }
         }
         .padding(.horizontal, 8).padding(.top, 4).padding(.bottom, 1)
-    }
-
-    /// While a compile runs, the primary action becomes Stop in the same slot
-    /// the Build button occupied — then a disabled Stopping until it winds down.
-    private var stopButton: some View {
-        Button(store.stopping ? "Stopping" : "Stop", action: store.requestStop)
-            .buttonStyle(PillButton(.destructive))
-            .disabled(store.stopping)
     }
 
     private var costLine: some View {

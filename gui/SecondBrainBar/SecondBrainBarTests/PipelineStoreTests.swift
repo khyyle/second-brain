@@ -41,6 +41,38 @@ final class PipelineStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testDismissingConnectionErrorHidesOnlyConsecutiveRetries() async throws {
+        let offline = "Backend unavailable."
+        var failure: String? = offline
+        let harness = try APITestHarness { _ -> (Int, Any) in
+            if let failure { return (503, ["detail": failure]) }
+            return (200, APIFixtures.desktop())
+        }
+        let store = PipelineStore(config: harness.config, api: harness.client)
+        await store.refreshNow()
+        XCTAssertEqual(store.connectionNotice, offline)
+        store.dismissConnectionError()
+        await store.refreshNow()
+        XCTAssertNil(store.connectionNotice)
+        XCTAssertFalse(store.connected)
+
+        failure = "Invalid response."
+        await store.refreshNow()
+        XCTAssertEqual(store.connectionNotice, failure)
+        failure = offline
+        await store.refreshNow()
+        XCTAssertEqual(store.connectionNotice, offline)
+
+        store.dismissConnectionError()
+        failure = nil
+        await store.refreshNow()
+        XCTAssertTrue(store.connected)
+        failure = offline
+        await store.refreshNow()
+        XCTAssertEqual(store.connectionNotice, offline)
+    }
+
+    @MainActor
     func testBuildRejectionShowsRequestReasonWithoutInventingAFailedJobAndClearsOnRetry() async throws {
         var reject = true
         let reason = "No anthropic credential is available in Keychain. Add it in Settings, then build again."
@@ -106,6 +138,30 @@ final class PipelineStoreTests: XCTestCase {
         XCTAssertTrue(store.connected)
         XCTAssertEqual(store.triageProgress?.currentSources, ["chatgpt/a.md"])
         XCTAssertEqual(store.buildProgress?.currentSources, ["documents/b.md"])
+    }
+
+    @MainActor
+    func testStopCannotRetargetABuildThatStartedAfterTheClick() async throws {
+        let cancelled = expectation(description: "Cancel sent for the original build")
+        var runningID = "first-build"
+        let harness = try APITestHarness { request -> (Int, Any) in
+            if request.httpMethod == "POST" {
+                XCTAssertEqual(request.url?.path, "/v1/jobs/first-build/cancel")
+                cancelled.fulfill()
+                return (204, NSNull())
+            }
+            return (200, APIFixtures.desktop(jobs: [
+                ["job": APIFixtures.job(id: runningID), "progress": ["phase": "compile"]],
+            ]))
+        }
+        let store = PipelineStore(config: harness.config, api: harness.client)
+        await store.refreshNow()
+        let clicked = try XCTUnwrap(store.buildStatus)
+        runningID = "next-build"
+        await store.refreshNow()
+        XCTAssertEqual(store.buildStatus?.id, "next-build")
+        store.requestStop(jobID: clicked.id)
+        await fulfillment(of: [cancelled], timeout: 2)
     }
 
     @MainActor

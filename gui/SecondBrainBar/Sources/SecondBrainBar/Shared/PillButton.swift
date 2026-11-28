@@ -26,17 +26,22 @@ struct PillButton: ButtonStyle {
     }
 
     let tint: Color
+    var minHitHeight: CGFloat?
 
-    init(_ role: Role) { self.tint = role.tint }
+    init(_ role: Role, minHitHeight: CGFloat? = nil) {
+        self.tint = role.tint
+        self.minHitHeight = minHitHeight
+    }
     init(tint: Color) { self.tint = tint }
 
     func makeBody(configuration: Configuration) -> some View {
-        PillBody(configuration: configuration, tint: tint)
+        PillBody(configuration: configuration, tint: tint, minHitHeight: minHitHeight)
     }
 
     private struct PillBody: View {
         let configuration: ButtonStyleConfiguration
         let tint: Color
+        let minHitHeight: CGFloat?
         @State private var hovering = false
 
         // Brighten the fill on hover so the cue works for every tint, including
@@ -55,6 +60,8 @@ struct PillButton: ButtonStyle {
                 .foregroundStyle(hovering ? Theme.Colors.textPrimary : tint)
                 .padding(.horizontal, 8).padding(.vertical, 3)
                 .background(Capsule().fill(tint.opacity(fillOpacity)))
+                .frame(minHeight: minHitHeight)
+                .contentShape(Rectangle())
                 .onHover { hovering = $0 }
         }
     }

@@ -18,7 +18,10 @@ final class PipelineStore: ObservableObject {
     @Published private(set) var buildModels = BuildModels.loading
     @Published var inferenceStatus: InferenceStatusResponse?
     @Published private(set) var connected = false
-    @Published private(set) var connectionError: String?
+    @Published private(set) var connectionError: String? {
+        didSet { if oldValue != connectionError { connectionErrorDismissed = false } }
+    }
+    @Published private var connectionErrorDismissed = false
     @Published var actionError: String?
     @Published private var removingSources: Set<String> = []
     @Published private var dismissedRuns: [String: String]
@@ -66,7 +69,6 @@ final class PipelineStore: ObservableObject {
     var isCompiling: Bool { buildStatus?.phase == "compile" }
     var isGrouping: Bool { buildStatus?.phase == "cluster" }
     var locked: Bool { buildStatus != nil }
-    var stopping: Bool { jobs.contains { $0.lane == "build" && $0.isActive && $0.cancel_requested } }
     var stagedForBuild: [StagedSource] { (state?.staged ?? []).filter { $0.deferReason == nil && !isRemoving($0.id) } }
     var setAside: [StagedSource] { (state?.staged ?? []).filter { $0.deferReason != nil && !isRemoving($0.id) } }
     var pendingTriage: [String] { state?.pendingTriage ?? [] }
@@ -80,6 +82,9 @@ final class PipelineStore: ObservableObject {
     var buildProgress: PipelineStatus? { isCompiling ? buildStatus : nil }
     var triageProgress: PipelineStatus? { ingestStatus?.phase == "triage" ? ingestStatus : nil }
     var estimatedCostUSD: Double? { state?.estimatedCostUSD }
+    /// Retries of the same failure stay silent until the error changes or the connection recovers.
+    var connectionNotice: String? { connectionErrorDismissed ? nil : connectionError }
+    func dismissConnectionError() { connectionErrorDismissed = true }
     /// A saved model the connected provider still offers. Assumed usable until the first read lands.
     var hasBuildModel: Bool {
         switch buildModels {
@@ -195,10 +200,8 @@ final class PipelineStore: ObservableObject {
     }
 
     func previewGrouping() { perform { try await self.api.send("/grouping-plan/preview", method: "POST") } }
-    func requestStop() {
-        guard let job = jobs.first(where: { $0.lane == "build" && $0.status == "running" })
-                ?? jobs.last(where: { $0.lane == "build" && $0.isActive }) else { return }
-        perform { try await self.api.send("/jobs/\(job.id)/cancel", method: "POST") }
+    func requestStop(jobID: String) {
+        perform { try await self.api.send("/jobs/\(jobID)/cancel", method: "POST") }
     }
     func retryIngestion(_ path: String) {
         perform { try await self.api.send("/ingestion/runs", method: "POST", body: ["file_path": path]) }

@@ -9,7 +9,7 @@ struct NoticeBanner: View {
     let onDismiss: () -> Void
     @State private var hoveringDismiss = false
 
-    private static let dismissHitSize: CGFloat = 28
+    private static let dismissHitSize: CGFloat = 32
 
     var body: some View {
         HStack(spacing: 4) {
@@ -22,10 +22,10 @@ struct NoticeBanner: View {
                         .font(Theme.Font.body(11.5, weight: .semibold))
                         .foregroundStyle(Theme.Colors.textPrimary)
                     if !reason.isEmpty {
-                        Text(reason)
-                            .font(Theme.Font.body(10.5))
-                            .foregroundStyle(Theme.Colors.textSecondary)
-                            .fixedSize(horizontal: false, vertical: true)
+                        ViewThatFits(in: .vertical) {
+                            reasonText
+                            ScrollView { reasonText.frame(maxWidth: .infinity, alignment: .leading) }
+                        }
                     }
                 }
                 Spacer(minLength: 0)
@@ -44,7 +44,7 @@ struct NoticeBanner: View {
             }
             .buttonStyle(.plain)
             .help("Dismiss")
-            .accessibilityLabel("Dismiss")
+            .accessibilityLabel("Dismiss: \(headline)")
             .onHover { hoveringDismiss = $0 }
         }
         .padding(.leading, 10)
@@ -53,9 +53,17 @@ struct NoticeBanner: View {
             RoundedRectangle(cornerRadius: Theme.Metric.cornerSmall, style: .continuous)
                 .fill(tint.opacity(0.10))
         )
+        .background(Theme.Colors.surface, in: RoundedRectangle(cornerRadius: Theme.Metric.cornerSmall, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: Theme.Metric.cornerSmall, style: .continuous)
                 .strokeBorder(tint.opacity(0.35), lineWidth: 1)
         )
+    }
+
+    private var reasonText: some View {
+        Text(reason)
+            .font(Theme.Font.body(10.5))
+            .foregroundStyle(Theme.Colors.textSecondary)
+            .fixedSize(horizontal: false, vertical: true)
     }
 }

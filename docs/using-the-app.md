@@ -33,7 +33,7 @@ Review chats before building and skip redundant material so you don't pay to com
 
 A build reads your staged sources and writes wiki pages with a cloud model agent. The number on the Build tab is a rough estimate from the chosen model's prices. Once a build is running, what it has spent so far increments in the status line. The estimate reads "cost unknown" for a model with no known price, and the status line does once any turn's cost is unknown. The spend cap is checked after each model turn, so a build can pass it by one turn, and it cannot stop a build whose cost is unknown.
 
-When the plan looks right, "Build wiki" compiles it. You can "Stop" mid-build: pages finished so far are kept, and unfinished changes for the source or group currently being built are discarded. Those sources remain ready for the next build.
+When the plan looks right, choose **Build wiki**. To stop mid-build, click **Stop** beside the build progress at the bottom of any tab. Changes from completed sources or groups are kept. Changes from the source or group in progress are discarded, and its sources stay staged for the next build.
 
 If a source can't be compiled cleanly (e.g., the agent fails to finish compilation, or the source is too large for the model to read in one pass), it will be set aside and its unfinished wiki changes discarded. Failed sources are marked "Set aside" along with the reason, and can be recompiled via a retry button. Retried files will be marked ready for the next compilation pass. Sources that are too large to compile *cannot be retried* and must be split into smaller files first.
 

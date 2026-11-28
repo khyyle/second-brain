@@ -69,19 +69,6 @@ struct ContentView: View {
     private var main: some View {
         VStack(alignment: .leading, spacing: 10) {
             tabBar
-            if let error = store.actionError {
-                NoticeBanner(headline: "Couldn't complete the action", reason: error) {
-                    store.actionError = nil
-                }
-            }
-            if let error = store.connectionError {
-                Text(error).font(Theme.Font.meta(10)).foregroundStyle(Theme.Colors.danger)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            if let notice = currentNotice {
-                RunOutcomeBanner(notice: notice, onDismiss: { store.dismiss(notice) })
-                    .transition(.opacity.combined(with: .move(edge: .top)))
-            }
             if tab == .ingest {
                 BinDropZone(bin: .inbox)
                     .transition(.opacity)
@@ -198,7 +185,24 @@ struct ContentView: View {
             RoundedRectangle(cornerRadius: Theme.Metric.corner, style: .continuous)
                 .strokeBorder(Theme.Colors.stroke, lineWidth: 1)
         )
+        .overlay(alignment: .bottom) { panelNotice.padding(6) }
         .overlay { windowDropTarget }
+    }
+
+    /// Show one notice without moving the list or covering the tabs and footer.
+    /// A failed action takes priority over background connection or run updates.
+    @ViewBuilder
+    private var panelNotice: some View {
+        if let error = store.actionError {
+            NoticeBanner(headline: "Couldn't complete the action", reason: error) {
+                store.actionError = nil
+            }
+        } else if let error = store.connectionNotice {
+            NoticeBanner(headline: "Couldn't load the latest state", reason: error,
+                         onDismiss: store.dismissConnectionError)
+        } else if let notice = currentNotice {
+            RunOutcomeBanner(notice: notice, onDismiss: { store.dismiss(notice) })
+        }
     }
 
     /// On tabs without the drop card, a drag over the window needs a visible

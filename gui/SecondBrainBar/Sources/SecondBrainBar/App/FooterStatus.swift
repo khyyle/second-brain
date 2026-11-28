@@ -1,7 +1,8 @@
 import SwiftUI
 
 /// Footer left slot: live pipeline status when a run is active, otherwise
-/// the vault metrics.
+/// the vault metrics. A build's line carries its Stop, so the control sits with
+/// the progress it ends and is in reach from every tab.
 struct FooterStatus: View {
     @EnvironmentObject private var store: PipelineStore
 
@@ -20,6 +21,14 @@ struct FooterStatus: View {
                                 Text(status.footerDetail(at: context.date))
                                     .font(Theme.Font.meta(10.5))
                                     .monospacedDigit()
+                                if status.kind == "build" {
+                                    Button(status.stopRequested ? "Stopping" : "Stop") {
+                                        store.requestStop(jobID: status.id)
+                                    }
+                                    .buttonStyle(PillButton(.destructive, minHitHeight: 32))
+                                    .accessibilityLabel(status.stopRequested ? "Stopping build" : "Stop build")
+                                    .disabled(status.stopRequested)
+                                }
                             }
                             .foregroundStyle(Theme.Colors.textSecondary)
                         }

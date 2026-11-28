@@ -5,6 +5,7 @@ struct PipelineStatus: Identifiable {
     let id: String
     let running: Bool
     let queued: Bool
+    let stopRequested: Bool
     let kind: String
     let phase: String
     let current: Int
@@ -25,6 +26,7 @@ struct PipelineStatus: Identifiable {
         let job = detail.job, p = detail.progress
         id = job.id
         queued = job.status == "queued"
+        stopRequested = job.cancel_requested
         kind = job.kind
         running = job.isActive
         phase = (p.phase == "grouping" ? "cluster" : p.phase) ?? (job.kind == "build" ? "compile" : job.kind == "preview" ? "cluster" : job.kind)
